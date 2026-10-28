@@ -249,6 +249,71 @@ data class ProfileRow(
     val tail: Tail = Tail(),
 )
 
+/** A profile removal carried in the synced `profiles` payload (schema 4.12). */
+data class ProfileTombstone(
+    /** Lowercased username. */
+    val username: String,
+    /** Unix seconds of the removal. */
+    val removedAt: Long,
+    val userId: Int? = null,
+)
+
+/**
+ * Removal tombstones for `profiles` (schema 4.12). Pure logic, so the merge
+ * rules are unit tested: a tombstone beats every row whose `updatedAt` is at
+ * or before it, a row edited after it wins and clears it, and tombstones
+ * expire after [WINDOW_S].
+ */
+object ProfileTombstones {
+    const val WINDOW_S = 90L * 86_400L
+
+    /** Union by username; the newer removal wins. */
+    fun union(a: List<ProfileTombstone>, b: List<ProfileTombstone>): List<ProfileTombstone> =
+        (a + b).groupBy { it.username.lowercase() }.map { (u, l) ->
+            val top = l.maxBy { it.removedAt }
+            top.copy(username = u, userId = top.userId ?: l.firstNotNullOfOrNull { it.userId })
+        }
+
+    fun expire(t: List<ProfileTombstone>, now: Long): List<ProfileTombstone> = t.filter { now - it.removedAt <= WINDOW_S }
+
+    fun find(t: List<ProfileTombstone>, username: String): ProfileTombstone? =
+        t.firstOrNull { it.username.equals(username, ignoreCase = true) }
+
+    /** True when a tombstone removes a row last changed at [updatedAt]. */
+    fun kills(t: List<ProfileTombstone>, username: String, updatedAt: Long): Boolean =
+        find(t, username)?.let { it.removedAt >= updatedAt } == true
+
+    data class Resolved(val rows: List<ProfileRow>, val removed: List<ProfileTombstone>, val dropped: List<ProfileRow>)
+
+    /** Drop tombstoned rows; a row newer than its tombstone keeps the row and clears the tombstone. */
+    fun resolve(rows: List<ProfileRow>, removed: List<ProfileTombstone>): Resolved {
+        val (dropped, kept) = rows.partition { kills(removed, it.username, it.updatedAt) }
+        val revived = kept.map { it.username.lowercase() }.toSet()
+        return Resolved(kept, removed.filter { it.username !in revived }, dropped)
+    }
+
+    /**
+     * Stale-device guard (schema 4.12): a local row the server list does not
+     * carry is NOT re-sent when it has no unsent local change
+     * (`updatedAt <= lastPushedAt`) and either it is older than the server
+     * payload's `updatedAt`, or every local row is older than the server's
+     * newest row by more than [WINDOW_S].
+     */
+    fun staleLocal(
+        row: ProfileRow,
+        serverRows: List<ProfileRow>,
+        serverUpdatedAt: Long,
+        localNewest: Long,
+        lastPushedAt: Long,
+    ): Boolean {
+        if (serverRows.isEmpty()) return false
+        if (serverRows.any { it.username.equals(row.username, ignoreCase = true) }) return false
+        if (row.updatedAt > lastPushedAt) return false
+        val serverNewest = serverRows.maxOf { it.updatedAt }
+        return row.updatedAt < serverUpdatedAt || serverNewest - localNewest > WINDOW_S
+    }
+}
+
 /**
  * Codecs. Each `decodeX` returns null on a wrong shape (the caller logs
  * malformed and leaves the key alone). Each `encodeX` replaces only the
@@ -488,6 +553,25 @@ object DsyncPayloads {
             tail = tailOf(r, 10),
         )
     }
+    /** `removed` (schema 4.12): `[[usernameLowercase, removedAt, userId?], ...]`; absent = none. */
+    fun decodeProfileTombstones(data: JsonObject?): List<ProfileTombstone> =
+        (data?.get("removed") as? JsonArray).orEmpty().mapNotNull { el ->
+            val r = el as? JsonArray ?: return@mapNotNull null
+            val u = r.getOrNull(0).asStr()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val at = r.getOrNull(1).asLong()?.takeIf { it > 0 } ?: return@mapNotNull null
+            ProfileTombstone(u, at, r.getOrNull(2).asInt()?.takeIf { it > 0 })
+        }
+
+    /** [encodeProfiles] plus the `removed` list; an empty list drops the member. */
+    fun encodeProfiles(base: JsonObject?, rows: List<ProfileRow>, removed: List<ProfileTombstone>): JsonObject {
+        val m = LinkedHashMap(encodeProfiles(base, rows))
+        m.remove("removed")
+        if (removed.isNotEmpty()) m["removed"] = JsonArray(removed.distinctBy { it.username }.map {
+            JsonArray(listOfNotNull(JsonPrimitive(it.username), JsonPrimitive(it.removedAt), it.userId?.let { id -> JsonPrimitive(id) }))
+        })
+        return JsonObject(m)
+    }
+
     fun encodeProfiles(base: JsonObject?, rows: List<ProfileRow>): JsonObject =
         base.with("rows" to JsonArray(rows.distinctBy { it.userId }.take(DsyncLimits.PROFILES).map {
             val none = it.pinType == "none"

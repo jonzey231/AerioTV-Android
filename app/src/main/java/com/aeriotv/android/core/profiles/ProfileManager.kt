@@ -776,8 +776,9 @@ class ProfileManager @Inject constructor(
      * admin user list (no typing) and adopts the row; an existing profile
      * takes the row's display name, role, and PIN only when the row's
      * updatedAt is newer than [localUpdatedAt] for that username. Local
-     * profiles are never removed, and a row this device removed at or after
-     * its updatedAt ([removedAt]) is skipped, never re-created. [adopted]
+     * profiles are not removed here (the caller applies synced tombstones
+     * first, schema 4.12), and a row this device removed at or after its
+     * updatedAt ([removedAt]) is skipped, never re-created. [adopted]
      * records the row stamp taken.
      * Returns how many profiles were added.
      */
@@ -920,6 +921,26 @@ class ProfileManager @Inject constructor(
         if (RoleRules.removeNeedsAdminPin(p.effectiveRole())) {
             check(consumeAdminTicket(p.playlistId)) { "Enter an Admin PIN" }
         }
+        deleteLocal(p, fromSync = false)
+    }
+
+    /**
+     * A synced removal tombstone (schema 4.12) beat this local profile: the
+     * same local cleanup as [remove], with no PIN prompt and no new
+     * tombstone (the removal is already on the server). The default
+     * profile is never removed.
+     */
+    suspend fun removeFromSync(playlistId: String, username: String): Boolean {
+        val p = store.forPlaylist(playlistId).firstOrNull { it.username.equals(username, ignoreCase = true) } ?: return false
+        if (p.isDefault) return false
+        if (!RoleRules.canWriteProfilesKey(activeRole(playlistId))) return false
+        return runCatching { deleteLocal(p, fromSync = true) }
+            .onFailure { Log.w(TAG, "[DSYNC] profiles: synced removal of ${p.username} failed: ${it.message}") }
+            .isSuccess
+    }
+
+    private suspend fun deleteLocal(p: DispatcharrProfile, fromSync: Boolean) {
+        val profileId = p.id
         if (store.activeProfileId(p.playlistId) == profileId) {
             val def = store.forPlaylist(p.playlistId).first { it.isDefault }
             // The Admin removing the active profile: internal, no PIN prompt.
@@ -953,9 +974,9 @@ class ProfileManager @Inject constructor(
         runCatching { pinStore.remove(profileId) }
         runCatching { snapshotStamps.remove("${p.playlistId}@$profileId") }
         runCatching { vodCatalogStore.deleteForPlaylistUser(p.playlistId, p.username) }
-        runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove") }
+        if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove") }
         store.remove(profileId)
-        Log.i(TAG, "[PROFILE] removed ${p.username} on ${p.playlistId.take(8)}; local state deleted")
+        Log.i(TAG, "[PROFILE] removed ${p.username} on ${p.playlistId.take(8)}; local state deleted${if (fromSync) " (synced removal)" else ""}")
     }
 
     /**

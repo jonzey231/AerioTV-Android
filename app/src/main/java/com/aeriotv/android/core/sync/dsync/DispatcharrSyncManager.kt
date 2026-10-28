@@ -311,17 +311,64 @@ class DispatcharrSyncManager @Inject constructor(
         }
     }
 
-    /** A removed stamp is done once the server copy no longer carries that
-     *  username (our push dropped it): clear it so a later re-add by another
-     *  device is adopted normally. */
-    private fun clearSettledRemovals(playlistId: String, rows: List<ProfileRow>) {
+    /** The local removed stamps (`pgone|`), a cache of this device's
+     *  removals until the payload `removed` list carries them (schema 4.12). */
+    private fun localTombstones(playlistId: String): List<ProfileTombstone> {
         val prefix = "pgone|$playlistId|"
-        val onServer = rows.map { it.username.lowercase() }.toSet()
-        val done = state.all.keys.filter { it.startsWith(prefix) && it.removePrefix(prefix) !in onServer }
-        if (done.isEmpty()) return
+        return state.all.entries.filter { it.key.startsWith(prefix) }
+            .mapNotNull { e -> (e.value as? Long)?.takeIf { it > 0 }?.let { ProfileTombstone(e.key.removePrefix(prefix), it) } }
+    }
+
+    /** Server `removed` plus local stamps, newest per username, minus expired ones. */
+    private fun tombstonesFor(playlistId: String, data: JsonObject?): List<ProfileTombstone> =
+        ProfileTombstones.expire(
+            ProfileTombstones.union(DsyncPayloads.decodeProfileTombstones(data), localTombstones(playlistId)),
+            System.currentTimeMillis() / 1000,
+        )
+
+    /** Local profiles a tombstone beats (removedAt >= the local row stamp). */
+    private fun tombstonedLocal(playlistId: String, tombs: List<ProfileTombstone>): List<String> =
+        profileStore.forPlaylist(playlistId).filter { !it.isDefault }
+            .filter { ProfileTombstones.kills(tombs, it.username, state.getLong(rowKey(playlistId, it.username), 0L)) }
+            .map { it.username }
+
+    /** Delete [users] locally (same cleanup as a user remove, no new tombstone).
+     *  Launched off the sync mutex: a removal of the active profile switches profiles. */
+    private fun removeSynced(playlistId: String, users: List<String>, tombs: List<ProfileTombstone>) {
+        if (users.isEmpty()) return
+        scope.launch {
+            users.forEach { u ->
+                val at = ProfileTombstones.find(tombs, u)?.removedAt ?: 0L
+                if (profileManager.get().removeFromSync(playlistId, u)) {
+                    state.edit().remove(rowKey(playlistId, u)).apply()
+                    Log.i(TAG, "[DSYNC] profiles: removed local $u (tombstone removedAt=$at)")
+                }
+            }
+        }
+    }
+
+    /** After a 200 (or an identical server copy): a local removed stamp clears
+     *  once the payload's `removed` list carries it, a row edited after it
+     *  revived the profile, or it expired. */
+    private fun clearAckedRemovals(playlistId: String, data: JsonObject) {
+        val sent = DsyncPayloads.decodeProfileTombstones(data)
+        val rows = DsyncPayloads.decodeProfiles(data).orEmpty()
+        val now = System.currentTimeMillis() / 1000
+        val prefix = "pgone|$playlistId|"
         val e = state.edit()
-        done.forEach { e.remove(it); Log.i(TAG, "[DSYNC] profiles: removal of ${it.removePrefix(prefix)} settled on the server") }
-        e.apply()
+        var any = false
+        localTombstones(playlistId).forEach { t ->
+            val why = when {
+                (ProfileTombstones.find(sent, t.username)?.removedAt ?: 0L) >= t.removedAt -> "written to the server payload"
+                rows.any { it.username.equals(t.username, ignoreCase = true) && it.updatedAt > t.removedAt } -> "superseded by a newer row"
+                now - t.removedAt > ProfileTombstones.WINDOW_S -> "expired"
+                else -> return@forEach
+            }
+            e.remove(prefix + t.username)
+            any = true
+            Log.i(TAG, "[DSYNC] profiles: removal of ${t.username} $why; local stamp cleared")
+        }
+        if (any) e.apply()
     }
 
     private fun rowKey(playlistId: String, username: String) = "prow|$playlistId|${username.lowercase()}"
@@ -842,10 +889,13 @@ class DispatcharrSyncManager @Inject constructor(
         if (session !== s || ProfileScope.token.value != s.token) return
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
             setDirty(s, key, false)
-            if (key == DsyncKey.Profiles) state.edit()
-                .remove(profilesPendingKey(s.playlistId))
-                .putLong(profilesPushedKey(s.playlistId), newestRowStamp(s.playlistId))
-                .apply()
+            if (key == DsyncKey.Profiles) {
+                state.edit()
+                    .remove(profilesPendingKey(s.playlistId))
+                    .putLong(profilesPushedKey(s.playlistId), newestRowStamp(s.playlistId))
+                    .apply()
+                clearAckedRemovals(s.playlistId, data)
+            }
             return
         }
         if (s.serverFull && b.wire !in s.serverBytes) {
@@ -861,10 +911,13 @@ class DispatcharrSyncManager @Inject constructor(
                 PutStatus.Ok -> {
                     s.resend -= key
                     setDirty(s, key, false)
-                    if (key == DsyncKey.Profiles) state.edit()
-                        .remove(profilesPendingKey(s.playlistId))
-                        .putLong(profilesPushedKey(s.playlistId), newestRowStamp(s.playlistId))
-                        .apply()
+                    if (key == DsyncKey.Profiles) {
+                        state.edit()
+                            .remove(profilesPendingKey(s.playlistId))
+                            .putLong(profilesPushedKey(s.playlistId), newestRowStamp(s.playlistId))
+                            .apply()
+                        clearAckedRemovals(s.playlistId, data)
+                    }
                     s.retries.remove(key)
                     s.tooLarge -= key
                 }
@@ -1220,7 +1273,11 @@ class DispatcharrSyncManager @Inject constructor(
         val users = adminUsers(s)
         if (users.isEmpty()) return null
         val remote = base?.let(DsyncPayloads::decodeProfiles).orEmpty()
-        val rows = profileStore.forPlaylist(s.playlistId).withIndex().mapNotNull { (index, p) ->
+        val tombs = tombstonesFor(s.playlistId, base)
+        // Tombstoned local profiles are deleted, never re-sent (schema 4.12).
+        val gone = tombstonedLocal(s.playlistId, tombs).map { it.lowercase() }.toSet()
+        removeSynced(s.playlistId, gone.toList(), tombs)
+        val rows = profileStore.forPlaylist(s.playlistId).filter { it.username.lowercase() !in gone }.withIndex().mapNotNull { (index, p) ->
             val user = users.firstOrNull { it.username.equals(p.username, ignoreCase = true) } ?: return@mapNotNull null
             val prev = remote.firstOrNull { it.userId == user.id }
             val rec = pinStore.syncRecord(p.id)
@@ -1244,11 +1301,23 @@ class DispatcharrSyncManager @Inject constructor(
                 tail = prev?.tail ?: Tail(),
             )
         }
-        // Rows for users this device has no profile for stay, unless this
-        // device removed that profile (then the row leaves the list).
+        // Stale-device guard: a local row the server list lacks, with no
+        // unsent local change, older than the server roster is not re-sent.
+        val serverAt = state.getLong(k("at", s, DsyncKey.Profiles), 0L)
+        val pushedAt = state.getLong(profilesPushedKey(s.playlistId), 0L)
+        val localNewest = rows.maxOfOrNull { it.updatedAt } ?: 0L
+        val sent = rows.filter { r ->
+            val stale = ProfileTombstones.staleLocal(r, remote, serverAt, localNewest, pushedAt)
+            if (stale) Log.i(TAG, "[DSYNC] profiles: local row ${r.username} older than server roster, not re-sent")
+            !stale
+        }
+        // Rows for users this device has no profile for stay, unless a
+        // tombstone covers them (removed here or on any other device).
         val mine = rows.map { it.userId }.toSet()
-        val kept = remote.filter { it.userId !in mine && state.getLong(removedKey(s.playlistId, it.username), 0L) <= it.updatedAt }
-        return DsyncPayloads.encodeProfiles(base, rows + kept)
+        val kept = remote.filter { it.userId !in mine }
+        val resolved = ProfileTombstones.resolve(sent + kept, tombs)
+        resolved.dropped.forEach { Log.i(TAG, "[DSYNC] profiles: row ${it.username} updatedAt=${it.updatedAt} tombstoned; left out") }
+        return DsyncPayloads.encodeProfiles(base, resolved.rows, resolved.removed)
     }
 
     // ---- apply (data -> local), section 6.1 full replace ----
@@ -1460,13 +1529,27 @@ class DispatcharrSyncManager @Inject constructor(
                 val rows = DsyncPayloads.decodeProfiles(d) ?: return ApplyResult.Malformed
                 if (!isAdmin(s)) return ApplyResult.Applied
                 Log.i(TAG, "[DSYNC] profiles: pull stamps ${state.all.keys.filter { it.startsWith("pgone|") }.joinToString { "$it=${state.getLong(it, 0L)}" }.ifEmpty { "none" }} session=${s.playlistId}")
+                val tombs = tombstonesFor(s.playlistId, d)
+                removeSynced(s.playlistId, tombstonedLocal(s.playlistId, tombs), tombs)
+                val resolved = ProfileTombstones.resolve(rows, tombs)
+                resolved.dropped.forEach { Log.i(TAG, "[DSYNC] profiles: server row ${it.username} updatedAt=${it.updatedAt} tombstoned; dropped") }
+                // A local removal the server payload does not carry yet: send it.
+                val onServer = DsyncPayloads.decodeProfileTombstones(d)
+                val unsent = localTombstones(s.playlistId).filter { l ->
+                    ProfileTombstones.find(resolved.removed, l.username) != null &&
+                        (ProfileTombstones.find(onServer, l.username)?.removedAt ?: 0L) < l.removedAt
+                }
+                if (unsent.isNotEmpty() && !isDirty(s, DsyncKey.Profiles)) {
+                    Log.i(TAG, "[DSYNC] profiles: tombstones ${unsent.joinToString { it.username }} not on the server yet; re-sending")
+                    setDirty(s, DsyncKey.Profiles, true)
+                    schedule(s, DsyncKey.Profiles, DEBOUNCE_MS)
+                }
                 profileManager.get().mergeSyncedProfiles(
-                    s.playlistId, rows, adminUsers(s),
+                    s.playlistId, resolved.rows, adminUsers(s),
                     localUpdatedAt = { u -> state.getLong(rowKey(s.playlistId, u), 0L) },
                     adopted = { u, at -> if (at > 0) state.edit().putLong(rowKey(s.playlistId, u), at).apply() },
                     removedAt = { u -> state.getLong(removedKey(s.playlistId, u), 0L) },
                 )
-                clearSettledRemovals(s.playlistId, rows)
             }
         }
         return ApplyResult.Applied
