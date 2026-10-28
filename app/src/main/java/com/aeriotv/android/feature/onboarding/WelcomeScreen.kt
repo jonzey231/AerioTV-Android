@@ -155,9 +155,9 @@ private fun WelcomeSingleColumn(
 
 /**
  * TV welcome (1920x1080 = 960dp x 540dp): everything fits without scrolling.
- * Brand block, the source types on one row, then the cards as a compact 2x2
- * grid with one-line subtitles, then Skip. D-pad order is left to right, top
- * to bottom; the first card takes focus on entry.
+ * Brand block, the source types on one row, then the cards as a single
+ * compact list with one-line subtitles, then Skip. The first card takes
+ * focus on entry.
  */
 @Composable
 private fun WelcomeTv(
@@ -200,28 +200,25 @@ private fun WelcomeTv(
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
-                .widthIn(max = 920.dp)
+                .widthIn(max = 640.dp)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 28.dp),
+                .padding(horizontal = 20.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             BrandBlock(compact = true)
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                 SupportedTypeInline(Icons.Filled.Key, "Dispatcharr Direct Connect")
                 SupportedTypeInline(Icons.Filled.Tv, "Xtream Codes")
                 SupportedTypeInline(Icons.Filled.Description, "M3U + EPG")
             }
             Spacer(Modifier.height(22.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                cards.chunked(2).forEachIndexed { rowIndex, row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        row.forEachIndexed { i, card ->
-                            val m = Modifier.weight(1f)
-                            card(if (rowIndex == 0 && i == 0) m.focusRequester(firstFocus) else m)
-                        }
-                        if (row.size == 1) Spacer(Modifier.weight(1f))
-                    }
+            // Single list (owner, 2026-10-27): the compact cards fit 1080p in
+            // one column, and a 2x2 grid read badly.
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                cards.forEachIndexed { i, card ->
+                    val m = Modifier.fillMaxWidth()
+                    card(if (i == 0) m.focusRequester(firstFocus) else m)
                 }
             }
             Spacer(Modifier.height(8.dp))
