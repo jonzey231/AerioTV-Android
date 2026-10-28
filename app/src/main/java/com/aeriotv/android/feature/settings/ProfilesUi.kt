@@ -1028,7 +1028,7 @@ internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): 
  * row menu Role; cancelling keeps the previous choice.
  */
 @Composable
-internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
+internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, vertical: Boolean = false, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
     var gate by remember { mutableStateOf(false) }
     var explained by remember { mutableStateOf(false) }
     // Compact by design: one row of three radio choices plus a single
@@ -1036,12 +1036,11 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
     // the height (owner 2026-10-27: three stacked rows squeezed the list).
     Column {
         Text("Role", style = MaterialTheme.typography.titleSmall)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r ->
+        // TV onboarding card stacks the three choices; elsewhere one row.
+        val choice: @Composable (com.aeriotv.android.core.profiles.ProfileRole, Modifier) -> Unit = { r, m ->
                 var focused by remember { mutableStateOf(false) }
                 Row(
-                    Modifier
-                        .weight(1f)
+                    m
                         .onFocusChanged { focused = it.isFocused }
                         .settingsRowCard(focused)
                         .selectable(selected = r == selected, role = androidx.compose.ui.semantics.Role.RadioButton) {
@@ -1058,6 +1057,14 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
                     Spacer(Modifier.size(6.dp))
                     Text(r.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
                 }
+        }
+        if (vertical) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r -> choice(r, Modifier.fillMaxWidth()) }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r -> choice(r, Modifier.weight(1f)) }
             }
         }
         Text(

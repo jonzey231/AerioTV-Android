@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -199,6 +203,8 @@ fun AddProfilesStepScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
+    }
+    val search: @Composable () -> Unit = {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -206,14 +212,17 @@ fun AddProfilesStepScreen(
                     placeholder = { Text("Search users") },
                     modifier = Modifier.fillMaxWidth().dpadFocusRing(RoundedCornerShape(4.dp)),
                 )
-
     }
+    val roleReq = remember { androidx.compose.ui.focus.FocusRequester() }
+    val listScroll = rememberScrollState()
     val userList: @Composable (Modifier) -> Unit = { listModifier ->
                 Column(
-                    modifier = listModifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    modifier = listModifier.fillMaxWidth().verticalScroll(listScroll),
+                    verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 0.dp),
                 ) {
+                    if (isTv) search()
                     com.aeriotv.android.feature.settings.RosterSuggestions(playlistId, profilesVm, list, enabled = !busy)
-                    if (suggested.isNotEmpty() && shown.isNotEmpty()) {
+                    if (suggested.isNotEmpty() && (shown.isNotEmpty() || isTv)) {
                         Spacer(Modifier.height(8.dp))
                         Text("Other Dispatcharr users", style = MaterialTheme.typography.titleSmall)
                     }
@@ -222,6 +231,8 @@ fun AddProfilesStepScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 56.dp)
+                                .then(if (isTv) Modifier.focusProperties { right = roleReq } else Modifier)
                                 .clip(RoundedCornerShape(12.dp))
                                 .dpadFocusRing(RoundedCornerShape(12.dp), washTint = MaterialTheme.colorScheme.primary)
                                 .toggleable(
@@ -243,9 +254,10 @@ fun AddProfilesStepScreen(
                             )
                         }
                     }
-                    if (shown.isEmpty() && suggested.isEmpty()) {
+                    val noneOnServer = list.none { u -> suggested.none { it.username.equals(u.username, ignoreCase = true) } }
+                    if (shown.isEmpty() && (isTv || suggested.isEmpty())) {
                         Text(
-                            "No users match.",
+                            if (noneOnServer) "No other users on this server." else "No users match.",
                             style = MaterialTheme.typography.bodyMedium.subtext(),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -255,8 +267,7 @@ fun AddProfilesStepScreen(
                 }
 
     }
-    val controls: @Composable () -> Unit = {
-                com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
+    val controlsTail: @Composable () -> Unit = {
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 Button(
                     onClick = {
@@ -302,31 +313,75 @@ fun AddProfilesStepScreen(
                 )
 
     }
+    val controls: @Composable () -> Unit = {
+                com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
+                controlsTail()
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(horizontal = vp.gutter, vertical = if (isTv) 16.dp else 24.dp),
+            .padding(horizontal = vp.gutter, vertical = 24.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
         if (isTv) {
-            Row(
+            Column(
                 modifier = Modifier.widthIn(max = 1100.dp).fillMaxWidth().fillMaxHeight(),
-                horizontalArrangement = Arrangement.spacedBy(32.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // Title and subtitle centered across the full content width.
                 Column(
-                    modifier = Modifier.weight(1.3f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.widthIn(max = vp.onboardingMaxWidth).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
+                ) { header() }
+                Row(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(32.dp),
+                    verticalAlignment = Alignment.Top,
                 ) {
-                    header()
-                    userList(Modifier.weight(1f))
+                    // Left: search, suggestions, and users as one scrolling
+                    // list, with a bottom fade while more is below.
+                    Box(Modifier.weight(0.58f).fillMaxHeight()) {
+                        userList(Modifier.fillMaxHeight())
+                        if (listScroll.canScrollForward) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .background(
+                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                            listOf(
+                                                androidx.compose.ui.graphics.Color.Transparent,
+                                                MaterialTheme.colorScheme.background,
+                                            ),
+                                        ),
+                                    ),
+                            )
+                        }
+                    }
+                    // Right: Role card with the actions directly under it.
+                    Column(
+                        modifier = Modifier.weight(0.42f).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                .padding(12.dp)
+                                .focusRequester(roleReq)
+                                .focusGroup(),
+                        ) {
+                            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role, vertical = true) { role = it }
+                        }
+                        controlsTail()
+                    }
                 }
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) { controls() }
             }
         } else {
             Column(
@@ -337,6 +392,7 @@ fun AddProfilesStepScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 header()
+                search()
                 userList(Modifier.weight(1f))
                 controls()
             }

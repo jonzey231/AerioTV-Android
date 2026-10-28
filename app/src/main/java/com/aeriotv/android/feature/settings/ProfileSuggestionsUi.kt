@@ -3,6 +3,9 @@ package com.aeriotv.android.feature.settings
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,13 +62,17 @@ internal fun RosterSuggestions(
 ) {
     val flow = remember(playlistId) { vm.rosterSuggestions(playlistId) }
     val rows by flow.collectAsStateWithLifecycle(initialValue = emptyList())
-    if (rows.isEmpty()) return
     val isTv = rememberIsTvDevice()
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var credFor by remember { mutableStateOf<ProfileRow?>(null) }
     var childGate by remember { mutableStateOf<ProfileRow?>(null) }
+    // Rows added here leave the roster flow; keep them listed as "Added"
+    // (not focusable) so the list does not jump under the D-pad.
+    val added = remember { androidx.compose.runtime.mutableStateListOf<ProfileRow>() }
+
+    if (rows.isEmpty() && added.isEmpty()) return
 
     fun add(r: ProfileRow) {
         if (busy != null || !enabled) return
@@ -76,23 +83,27 @@ internal fun RosterSuggestions(
         busy = r.username
         scope.launch {
             vm.addFromRoster(playlistId, r, listed!!, null, null).fold(
-                { busy = null; onAdded() },
+                { busy = null; added += r; onAdded() },
                 { busy = null; error = it.message ?: "Could not add profile" },
             )
         }
     }
 
+    val listedRows = rows + added.filter { a -> rows.none { it.username.equals(a.username, ignoreCase = true) } }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("From your other devices", style = MaterialTheme.typography.titleSmall)
-        rows.forEach { r ->
+        listedRows.forEach { r ->
             var focused by remember { mutableStateOf(false) }
+            val isAdded = added.any { it.username.equals(r.username, ignoreCase = true) }
+            val canAdd = enabled && busy == null && !isAdded
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 56.dp)
                     .onFocusChanged { focused = it.isFocused }
                     .settingsRowCard(focused)
-                    .then(if (isTv) Modifier.clickable(enabled = enabled && busy == null) { add(r) } else Modifier)
-                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                    .then(if (isTv && !isAdded) Modifier.clickable(enabled = canAdd) { add(r) } else Modifier)
+                    .padding(vertical = 8.dp, horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ProfileAvatar(name = r.displayName.ifBlank { r.username }, size = 28, username = r.username, spec = r.avatar)
@@ -107,12 +118,40 @@ internal fun RosterSuggestions(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Roster role (Admin, User, or Child), not the server level.
                 ProfileRole.fromWire(r.role)?.let { RoleBadge(it) }
-                if (busy == r.username) {
-                    Spacer(Modifier.size(8.dp))
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else if (!isTv) {
-                    TextButton(onClick = { add(r) }, enabled = enabled && busy == null) { Text("Add") }
+                Spacer(Modifier.size(8.dp))
+                when {
+                    busy == r.username -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    isAdded -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.material.icons.Icons.Filled.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.size(4.dp))
+                        Text("Added", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    }
+                    isTv -> {
+                        // One focus stop per row: the row takes focus and
+                        // Center; the pill mirrors that focus with a ring.
+                        val shape = RoundedCornerShape(50)
+                        Text(
+                            "Add",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier
+                                .then(
+                                    if (focused) Modifier.border(2.dp, androidx.compose.ui.graphics.Color.White, shape)
+                                    else Modifier,
+                                )
+                                .clip(shape)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                        )
+                    }
+                    else -> TextButton(onClick = { add(r) }, enabled = canAdd) { Text("Add") }
                 }
             }
         }
@@ -127,7 +166,7 @@ internal fun RosterSuggestions(
                 val user = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
                     ?: DispatcharrUserSummary(id = r.userId, username = r.username)
                 vm.addFromRoster(playlistId, r, user, pw, key).fold(
-                    { credFor = null; onAdded(); null },
+                    { credFor = null; added += r; onAdded(); null },
                     { it.message ?: "Could not add profile" },
                 )
             },
