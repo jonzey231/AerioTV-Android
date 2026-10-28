@@ -253,6 +253,11 @@ server: the Dispatcharr API by an API key or token, the Xtream Codes paths
 by the account's username and password, and the stream proxy by the stream
 UUID in the URL.
 
+Set up a TV from your phone uses no server path, so the tables below are
+unchanged: while the TV's setup screen is open it listens on a random LAN
+port and advertises `_aeriotv-setup._tcp`, and the phone sends the
+encrypted playlist straight to it (see docs/DeviceSetupHandoff.md).
+
 <details>
 <summary><strong>Pangolin access rules for Dispatcharr</strong> (click to expand)</summary>
 
