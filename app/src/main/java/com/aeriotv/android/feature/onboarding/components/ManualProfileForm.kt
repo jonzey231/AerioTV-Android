@@ -51,8 +51,35 @@ fun ManualProfileForm(
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val isPassword = mode == DispatcharrAuthMode.UsernamePassword
+    var scannedUser by remember { mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SegmentedAuthControl(selected = mode, onSelect = { mode = it; username = ""; secret = ""; error = null }, enabled = !busy)
+        SegmentedAuthControl(selected = mode, onSelect = { mode = it; username = ""; secret = ""; error = null; scannedUser = null }, enabled = !busy)
+        // Dispatcharr user QR (phones and tablets): the key signs in the same
+        // way as a pasted key. The username in the code is display only.
+        com.aeriotv.android.feature.qrscan.QrScanActions(
+            enabled = !busy,
+            onResult = { r ->
+                when (r) {
+                    is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {
+                        mode = DispatcharrAuthMode.ApiKey; username = ""; secret = r.apiKey
+                        scannedUser = r.username; error = null
+                        if (!busy) {
+                            busy = true
+                            scope.launch {
+                                error = onAdd("", null, r.apiKey)
+                                busy = false
+                                if (error == null) { secret = ""; scannedUser = null }
+                            }
+                        }
+                    }
+                    is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
+                        com.aeriotv.android.feature.qrscan.openSetupLink(context, r.link)
+                    com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> Unit
+                }
+            },
+        )
+        scannedUser?.let { Text("Signed in as $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
         Text(
             if (isPassword) "Sign in as that Dispatcharr user once." else "The API key identifies the Dispatcharr user.",
             style = MaterialTheme.typography.bodySmall,

@@ -214,6 +214,7 @@ private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSub
     var apiKey by remember(username) { mutableStateOf("") }
     var busy by remember(username) { mutableStateOf(false) }
     var error by remember(username) { mutableStateOf<String?>(null) }
+    var scannedUser by remember(username) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onCancel,
@@ -227,6 +228,26 @@ private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSub
                     visualTransformation = PasswordVisualTransformation(),
                 )
                 OutlinedTextField(value = apiKey, onValueChange = { apiKey = it }, singleLine = true, label = { Text("API Key") })
+                // Dispatcharr user QR (phones and tablets): fill the key and add.
+                val context = androidx.compose.ui.platform.LocalContext.current
+                com.aeriotv.android.feature.qrscan.QrScanActions(
+                    enabled = !busy,
+                    onResult = { r ->
+                        when (r) {
+                            is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {
+                                apiKey = r.apiKey; password = ""; scannedUser = r.username
+                                if (!busy) {
+                                    busy = true; error = null
+                                    scope.launch { error = onSubmit(null, r.apiKey); busy = false }
+                                }
+                            }
+                            is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
+                                com.aeriotv.android.feature.qrscan.openSetupLink(context, r.link)
+                            com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> Unit
+                        }
+                    },
+                )
+                scannedUser?.let { Text("Signed in as $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },

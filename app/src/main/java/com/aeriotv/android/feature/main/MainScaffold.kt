@@ -3007,6 +3007,10 @@ private fun SettingsTabContent(
     // Watch for a playlist id flip while we're inside the Add Playlist flow;
     // that means the user's onboarding Save succeeded and the new row was
     // promoted active. Close the embedded flow.
+    var qrRestoreSignIn by remember { mutableStateOf<com.aeriotv.android.core.qr.QrImportBus.SignIn?>(null) }
+    qrRestoreSignIn?.let { si ->
+        com.aeriotv.android.feature.onboarding.QrRestoreOfferDialog(signIn = si, onClose = { qrRestoreSignIn = null })
+    }
     val startId = remember(addPlaylistStep) {
         if (addPlaylistStep != AddPlaylistStep.None) playlistState.playlist?.id else null
     }
@@ -3021,6 +3025,8 @@ private fun SettingsTabContent(
                 (step.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrApiKey ||
                     step.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrUserPass)
             ) {
+                // Added from a Dispatcharr user QR: offer sync if the server has data.
+                qrRestoreSignIn = com.aeriotv.android.core.qr.QrImportBus.takeSignIn(playlistVm.state.value.apiKey)
                 nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.AddProfiles(newId)))
             } else {
                 nav.pop()

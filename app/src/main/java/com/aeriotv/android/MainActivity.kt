@@ -629,7 +629,53 @@ class MainActivity : ComponentActivity() {
         // instead of recreating the activity. Capture the URI for the
         // Compose tree.
         captureDeepLinkFrom(intent)
+        captureSharedQrImage(intent)
     }
+
+    /** TVs have no use for the "share a QR image to AerioTV" target; keep it out of their share sheet. */
+    private fun syncQrShareTarget() {
+        val alias = android.content.ComponentName(this, "$packageName.QrImageShareTarget")
+        val want = if (isTelevisionDevice()) PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        else PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+        runCatching {
+            if (packageManager.getComponentEnabledSetting(alias) != want) {
+                packageManager.setComponentEnabledSetting(alias, want, PackageManager.DONT_KILL_APP)
+            }
+        }
+    }
+
+    /**
+     * A QR code image shared to AerioTV (phones and tablets): decode it with the
+     * same reader as Choose from Photos, then route it like an in-app scan. A
+     * setup code opens Set up a TV; a Dispatcharr user code opens the
+     * Dispatcharr connect form prefilled (QrImportBus). The key is never logged.
+     */
+    private fun captureSharedQrImage(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        if (intent.type?.startsWith("image/") != true || isTelevisionDevice()) return
+        val uri: android.net.Uri = (if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION") intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }) ?: return
+        lifecycleScope.launch {
+            val text = com.aeriotv.android.core.qr.QrImageImport.decode(this@MainActivity, uri)
+            val result = com.aeriotv.android.core.qr.ScannedCode.parse(text)
+            when {
+                text == null -> toast(com.aeriotv.android.core.qr.ScannedCode.NO_QR_IN_IMAGE)
+                result is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
+                    deepLinkTarget.value = DeepLinkTarget.DeviceSetup(result.link)
+                result is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {
+                    com.aeriotv.android.core.qr.QrImportBus.offer(result)
+                    deepLinkTarget.value = DeepLinkTarget.ImportUserKey
+                }
+                else -> toast(com.aeriotv.android.core.qr.ScannedCode.INVALID_MESSAGE)
+            }
+        }
+    }
+
+    private fun toast(message: String) =
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
 
     /**
      * Pull a deep-link target out of [intent.data] when the scheme is
@@ -1383,6 +1429,9 @@ class MainActivity : ComponentActivity() {
         // aeriotv:// deep link. The Compose tree consumes deepLinkTarget
         // via a top-level effect, navigates, then clears it.
         if (!castLaunch) captureDeepLinkFrom(intent)
+        syncQrShareTarget()
+        // A recreation re-delivers the launching intent; import a shared image once.
+        if (savedInstanceState == null) captureSharedQrImage(intent)
         setContent {
             val theme by appPreferences.selectedTheme.collectAsState(initial = AppTheme.Aerio)
             // DEFAULT MUST be Dark: the initial (pre-first-emission) value AND

@@ -411,6 +411,23 @@ fun AerioTVNavHost(
                     dlVm.requestSettingsPage(target.page)
                     onDeepLinkConsumed()
                 }
+                is DeepLinkTarget.ImportUserKey -> {
+                    // A Dispatcharr user QR image was shared to AerioTV. With a
+                    // playlist: Settings > Add Playlist > Dispatcharr. Still in
+                    // onboarding: the Dispatcharr connect step. The form takes
+                    // the code from QrImportBus. TVs never get here (no share target).
+                    val route = navController.currentDestination?.route
+                    if (route == null || route == Routes.BOOTSTRAP) return@LaunchedEffect
+                    if (dlIsTv) {
+                        com.aeriotv.android.core.qr.QrImportBus.take()
+                    } else if (runCatching { navController.getBackStackEntry(Routes.MAIN) }.isSuccess) {
+                        if (route != Routes.MAIN) runCatching { navController.popBackStack(Routes.MAIN, false) }
+                        dlVm.requestSettingsPage("add-dispatcharr")
+                    } else if (route != Routes.CONFIGURE) {
+                        navController.navigate(Routes.configure(SourceType.DispatcharrApiKey)) { launchSingleTop = true }
+                    }
+                    onDeepLinkConsumed()
+                }
                 is DeepLinkTarget.DeviceSetup -> {
                     // A phone camera scanned a TV's setup QR code. TVs ignore it.
                     if (!dlIsTv) setupLink = target.link
@@ -944,6 +961,9 @@ fun AerioTVNavHost(
                 var childOnly by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
                 var profileStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
                 var syncStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+                // Signed in from a Dispatcharr user QR: the sync step asks the
+                // server for existing AerioTV data (restore offer). Memory only.
+                var qrSignIn by remember { mutableStateOf<com.aeriotv.android.core.qr.QrImportBus.SignIn?>(null) }
                 val toMain = {
                     navController.navigate(Routes.MAIN) {
                         popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
@@ -957,6 +977,7 @@ fun AerioTVNavHost(
                     vm.sourceConfigured.collect {
                         val pid = vm.state.value.playlist?.id
                         if ((resolvedType == SourceType.DispatcharrApiKey || resolvedType == SourceType.DispatcharrUserPass) && pid != null) {
+                            qrSignIn = com.aeriotv.android.core.qr.QrImportBus.takeSignIn(vm.state.value.apiKey)
                             roleStepFor = pid
                             return@collect
                         }
@@ -999,10 +1020,12 @@ fun AerioTVNavHost(
                 } else if (syncStepFor != null) {
                     com.aeriotv.android.feature.onboarding.DispatcharrSyncStepScreen(
                         autoEnable = vm.enableDispatcharrSyncAfterConnect,
+                        qrSignIn = qrSignIn,
                         onDone = {
                             if (syncStepFor == null) return@DispatcharrSyncStepScreen
                             val pid = syncStepFor
                             syncStepFor = null
+                            qrSignIn = null
                             vm.enableDispatcharrSyncAfterConnect = false
                             // A Child cannot add profiles; a parent adds theirs
                             // later from Manage Profiles behind the device PIN.

@@ -9,6 +9,16 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- In-app QR scanner (Dispatcharr user code, AerioTV setup code), phones and
+         tablets. Not required: TVs and camera-less tablets still install, and the
+         scanner falls back to Choose from Photos. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
     <!-- Google Cast (GH #33) sender-side device discovery. The Cast SDK's mDNS
          discovery runs in-process (androidx.mediarouter) and needs a Wi-Fi
          multicast lock to receive the _googlecast._tcp advertisements; without
@@ -142,6 +152,23 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!--
+            A QR code image shared TO AerioTV (Dispatcharr user code or an AerioTV
+            setup code) opens the same import flow as Choose from Photos. An alias
+            so MainActivity disables it on TVs, where the share sheet has no use.
+        -->
+        <activity-alias
+            android:name=".QrImageShareTarget"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity-alias>
 
         <service
             android:name=".feature.dvr.LocalRecordingService"

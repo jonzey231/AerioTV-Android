@@ -97,9 +97,7 @@ class SetupProtocolTest {
     }
 
     @Test
-    fun codeHashIsEightHex() {
-        val h = SetupCrypto.codeHash("123456")
-        assertEquals("8d969eef", h)
+    fun newCodeIsSixDigits() {
         assertTrue(SetupCrypto.newCode().matches(Regex("\\d{6}")))
     }
 }

@@ -60,4 +60,11 @@ sealed interface DeepLinkTarget {
 
     /** A TV's "Set up from your phone" QR code, scanned with the system camera (`aeriotv://setup?...`). */
     data class DeviceSetup(val link: String) : DeepLinkTarget
+
+    /**
+     * A Dispatcharr user QR image was shared to AerioTV. The code itself waits
+     * in [com.aeriotv.android.core.qr.QrImportBus]; this only says where to go:
+     * the Dispatcharr connect form (onboarding, or Settings > Add Playlist).
+     */
+    data object ImportUserKey : DeepLinkTarget
 }

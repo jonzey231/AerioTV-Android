@@ -34,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -60,18 +61,32 @@ class DispatcharrSyncStepViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val prefs: AppPreferences,
     private val dsync: DispatcharrSyncManager,
+    private val client: com.aeriotv.android.core.network.DispatcharrClient,
 ) : ViewModel() {
+
+    /**
+     * After a Dispatcharr user QR sign-in: does this user already have AerioTV
+     * sync data on the server? One call to the existing App Data list
+     * endpoint with the scanned key. Any failure counts as "none".
+     */
+    suspend fun serverHasData(signIn: com.aeriotv.android.core.qr.QrImportBus.SignIn): Boolean {
+        val r = runCatching { client.appDataList(signIn.baseUrl, signIn.apiKey) }.getOrNull()
+        val found = r?.ok == true && com.aeriotv.android.core.qr.DsyncRestoreProbe.listsMainKey(r.body)
+        val who = signIn.username ?: "this user"
+        Log.i(TAG, if (found) "[DSYNC] server data found for $who, offering restore" else "[DSYNC] server data none for $who")
+        return found
+    }
 
     suspend fun alreadyOn(): Boolean = prefs.syncProviderOnce() == DispatcharrSyncManager.PROVIDER
 
     /** Same rules as SyncSettingsViewModel.setSyncProvider("dispatcharr"): Drive goes off. */
-    suspend fun turnOn(fromCard: Boolean = false) {
+    suspend fun turnOn(fromCard: Boolean = false, where: String = "onboarding") {
         prefs.setSyncProvider(DispatcharrSyncManager.PROVIDER)
         prefs.setSyncMasterEnabled(false)
         DriveSyncWorker.cancel(context)
-        Log.i(TAG, if (fromCard) "[DSYNC] enabled from onboarding (sync card)" else "[DSYNC] enabled from onboarding")
+        Log.i(TAG, if (fromCard) "[DSYNC] enabled from $where (sync card)" else "[DSYNC] enabled from $where")
         val ok = dsync.awaitFirstPull()
-        Log.i(TAG, "[DSYNC] onboarding first pull ${if (ok) "done" else "not finished; continuing"}")
+        Log.i(TAG, "[DSYNC] $where first pull ${if (ok) "done" else "not finished; continuing"}")
     }
 
     private companion object { const val TAG = "AerioDsync" }
@@ -81,11 +96,17 @@ class DispatcharrSyncStepViewModel @Inject constructor(
 fun DispatcharrSyncStepScreen(
     /** Came from the Welcome "Sync via Dispatcharr" card: turn on without asking. */
     autoEnable: Boolean = false,
+    /** Set when the playlist was just signed in from a Dispatcharr user QR. */
+    qrSignIn: com.aeriotv.android.core.qr.QrImportBus.SignIn? = null,
     onDone: () -> Unit,
     vm: DispatcharrSyncStepViewModel = hiltViewModel(),
 ) {
     var ready by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    // Server already holds this user's AerioTV data: lead with the restore
+    // copy and put focus on Turn On.
+    var restore by remember { mutableStateOf(false) }
+    val turnOnFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -93,9 +114,13 @@ fun DispatcharrSyncStepScreen(
         when {
             vm.alreadyOn() -> onDone()
             autoEnable -> { vm.turnOn(fromCard = true); onDone() }
-            else -> ready = true
+            else -> {
+                restore = qrSignIn != null && vm.serverHasData(qrSignIn)
+                ready = true
+            }
         }
     }
+    LaunchedEffect(ready, restore) { if (ready && restore) runCatching { turnOnFocus.requestFocus() } }
     if (!ready) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         return
@@ -124,6 +149,14 @@ fun DispatcharrSyncStepScreen(
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center,
             )
+            if (restore) {
+                Text(
+                    QR_RESTORE_COPY,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Text(
                 "Your favorites, watch progress, reminders, and preferences are stored on your " +
                     "Dispatcharr server under each profile and follow you to every device. " +
@@ -144,7 +177,9 @@ fun DispatcharrSyncStepScreen(
                         onDone()
                     }
                 },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
+                    .focusRequester(turnOnFocus)
+                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -165,4 +200,45 @@ fun DispatcharrSyncStepScreen(
             )
         }
     }
+}
+
+internal const val QR_RESTORE_COPY = "Restore your favorites, progress, and settings from your server."
+
+/**
+ * Settings > Playlists > Add Playlist, when the Dispatcharr playlist was added
+ * from a user QR: if the server already holds this user's AerioTV data, offer
+ * Dispatcharr Sync in one tap. Shows nothing when there is no data or sync is
+ * already on; [onClose] runs either way.
+ */
+@Composable
+fun QrRestoreOfferDialog(
+    signIn: com.aeriotv.android.core.qr.QrImportBus.SignIn,
+    onClose: () -> Unit,
+    vm: DispatcharrSyncStepViewModel = hiltViewModel(),
+) {
+    var show by remember(signIn) { mutableStateOf(false) }
+    var busy by remember(signIn) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(signIn) {
+        if (vm.alreadyOn() || !vm.serverHasData(signIn)) onClose() else show = true
+    }
+    if (!show) return
+    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        onDismissRequest = { if (!busy) onClose() },
+        title = { Text("Turn on Dispatcharr Sync?") },
+        text = { Text(QR_RESTORE_COPY) },
+        confirmButton = {
+            com.aeriotv.android.ui.settings.SettingsDialogTextButton(
+                label = if (busy) "Turning On" else "Turn On",
+                onClick = {
+                    if (busy) return@SettingsDialogTextButton
+                    busy = true
+                    scope.launch { vm.turnOn(where = "add playlist QR restore"); onClose() }
+                },
+            )
+        },
+        dismissButton = {
+            com.aeriotv.android.ui.settings.SettingsDialogTextButton(label = "Not Now", onClick = { if (!busy) onClose() })
+        },
+    )
 }

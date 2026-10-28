@@ -34,6 +34,9 @@ mediarouter = "1.7.0"
 # Fold awareness for the two-pane Settings host (Settings phase 2): hinge
 # position comes from WindowLayoutInfo so no pane straddles the crease.
 windowManager = "1.5.0"
+# In-app QR scanner (Dispatcharr user API-key QR, AerioTV setup QR): preview +
+# frame analysis only; decoding is zxing core. Phones and tablets only.
+camerax = "1.6.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -84,6 +87,10 @@ androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx"
 androidx-hilt-work = { group = "androidx.hilt", name = "hilt-work", version = "1.3.0" }
 androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version = "1.3.0" }
 sh-calvin-reorderable = { group = "sh.calvin.reorderable", name = "reorderable", version = "2.5.1" }
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 zxing-core = { group = "com.google.zxing", name = "core", version = "3.5.3" }
 androidx-media = { group = "androidx.media", name = "media", version.ref = "mediaCompat" }
 androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }

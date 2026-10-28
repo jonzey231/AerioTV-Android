@@ -125,6 +125,35 @@ fun ConfigureSourceScreen(
         )
     }
 
+    // Dispatcharr user QR (scanned, picked from Photos, or shared to AerioTV):
+    // fill the server URL and API key, switch to API Key, then run the same
+    // Test Connection path as typing. The username is advisory, display only.
+    var scannedUser by remember(sourceType) { mutableStateOf<String?>(null) }
+    val isDispatcharr = sourceType == SourceType.DispatcharrApiKey || sourceType == SourceType.DispatcharrUserPass
+    val applyUserKey: (com.aeriotv.android.core.qr.ScannedCode.Result.UserKey) -> Unit = { k ->
+        dispatcharrAuthMode = DispatcharrAuthMode.ApiKey
+        viewModel.onSourceTypeChange(SourceType.DispatcharrApiKey)
+        k.baseUrl?.let(viewModel::onUrlChange)
+        viewModel.onApiKeyChange(k.apiKey)
+        scannedUser = k.username
+        com.aeriotv.android.core.qr.QrImportBus.noteSignIn(
+            com.aeriotv.android.core.qr.QrImportBus.SignIn(
+                apiKey = k.apiKey,
+                baseUrl = k.baseUrl ?: com.aeriotv.android.feature.playlist.normalizeSchemedUrl(viewModel.state.value.url),
+                username = k.username,
+            ),
+        )
+        viewModel.loadPlaylist()
+    }
+    val sharedKey by com.aeriotv.android.core.qr.QrImportBus.pending.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(sharedKey, isDispatcharr) {
+        if (!isDispatcharr || sharedKey == null) return@LaunchedEffect
+        val k = com.aeriotv.android.core.qr.QrImportBus.take() ?: return@LaunchedEffect
+        // A shared image starts a fresh draft, like picking the type by hand.
+        viewModel.startNewSource(SourceType.DispatcharrApiKey)
+        applyUserKey(k)
+    }
+
     val cardIcon: ImageVector
     val cardTitle: String
     val cardSubtitle: String
@@ -212,6 +241,8 @@ fun ConfigureSourceScreen(
                         state = state,
                         viewModel = viewModel,
                         authMode = dispatcharrAuthMode,
+                        scannedUser = scannedUser,
+                        onUserKey = applyUserKey,
                         onAuthModeChange = { mode ->
                             dispatcharrAuthMode = mode
                             viewModel.onSourceTypeChange(
@@ -351,8 +382,11 @@ private fun DispatcharrFields(
     state: PlaylistViewModel.UiState,
     viewModel: PlaylistViewModel,
     authMode: DispatcharrAuthMode,
+    scannedUser: String?,
+    onUserKey: (com.aeriotv.android.core.qr.ScannedCode.Result.UserKey) -> Unit,
     onAuthModeChange: (DispatcharrAuthMode) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     LabeledField(label = "Name") {
         IconTextField(
             value = state.name,
@@ -380,6 +414,27 @@ private fun DispatcharrFields(
         onSelect = onAuthModeChange,
         enabled = !state.isLoading,
     )
+
+    // Phones and tablets (draws nothing on TV), in both sign-in modes: the
+    // Dispatcharr user QR fills the server and key in one step.
+    com.aeriotv.android.feature.qrscan.QrScanActions(
+        enabled = !state.isLoading,
+        onResult = { r ->
+            when (r) {
+                is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> onUserKey(r)
+                is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
+                    com.aeriotv.android.feature.qrscan.openSetupLink(context, r.link)
+                com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> Unit
+            }
+        },
+    )
+    scannedUser?.let {
+        Text(
+            text = "Signed in as $it",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
 
     when (authMode) {
         DispatcharrAuthMode.ApiKey -> {

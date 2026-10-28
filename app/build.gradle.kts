@@ -266,9 +266,16 @@ dependencies {
     ksp(libs.androidx.hilt.compiler)
     implementation(libs.sh.calvin.reorderable)
     implementation(libs.androidx.media)
-    // QR encoding for the TV log-share dialog (zxing CORE only: the
+    // QR encoding for the TV log-share dialog and decoding for the in-app
+    // scanner (zxing CORE only: the
     // android-embedded wrapper drags in camera/legacy deps we don't need).
     implementation(libs.zxing.core)
+    // In-app QR scanner (phones and tablets): CameraX preview + ImageAnalysis
+    // frames fed to the same zxing core decoder. No Play services scanner.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
 
     // ProfileInstaller: hooks into androidx.startup to AOT-compile the methods
     // listed in src/main/baseline-prof.txt at install time. Without this the
