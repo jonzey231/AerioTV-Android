@@ -139,6 +139,15 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            // android.util.Log (and other framework stubs) return defaults
+            // instead of throwing "not mocked" in JVM unit tests, so parser
+            // code can call Log.w directly without production-side guards.
+            isReturnDefaultValues = true
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -229,6 +238,7 @@ dependencies {
 
     // Pure-JVM unit tests for the cast HLS proxy remuxer (test scope only).
     testImplementation(libs.junit)
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.ktor.client.core)
