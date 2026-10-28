@@ -200,19 +200,13 @@ private fun WelcomeTv(
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
-                .widthIn(max = 640.dp)
+                .widthIn(max = 480.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             BrandBlock(compact = true)
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                SupportedTypeInline(Icons.Filled.Key, "Dispatcharr Direct Connect")
-                SupportedTypeInline(Icons.Filled.Tv, "Xtream Codes")
-                SupportedTypeInline(Icons.Filled.Description, "M3U + EPG")
-            }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(20.dp))
             // Single list (owner, 2026-10-27): the compact cards fit 1080p in
             // one column, and a 2x2 grid read badly.
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
