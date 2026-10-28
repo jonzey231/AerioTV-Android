@@ -943,6 +943,63 @@ class ProfileManager @Inject constructor(
         return Result.success(store.byId(added.id) ?: added)
     }
 
+    // ---- Set up a TV from your phone (docs/DeviceSetupHandoff.md) ----
+
+    /** Sender gate: an Admin profile, or the default profile, is active here. */
+    fun canSetUpTv(playlistId: String): Boolean =
+        activeRole(playlistId) == ProfileRole.Admin || activeProfile(playlistId)?.isDefault != false
+
+    /** The playlist row with the DEFAULT profile's credential (never a switched profile's). */
+    suspend fun defaultPlaylistRow(playlistId: String): PlaylistEntity? = playlistDao.rawById(playlistId)
+
+    /** A local profile plus its v2 PIN record, for the setup payload. */
+    data class SetupSource(val profile: DispatcharrProfile, val pin: ProfilePinStore.Record?)
+
+    fun setupSources(playlistId: String): List<SetupSource> =
+        store.forPlaylist(playlistId).map { SetupSource(it, pinStore.syncRecord(it.id)) }
+
+    /**
+     * TV side: apply one handed-over profile. The default profile already
+     * exists once the playlist is active (it signs in with the playlist
+     * credential), so it only takes the row's name, role, avatar, order, and
+     * PIN. Any other profile is added through [addFromRoster], the same
+     * credential check as Add Profile, unlocked for this one call as the TV
+     * picker's Add Profile is.
+     */
+    suspend fun applySetupProfile(
+        playlistId: String,
+        row: com.aeriotv.android.core.sync.dsync.ProfileRow,
+        isDefault: Boolean,
+        password: String?,
+        apiKey: String?,
+    ): Result<Unit> = runCatching {
+        if (isDefault) {
+            var local: DispatcharrProfile? = null
+            for (i in 0 until 50) {
+                local = store.forPlaylist(playlistId).firstOrNull { it.isDefault }
+                if (local != null) break
+                kotlinx.coroutines.delay(200)
+            }
+            val p = local ?: error("The default profile is not ready yet.")
+            store.update(p.id) { ProfileRoster.applyRow(it, row) }
+            PinRules.typeFromWire(row.pinType)?.let { type ->
+                if (row.pinHash.length == 64 && row.pinSalt.length == 32) pinStore.importSynced(p.id, type, row.pinHash, row.pinSalt)
+            }
+            mutated(p.id, "setup")
+            refreshActiveRole()
+            Log.i(TAG, "[SETUP] default profile ${p.username} updated from the phone")
+            return@runCatching
+        }
+        if (store.forPlaylist(playlistId).any { it.username.equals(row.username, ignoreCase = true) }) return@runCatching
+        pickerAddUnlocked = playlistId
+        try {
+            addFromRoster(playlistId, row, DispatcharrUserSummary(id = row.userId, username = row.username), password, apiKey).getOrThrow()
+        } finally {
+            pickerAddUnlocked = null
+        }
+        Log.i(TAG, "[SETUP] added ${row.username} from the phone")
+    }
+
     /** Row menu "Avatar" (2c). Stamps the synced row like a rename. */
     fun setAvatar(playlistId: String, profileId: String, avatar: AvatarSpec?): Result<Unit> = runCatching {
         val target = store.byId(profileId) ?: error("Profile not found")

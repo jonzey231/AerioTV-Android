@@ -88,6 +88,8 @@ object Routes {
     const val BOOTSTRAP = "bootstrap"
     const val WELCOME = "welcome"
     const val CHOOSE_TYPE = "choose_type"
+    /** TV: "Set up from your phone" receiver (docs/DeviceSetupHandoff.md). */
+    const val TV_SETUP = "tv_setup"
     const val CONFIGURE = "configure/{type}"
     const val MAIN = "main"
     // Task #148 milestone B: optional cs* args put the LIVE player into
@@ -796,6 +798,7 @@ fun AerioTVNavHost(
                         vm.enableDispatcharrSyncAfterConnect = false
                         navController.navigate(Routes.CHOOSE_TYPE)
                     },
+                    onSetUpFromPhone = { navController.navigate(Routes.TV_SETUP) },
                     onSyncViaDispatcharr = {
                         vm.enableDispatcharrSyncAfterConnect = true
                         vm.startNewSource(SourceType.DispatcharrUserPass)
@@ -872,6 +875,22 @@ fun AerioTVNavHost(
                         containerColor = MaterialTheme.colorScheme.surface,
                     )
                 }
+            }
+
+            composable(Routes.TV_SETUP) { entry ->
+                val parent = remember(entry) {
+                    navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
+                }
+                val vm: PlaylistViewModel = hiltViewModel(parent)
+                com.aeriotv.android.feature.devicesetup.TvSetupScreen(
+                    addPlaylist = { req -> vm.addFromSetup(req) },
+                    onCancel = { navController.popBackStack() },
+                    onDone = {
+                        navController.navigate(Routes.MAIN) {
+                            popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
+                        }
+                    },
+                )
             }
 
             composable(Routes.CHOOSE_TYPE) { entry ->

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Wifi
@@ -84,6 +85,8 @@ fun WelcomeScreen(
     googleSignedInEmail: String? = null,
     /** "Sync via Dispatcharr": opens the Direct Connect form, sync turns on after the connect. */
     onSyncViaDispatcharr: (() -> Unit)? = null,
+    /** TV only: "Set up from your phone" (docs/DeviceSetupHandoff.md). Null hides it. */
+    onSetUpFromPhone: (() -> Unit)? = null,
 ) {
     val config = LocalConfiguration.current
     val isTv = com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor().isTv
@@ -93,7 +96,7 @@ fun WelcomeScreen(
     val twoColumn = !isTv && config.screenWidthDp >= 720 && config.screenHeightDp < 720
 
     if (twoColumn) WelcomeTwoColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr)
-    else WelcomeSingleColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr)
+    else WelcomeSingleColumn(onConnectServer, onSkip, onSignInWithGoogle, googleSignInInProgress, googleSignedInEmail, onSyncViaDispatcharr, onSetUpFromPhone.takeIf { isTv })
 }
 
 @Composable
@@ -104,6 +107,7 @@ private fun WelcomeSingleColumn(
     googleSignInInProgress: Boolean,
     googleSignedInEmail: String?,
     onSyncViaDispatcharr: (() -> Unit)?,
+    onSetUpFromPhone: (() -> Unit)? = null,
 ) {
     Box(
         modifier = Modifier
@@ -132,6 +136,10 @@ private fun WelcomeSingleColumn(
             Spacer(Modifier.height(22.dp))
             SupportedTypesGroup(alignStart = false)
             Spacer(Modifier.height(22.dp))
+            if (onSetUpFromPhone != null) {
+                SetUpFromPhoneCard(onClick = onSetUpFromPhone)
+                Spacer(Modifier.height(12.dp))
+            }
             SyncCard(inProgress = googleSignInInProgress, signedInEmail = googleSignedInEmail, onClick = onSignInWithGoogle)
             if (onSignInWithGoogle != null) Spacer(Modifier.height(12.dp))
             if (onSyncViaDispatcharr != null) {
@@ -292,6 +300,26 @@ private fun SyncCard(inProgress: Boolean, signedInEmail: String?, onClick: (() -
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        },
+    )
+}
+
+/** TV only: load this TV from a phone that already has the playlist (no typing on the remote). */
+@Composable
+private fun SetUpFromPhoneCard(onClick: () -> Unit) {
+    SourceTypeCard(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        icon = Icons.Filled.PhoneAndroid,
+        title = "Set up from your phone",
+        subtitle = "Send your playlist, profiles, and sync settings from AerioTV on your phone. Nothing to type.",
+        trailing = {
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         },
     )
 }

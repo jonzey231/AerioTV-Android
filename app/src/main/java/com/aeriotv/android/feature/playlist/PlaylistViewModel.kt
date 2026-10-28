@@ -1100,6 +1100,44 @@ class PlaylistViewModel @Inject constructor(
     }
 
     /**
+     * Set up from your phone (docs/DeviceSetupHandoff.md): the TV adds the
+     * handed-over playlist through the SAME save path as the Add Playlist form
+     * ([PlaylistRepository.loadAndPersist], which loads the channels and so is
+     * the connection test), then runs the same success steps as [loadPlaylist]
+     * except the one-shot [sourceConfigured] event: the setup screen drives
+     * its own steps and navigates when it is done.
+     */
+    suspend fun addFromSetup(request: PlaylistRepository.SaveRequest): Result<PlaylistEntity> {
+        _state.update { it.copy(isLoading = true, error = null, sourceType = request.sourceType) }
+        val normalized = request.copy(
+            url = normalizeSchemedUrl(request.url),
+            lanUrl = request.lanUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { normalizeSchemedUrl(it) },
+            epgUrl = request.epgUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { normalizeSchemedUrl(it) },
+        )
+        return repository.loadAndPersist(normalized, existingId = null).fold(
+            onSuccess = { (entity, channels) ->
+                _state.update {
+                    it.copy(
+                        phase = Phase.ChannelsReady,
+                        playlist = entity,
+                        draftPlaylistId = entity.id,
+                        channels = channels,
+                        isLoading = false,
+                        error = if (channels.isEmpty()) "No channels found." else null,
+                    )
+                }
+                loadEpgIfConfigured(entity)
+                if (channels.isEmpty()) Result.failure(IllegalStateException("No channels found."))
+                else Result.success(entity)
+            },
+            onFailure = { t ->
+                _state.update { it.copy(isLoading = false, channels = emptyList(), error = null) }
+                Result.failure(IllegalStateException(loadFailureMessage("Could not connect", t)))
+            },
+        )
+    }
+
+    /**
      * User-facing message for a failed load/save. OutOfMemoryError gets a
      * plain-language message instead of the raw ART allocation string: a
      * giant playlist (an XC panel's get.php m3u_plus dumping its whole VOD
