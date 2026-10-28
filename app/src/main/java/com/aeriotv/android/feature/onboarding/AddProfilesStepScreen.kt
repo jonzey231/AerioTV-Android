@@ -57,6 +57,8 @@ import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import javax.inject.Inject
 
 /**
@@ -71,7 +73,14 @@ class AddProfilesStepViewModel @Inject constructor(
     private val manager: ProfileManager,
     private val client: DispatcharrClient,
     private val repository: PlaylistRepository,
+    private val prefs: com.aeriotv.android.core.preferences.AppPreferences,
 ) : ViewModel() {
+
+    /** Dispatcharr Sync is on: roster suggestions can still land from the first pull. */
+    suspend fun syncOn(): Boolean =
+        prefs.syncProviderOnce() == com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager.PROVIDER
+
+    fun suggestions(playlistId: String) = manager.rosterSuggestions(playlistId)
 
     sealed interface Step {
         data class Pick(val users: List<DispatcharrUserSummary>) : Step
@@ -108,6 +117,8 @@ class AddProfilesStepViewModel @Inject constructor(
     private companion object { const val TAG = "AddProfilesStep" }
 }
 
+private const val TAG = "AddProfilesStep"
+
 @Composable
 fun AddProfilesStepScreen(
     playlistId: String,
@@ -125,9 +136,24 @@ fun AddProfilesStepScreen(
     val scope = rememberCoroutineScope()
 
     var manual by remember { mutableStateOf(false) }
+    // "From your other devices" (synced roster, opt-in). The step runs after
+    // the Dispatcharr Sync step; it observes the roster, so suggestions show
+    // up when the first pull lands even if the step rendered first.
+    val suggestFlow = remember(playlistId) { vm.suggestions(playlistId) }
+    val suggested by suggestFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val localFlow = remember(playlistId) { profilesVm.profiles(playlistId) }
+    val localCount = localFlow.collectAsStateWithLifecycle(initialValue = emptyList()).value.size
     LaunchedEffect(playlistId) {
         when (val step = vm.candidates(playlistId)) {
-            AddProfilesStepViewModel.Step.Skip -> onDone()
+            AddProfilesStepViewModel.Step.Skip -> {
+                // Nothing from the server list: wait briefly for the first
+                // pull's roster before skipping (sync off: skip now).
+                val rows = if (vm.syncOn()) kotlinx.coroutines.withTimeoutOrNull(8_000L) {
+                    suggestFlow.first { it.isNotEmpty() }
+                } else null
+                Log.i(TAG, "[DSYNC] onboarding add step: ${rows?.size ?: 0} suggestions")
+                if (rows.isNullOrEmpty()) onDone() else users = emptyList()
+            }
             AddProfilesStepViewModel.Step.Manual -> manual = true
             is AddProfilesStepViewModel.Step.Pick -> users = step.users
         }
@@ -147,9 +173,11 @@ fun AddProfilesStepScreen(
 
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
     var query by remember { mutableStateOf("") }
-    val shown = remember(list, query) {
+    val shown = remember(list, query, suggested) {
         val q = query.trim()
-        if (q.isEmpty()) list else list.filter { it.username.contains(q, ignoreCase = true) }
+        // Roster users are listed under "From your other devices" instead.
+        val rest = list.filter { u -> suggested.none { it.username.equals(u.username, ignoreCase = true) } }
+        if (q.isEmpty()) rest else rest.filter { it.username.contains(q, ignoreCase = true) }
     }
     // The user list is the primary content and takes the height; search only
     // filters it. TV (landscape, ~540 dp tall) puts the list on the left and
@@ -184,6 +212,11 @@ fun AddProfilesStepScreen(
                 Column(
                     modifier = listModifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 ) {
+                    com.aeriotv.android.feature.settings.RosterSuggestions(playlistId, profilesVm, list, enabled = !busy)
+                    if (suggested.isNotEmpty() && shown.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Other Dispatcharr users", style = MaterialTheme.typography.titleSmall)
+                    }
                     shown.forEach { user ->
                         val checked = user.id in selected
                         Row(
@@ -210,7 +243,7 @@ fun AddProfilesStepScreen(
                             )
                         }
                     }
-                    if (shown.isEmpty()) {
+                    if (shown.isEmpty() && suggested.isEmpty()) {
                         Text(
                             "No users match.",
                             style = MaterialTheme.typography.bodyMedium.subtext(),
@@ -260,7 +293,7 @@ fun AddProfilesStepScreen(
                     onClick = onDone,
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
-                ) { Text("Skip", style = MaterialTheme.typography.titleMedium) }
+                ) { Text(if (localCount > 1) "Done" else "Skip", style = MaterialTheme.typography.titleMedium) }
                 Text(
                     "You can add or remove profiles later in Settings > Playlists.",
                     style = MaterialTheme.typography.bodySmall.subtext(),
@@ -405,6 +438,7 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            com.aeriotv.android.feature.settings.RosterSuggestions(playlistId, profilesVm, users = null)
             added.forEach { name ->
                 Text("Added $name", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
             }

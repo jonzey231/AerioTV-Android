@@ -131,7 +131,18 @@ class ProfilesViewModel @Inject constructor(
     fun setRole(playlistId: String, profileId: String, to: com.aeriotv.android.core.profiles.ProfileRole) =
         manager.setRole(playlistId, profileId, to)
     fun verifyAnyAdminPin(playlistId: String, entries: List<String>) = manager.verifyAnyAdminPin(playlistId, entries)
-    fun adminPinType(playlistId: String) = manager.adminPinHolders(playlistId).firstOrNull()?.let { manager.pinType(it.id) }
+    fun adminPinType(playlistId: String) = manager.adminPinIds(playlistId).firstOrNull()?.let { manager.pinType(it) }
+    // Device Admin PIN (device-local)
+    fun hasDeviceAdminPin(playlistId: String) = manager.hasDeviceAdminPin(playlistId)
+    fun deviceAdminPinId(playlistId: String) = manager.deviceAdminPinId(playlistId)
+    fun setDeviceAdminPin(playlistId: String, type: com.aeriotv.android.core.profiles.PinType, entries: List<String>, current: List<String>?, onboarding: Boolean = false) =
+        manager.setDeviceAdminPin(playlistId, type, entries, current, onboarding)
+    fun removeDeviceAdminPin(playlistId: String, current: List<String>) = manager.removeDeviceAdminPin(playlistId, current)
+    fun deviceAdminPinRemovalBlock(playlistId: String) = manager.deviceAdminPinRemovalBlock(playlistId)
+    fun makeBaseChild(playlistId: String) = manager.makeBaseChild(playlistId)
+    fun rosterSuggestions(playlistId: String) = manager.rosterSuggestions(playlistId)
+    suspend fun addFromRoster(playlistId: String, row: com.aeriotv.android.core.sync.dsync.ProfileRow, user: DispatcharrUserSummary, password: String?, apiKey: String?) =
+        manager.addFromRoster(playlistId, row, user, password, apiKey)
     fun adminHasPin(playlistId: String) = manager.adminHasPin(playlistId)
     fun lastAdminUnlock() = manager.lastAdminUnlock
     fun anyChild(playlistId: String) = manager.anyChild(playlistId)
@@ -178,11 +189,11 @@ class ProfilesViewModel @Inject constructor(
     fun pinLength(profileId: String) = manager.pinLength(profileId)
     /** Known only when every Admin PIN holder's length is known and equal. */
     fun adminPinLength(playlistId: String): Int? =
-        manager.adminPinHolders(playlistId).map { manager.pinLength(it.id) }.distinct().singleOrNull()
+        manager.adminPinIds(playlistId).map { manager.pinLength(it) }.distinct().singleOrNull()
     fun verifyPin(profileId: String, entries: List<String>) = manager.verifyPin(profileId, entries)
     fun pinLockSeconds(profileId: String) = manager.pinLockSeconds(profileId)
     fun adminPinLockSeconds(playlistId: String) =
-        manager.adminPinHolders(playlistId).minOfOrNull { manager.pinLockSeconds(it.id) } ?: 0
+        manager.adminPinIds(playlistId).minOfOrNull { manager.pinLockSeconds(it) } ?: 0
     suspend fun canManagePin(playlistId: String, profileId: String) = manager.canManagePin(playlistId, profileId)
     suspend fun needsCurrentPin(playlistId: String, profileId: String) = manager.needsCurrentPin(playlistId, profileId)
     suspend fun setPin(playlistId: String, profileId: String, type: com.aeriotv.android.core.profiles.PinType, entries: List<String>, current: List<String>?) =
@@ -568,6 +579,7 @@ fun ProfilesSection(playlistId: String) {
                     Spacer(Modifier.size(12.dp))
                     Text("Add Profile", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 }
+                DeviceAdminPinRow(playlistId, vm)
             }
             if (busy) {
                 Row(Modifier.padding(16.dp)) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
@@ -897,6 +909,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
             title = { Text("Add Profile") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RosterSuggestions(playlistId, vm, users = null, onAdded = onClose)
                     RolePicker(playlistId, vm, role) { role = it }
                     com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
                         onAdd = { u, pw, key ->
@@ -910,6 +923,11 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         )
         return
     }
+    // Roster users ("From your other devices") are listed above; the server
+    // list below keeps the rest.
+    val suggestFlow = remember(playlistId) { vm.rosterSuggestions(playlistId) }
+    val suggested by suggestFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val listed = users?.filter { u -> suggested.none { it.username.equals(u.username, ignoreCase = true) } }
     LaunchedEffect(users?.isNotEmpty() == true) { if (users?.isNotEmpty() == true) focusFirst(firstUser) }
     com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onClose,
@@ -917,19 +935,20 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val u = picked
+                if (u == null) RosterSuggestions(playlistId, vm, users, enabled = !busy, onAdded = onClose)
                 RolePicker(playlistId, vm, role) { role = it }
                 if (u == null) {
                     when {
                         users == null && error == null -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        users?.isEmpty() == true -> Text("Every Dispatcharr user on this server already has a profile.")
+                        listed?.isEmpty() == true -> if (suggested.isEmpty()) Text("Every Dispatcharr user on this server already has a profile.")
                         busy -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        users != null -> LazyColumn(Modifier.heightIn(max = 220.dp)) {
-                            items(users.orEmpty(), key = { it.id }) { user ->
+                        listed != null -> LazyColumn(Modifier.heightIn(max = 220.dp)) {
+                            items(listed, key = { it.id }) { user ->
                                 var rowFocused by remember { mutableStateOf(false) }
                                 Row(
                                     Modifier
                                         .fillMaxWidth()
-                                        .then(if (user.id == users.orEmpty().firstOrNull()?.id) Modifier.focusRequester(firstUser) else Modifier)
+                                        .then(if (user.id == listed.firstOrNull()?.id) Modifier.focusRequester(firstUser) else Modifier)
                                         .onFocusChanged { rowFocused = it.isFocused }
                                         // Same focus ring as the Profiles rows.
                                         .settingsRowCard(rowFocused)

@@ -97,6 +97,7 @@ fun ManageProfilesPage(onBack: () -> Unit) {
     var status by remember { mutableStateOf<String?>(null) }
     var pinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var confirm by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    var adding by remember { mutableStateOf(false) }
     val profiles by vm.profiles(pid).collectAsStateWithLifecycle(initialValue = emptyList())
     val activeId by vm.activeProfileId(pid).collectAsStateWithLifecycle(initialValue = null)
     val role by vm.activeRole.collectAsStateWithLifecycle()
@@ -166,6 +167,18 @@ fun ManageProfilesPage(onBack: () -> Unit) {
                     )
                 }
                 if (busy) item("busy") { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
+                // Kid-only device (and any Child): behind the Admin PIN a parent
+                // can add their own profile, roster suggestions included.
+                item("add") {
+                    SettingsCard {
+                        SettingsActionRow(
+                            label = "Add Profile",
+                            leadingIcon = androidx.compose.material.icons.Icons.Filled.Add,
+                            onClick = { vm.setPickerAddUnlocked(pid); adding = true },
+                        )
+                        if (vm.hasDeviceAdminPin(pid)) DeviceAdminPinRow(pid, vm)
+                    }
+                }
             }
             status?.let { item("status") { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
         }
@@ -185,6 +198,7 @@ fun ManageProfilesPage(onBack: () -> Unit) {
     confirm?.let { p ->
         StopPlaybackDialog(name = p.displayName, onDismiss = { confirm = null }) { confirm = null; doSwitch(p) }
     }
+    if (adding) AddProfileDialog(pid, vm) { adding = false; vm.setPickerAddUnlocked(null) }
 }
 
 /** Settings > Playlists > (Dispatcharr playlist): Admin only, Android TV only. */

@@ -272,7 +272,64 @@ class ProfileManager @Inject constructor(
     fun adminPinHolders(playlistId: String): List<DispatcharrProfile> =
         store.forPlaylist(playlistId).filter { it.effectiveRole() == ProfileRole.Admin && pinStore.hasPin(it.id) }
 
-    fun adminHasPin(playlistId: String): Boolean = adminPinHolders(playlistId).isNotEmpty()
+    fun adminHasPin(playlistId: String): Boolean = adminPinHolders(playlistId).isNotEmpty() || hasDeviceAdminPin(playlistId)
+
+    // ---- Device Admin PIN (device-local, never synced) ----
+    // A PIN tied to no profile: set in onboarding when the first profile is a
+    // Child (a kid-only device), and kept valid alongside Admin profiles'
+    // own PINs. Stored in the PIN store under a reserved id that is never a
+    // profile id, so the `profiles` key (built from profiles) never carries it.
+
+    fun deviceAdminPinId(playlistId: String): String = DevicePin.id(playlistId)
+    fun hasDeviceAdminPin(playlistId: String): Boolean = pinStore.hasPin(deviceAdminPinId(playlistId))
+    fun deviceAdminPinType(playlistId: String): PinType? = pinStore.type(deviceAdminPinId(playlistId))
+
+    /** Every Admin PIN id that passes "Enter an Admin PIN": Admin profiles, then the device PIN. */
+    fun adminPinIds(playlistId: String): List<String> =
+        adminPinHolders(playlistId).map { it.id } + listOfNotNull(deviceAdminPinId(playlistId).takeIf { pinStore.hasPin(it) })
+
+    /**
+     * Set or change the device Admin PIN. Changing needs the current device
+     * PIN ([current]); setting the first one needs an Admin role, an Admin
+     * ticket, or onboarding ([onboarding]).
+     */
+    fun setDeviceAdminPin(playlistId: String, type: PinType, entries: List<String>, current: List<String>?, onboarding: Boolean = false): Result<Unit> = runCatching {
+        val id = deviceAdminPinId(playlistId)
+        if (pinStore.hasPin(id)) {
+            check(verifyPin(id, current.orEmpty()) == PinCheck.Ok) { "Wrong PIN" }
+        } else {
+            check(onboarding || activeRole(playlistId) == ProfileRole.Admin) { "Only an Admin profile can set the Device Admin PIN." }
+        }
+        check(pinStore.set(id, type, entries)) { "Enter 4 to 6" }
+        Log.i(TAG, "[PROFILE] device admin pin set on ${playlistId.take(8)}")
+    }
+
+    /** Null = removable; otherwise why the device PIN must stay. */
+    fun deviceAdminPinRemovalBlock(playlistId: String): String? =
+        if (RoleRules.canRemoveAdminPin(ProfileRole.Admin, anyChild(playlistId), adminPinHolders(playlistId).size)) null
+        else "This is the last Admin PIN. A Child profile needs an Admin PIN to leave it, so this PIN stays while any profile is a Child."
+
+    fun removeDeviceAdminPin(playlistId: String, current: List<String>): Result<Unit> = runCatching {
+        val id = deviceAdminPinId(playlistId)
+        deviceAdminPinRemovalBlock(playlistId)?.let { error(it) }
+        check(verifyPin(id, current) == PinCheck.Ok) { "Wrong PIN" }
+        pinStore.remove(id)
+        Log.i(TAG, "[PROFILE] device admin pin removed on ${playlistId.take(8)}")
+    }
+
+    /**
+     * Onboarding "Who is this profile for?" = Child: the base profile becomes
+     * Child once a device Admin PIN exists (set just before). Bypasses the
+     * "one profile must stay Admin" rule on purpose: the device PIN is the
+     * Admin on a kid-only device.
+     */
+    fun makeBaseChild(playlistId: String): Result<Unit> = runCatching {
+        check(hasDeviceAdminPin(playlistId)) { "Set a Device Admin PIN first." }
+        val base = store.forPlaylist(playlistId).firstOrNull { it.isDefault } ?: error("Profile not found")
+        store.update(base.id) { it.copy(role = ProfileRole.Child) }
+        refreshActiveRole(playlistId)
+        Log.i(TAG, "[PROFILE] onboarding: ${base.username} is a Child; device admin pin holds Admin")
+    }
 
     /** The acting (active) profile on [playlistId]. */
     fun activeProfile(playlistId: String): DispatcharrProfile? = activeProfileIdNow(playlistId)?.let(store::byId)
@@ -287,38 +344,41 @@ class ProfileManager @Inject constructor(
      */
     @Synchronized
     fun verifyAnyAdminPin(playlistId: String, entries: List<String>): PinCheck {
-        val holders = adminPinHolders(playlistId)
+        val holders = adminPinIds(playlistId)
         if (holders.isEmpty()) return PinCheck.Wrong
+        val device = deviceAdminPinId(playlistId)
         val now = System.currentTimeMillis()
         var minLock = Int.MAX_VALUE
         var tried = false
         for (h in holders) {
-            val b = pinStore.backoff(h.id)
+            val b = pinStore.backoff(h)
             val left = b.remainingSeconds(now)
             if (left > 0) { minLock = minOf(minLock, left); continue }
             tried = true
-            if (pinStore.check(h.id, entries)) {
-                pinStore.saveBackoff(h.id, b.onOk())
-                switchTickets.add(h.id)
+            if (pinStore.check(h, entries)) {
+                pinStore.saveBackoff(h, b.onOk())
                 adminTickets.add(playlistId)
-                lastAdminUnlock = h.id
-                Log.i(TAG, "[PROFILE] pin ok for ${h.username}")
+                if (h != device) {
+                    switchTickets.add(h)
+                    lastAdminUnlock = h
+                }
+                Log.i(TAG, "[PROFILE] pin ok for ${if (h == device) "device admin" else store.byId(h)?.username}")
                 return PinCheck.Ok
             }
         }
         // Count the miss against every Admin that was tried.
         var lock = Int.MAX_VALUE
         holders.forEach { h ->
-            val b = pinStore.backoff(h.id)
+            val b = pinStore.backoff(h)
             if (b.remainingSeconds(now) > 0) return@forEach
             val next = b.onWrong(now)
-            pinStore.saveBackoff(h.id, next)
+            pinStore.saveBackoff(h, next)
             next.remainingSeconds(now).takeIf { it > 0 }?.let { lock = minOf(lock, it) }
-            Log.i(TAG, "[PROFILE] pin wrong for ${h.username}")
+            Log.i(TAG, "[PROFILE] pin wrong for ${if (h == device) "device admin" else store.byId(h)?.username}")
         }
         if (!tried) return PinCheck.Locked(minLock)
         // Locked only when no Admin is left to try.
-        val anyOpen = holders.any { pinStore.backoff(it.id).remainingSeconds(now) == 0 }
+        val anyOpen = holders.any { pinStore.backoff(it).remainingSeconds(now) == 0 }
         return if (anyOpen) PinCheck.Wrong else PinCheck.Locked(minOf(lock, minLock))
     }
 
@@ -411,7 +471,7 @@ class ProfileManager @Inject constructor(
     /** Null = removable; otherwise why the PIN must stay (last Admin PIN while a Child exists). */
     fun pinRemovalBlock(playlistId: String, profileId: String): String? {
         val role = roleOf(profileId) ?: return null
-        val others = adminPinHolders(playlistId).count { it.id != profileId }
+        val others = adminPinIds(playlistId).count { it != profileId }
         return if (RoleRules.canRemoveAdminPin(role, anyChild(playlistId), others)) null
         else "This is the last Admin PIN. A Child profile needs an Admin PIN to leave it, so this PIN stays while any profile is a Child."
     }
@@ -719,7 +779,7 @@ class ProfileManager @Inject constructor(
         if (role == ProfileRole.Child) check(adminHasPin(playlistId)) { "Set a PIN on an Admin profile first." }
         // Local Admin role, not the server level: a profile is added by
         // signing in as that user, which never changes the server.
-        check(syncAdding || canAdd(playlistId)) { "Only an Admin profile can add profiles." }
+        check(canAdd(playlistId)) { "Only an Admin profile can add profiles." }
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
         val id = UUID.randomUUID().toString()
@@ -745,7 +805,7 @@ class ProfileManager @Inject constructor(
         ).applyMe(me, key).let { if (role != null) it.copy(role = role) else it }
         store.upsert(profile)
         appPreferences.seedProfileSettings(id)
-        if (!syncAdding) mutated(id, "add")
+        mutated(id, "add")
         Log.i(TAG, "[PROFILE] added ${profile.username} on ${playlistId.take(8)} level=${ProfileLevel.of(profile.userLevel).label} role=${profile.effectiveRole().label}")
         profile
     }
@@ -768,19 +828,18 @@ class ProfileManager @Inject constructor(
     fun profileIdFor(playlistId: String, username: String): String? =
         store.forPlaylist(playlistId).firstOrNull { it.username.equals(username, ignoreCase = true) }?.id
 
-    @Volatile private var syncAdding = false
-
     /**
      * Merge a pulled `profiles` list on a device signed in as the admin, PER
-     * ROW (schema 4.12): a missing profile is added with the api_key from the
-     * admin user list (no typing) and adopts the row; an existing profile
+     * ROW (schema 4.12). The roster is a catalog: a row with no local profile
+     * is never added here (it is offered via [rosterSuggestions] and added
+     * only by an explicit choice, [addFromRoster]); an existing profile
      * takes the row's display name, role, and PIN only when the row's
      * updatedAt is newer than [localUpdatedAt] for that username. Local
      * profiles are not removed here (the caller applies synced tombstones
      * first, schema 4.12), and a row this device removed at or after its
      * updatedAt ([removedAt]) is skipped, never re-created. [adopted]
      * records the row stamp taken.
-     * Returns how many profiles were added.
+     * Returns how many profiles were added (always 0: opt-in only).
      */
     suspend fun mergeSyncedProfiles(
         playlistId: String,
@@ -790,41 +849,21 @@ class ProfileManager @Inject constructor(
         adopted: (String, Long) -> Unit = { _, _ -> },
         removedAt: (String) -> Long = { 0L },
     ): Int {
+        publishRoster(playlistId, rows)
+        val plan = ProfileRoster.plan(rows, store.forPlaylist(playlistId).map { it.username })
+        Log.i(TAG, "[DSYNC] profiles: ${plan.available.size} roster rows available, not added (opt-in)")
         if (!RoleRules.canWriteProfilesKey(activeRole(playlistId))) return 0
-        var added = 0
-        rows.forEach { r ->
+        val added = 0
+        plan.merge.forEach { r ->
             var local = store.forPlaylist(playlistId).firstOrNull { it.username.equals(r.username, ignoreCase = true) }
-            val isNew = local == null
-            Log.i(TAG, "[DSYNC] profiles: row ${r.username} updatedAt=${r.updatedAt} removedAt=${removedAt(r.username)} local=${if (isNew) "no" else "yes"}")
-            if (local == null) {
-                // Removed on this device after the row's last change: never
-                // re-create it; the next push drops the row from the server.
-                val gone = removedAt(r.username)
-                if (gone > 0L && gone >= r.updatedAt) {
-                    Log.i(TAG, "[DSYNC] profiles: skipped removed row for ${r.username}")
-                    return@forEach
-                }
-                val user = users.firstOrNull { it.id == r.userId }
-                    ?: users.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
-                if (user == null || user.apiKey.isNullOrBlank()) {
-                    Log.i(TAG, "[DSYNC] profiles: ${r.username} has no listed api key; not added")
-                    return@forEach
-                }
-                syncAdding = true
-                local = try {
-                    addProfile(playlistId, user, null, null)
-                        .onFailure { Log.w(TAG, "[DSYNC] profiles: add ${r.username} failed: ${it.message}") }
-                        .getOrNull()
-                } finally {
-                    syncAdding = false
-                }
-                if (local == null) return@forEach
-                added++
-            }
+            Log.i(TAG, "[DSYNC] profiles: row ${r.username} updatedAt=${r.updatedAt} removedAt=${removedAt(r.username)} local=${if (local == null) "no" else "yes"}")
+            // Catalog semantics: a pull never creates a profile. The row is
+            // offered under "From your other devices" until chosen.
+            if (local == null) return@forEach
             val id = local.id
             if (local.userId == 0 && r.userId > 0) store.update(id) { it.copy(userId = r.userId) }
             val mine = localUpdatedAt(local.username)
-            if (!isNew && !com.aeriotv.android.core.sync.dsync.DsyncGate.profileRowWins(mine, r)) {
+            if (!com.aeriotv.android.core.sync.dsync.DsyncGate.profileRowWins(mine, r)) {
                 Log.i(TAG, "[DSYNC] profiles: keep local row for ${local.username} (local $mine >= server ${r.updatedAt})")
                 return@forEach
             }
@@ -860,9 +899,48 @@ class ProfileManager @Inject constructor(
             }
             adopted(local.username, r.updatedAt)
         }
-        if (added > 0) Log.i(TAG, "[DSYNC] profiles: added $added from the synced list")
         refreshActiveRole()
         return added
+    }
+
+    private val _roster = kotlinx.coroutines.flow.MutableStateFlow<Map<String, List<com.aeriotv.android.core.sync.dsync.ProfileRow>>>(emptyMap())
+
+    private fun publishRoster(playlistId: String, rows: List<com.aeriotv.android.core.sync.dsync.ProfileRow>) {
+        _roster.value = _roster.value + (playlistId to rows)
+    }
+
+    /**
+     * Synced roster rows for users with no profile on this device: the
+     * "From your other devices" suggestions. Empty until a pull lands (or
+     * with Dispatcharr Sync off); updates when it does.
+     */
+    fun rosterSuggestions(playlistId: String): Flow<List<com.aeriotv.android.core.sync.dsync.ProfileRow>> =
+        combine(_roster, store.profiles) { r, local ->
+            ProfileRoster.suggestions(r[playlistId].orEmpty(), local.filter { it.playlistId == playlistId }.map { it.username })
+        }.distinctUntilChanged()
+
+    /**
+     * Add a profile from a roster suggestion: the same credential path as
+     * [addProfile] (listed api key, else the typed password or key), then the
+     * row's role, PIN, avatar, display name, and order. A Child row needs an
+     * Admin PIN on this playlist first (RoleFlow rule, enforced in [addProfile]).
+     */
+    suspend fun addFromRoster(
+        playlistId: String,
+        row: com.aeriotv.android.core.sync.dsync.ProfileRow,
+        user: DispatcharrUserSummary,
+        password: String?,
+        apiKey: String?,
+    ): Result<DispatcharrProfile> {
+        val role = ProfileRole.fromWire(row.role)
+        val added = addProfile(playlistId, user, password, apiKey, role).getOrElse { return Result.failure(it) }
+        store.update(added.id) { ProfileRoster.applyRow(it, row) }
+        PinRules.typeFromWire(row.pinType)?.let { type ->
+            if (row.pinHash.length == 64 && row.pinSalt.length == 32) pinStore.importSynced(added.id, type, row.pinHash, row.pinSalt)
+        }
+        refreshActiveRole()
+        Log.i(TAG, "[DSYNC] profiles: added ${row.username} from the roster (explicit choice) role=${role?.label ?: "default"} order=${row.order}")
+        return Result.success(store.byId(added.id) ?: added)
     }
 
     /** Row menu "Avatar" (2c). Stamps the synced row like a rename. */

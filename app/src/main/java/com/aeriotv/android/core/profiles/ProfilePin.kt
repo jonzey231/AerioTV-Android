@@ -21,6 +21,13 @@ enum class PinDirection(val letter: Char, val label: String) {
     Up('U', "Up"), Down('D', "Down"), Left('L', "Left"), Right('R', "Right"),
 }
 
+/** Reserved PIN-store id for the device Admin PIN (never a profile id, never synced). */
+object DevicePin {
+    const val PREFIX = "device-admin|"
+    fun id(playlistId: String): String = PREFIX + playlistId
+    fun isDevice(id: String): Boolean = id.startsWith(PREFIX)
+}
+
 /** Pure PIN rules, unit tested (no Android types). */
 object PinRules {
     const val MIN_LENGTH = 4

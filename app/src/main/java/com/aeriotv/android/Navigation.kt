@@ -905,11 +905,20 @@ fun AerioTVNavHost(
                 val resolvedType = runCatching { SourceType.valueOf(typeName) }
                     .getOrElse { SourceType.M3uUrl }
 
-                // Dispatcharr only: "Add profiles for other users?" step
-                // between a successful connect and the advance to MAIN.
+                // Dispatcharr only, between a successful connect and MAIN:
+                // 1. "Who is this profile for?" (Standard server users only),
+                // 2. "Turn on Dispatcharr Sync?" (its first pull brings the
+                //    profiles roster), 3. "Add profiles for other users?"
+                //    with "From your other devices" (skipped for a Child).
+                var roleStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+                var childOnly by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
                 var profileStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
-                // Then "Turn on Dispatcharr Sync?" (Direct Connect only).
                 var syncStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+                val toMain = {
+                    navController.navigate(Routes.MAIN) {
+                        popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
+                    }
+                }
                 LaunchedEffect(Unit) {
                     // Navigate on a one-shot "configured" EVENT, not on
                     // phase == ChannelsReady: when adding a second playlist the
@@ -918,7 +927,7 @@ fun AerioTVNavHost(
                     vm.sourceConfigured.collect {
                         val pid = vm.state.value.playlist?.id
                         if ((resolvedType == SourceType.DispatcharrApiKey || resolvedType == SourceType.DispatcharrUserPass) && pid != null) {
-                            profileStepFor = pid
+                            roleStepFor = pid
                             return@collect
                         }
                         navController.navigate(Routes.MAIN) {
@@ -927,14 +936,25 @@ fun AerioTVNavHost(
                     }
                 }
 
+                val rolePid = roleStepFor
                 val stepPid = profileStepFor
-                if (stepPid != null) {
+                if (rolePid != null) {
+                    com.aeriotv.android.feature.onboarding.ProfileRoleStepScreen(
+                        playlistId = rolePid,
+                        onDone = { child ->
+                            if (roleStepFor == null) return@ProfileRoleStepScreen
+                            childOnly = child
+                            syncStepFor = roleStepFor
+                            roleStepFor = null
+                        },
+                    )
+                } else if (stepPid != null) {
                     com.aeriotv.android.feature.onboarding.AddProfilesStepScreen(
                         playlistId = stepPid,
                         onDone = {
                             if (profileStepFor == null) return@AddProfilesStepScreen
-                            syncStepFor = profileStepFor
                             profileStepFor = null
+                            toMain()
                         },
                     )
                 } else if (syncStepFor != null) {
@@ -942,11 +962,12 @@ fun AerioTVNavHost(
                         autoEnable = vm.enableDispatcharrSyncAfterConnect,
                         onDone = {
                             if (syncStepFor == null) return@DispatcharrSyncStepScreen
+                            val pid = syncStepFor
                             syncStepFor = null
                             vm.enableDispatcharrSyncAfterConnect = false
-                            navController.navigate(Routes.MAIN) {
-                                popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
-                            }
+                            // A Child cannot add profiles; a parent adds theirs
+                            // later from Manage Profiles behind the device PIN.
+                            if (childOnly) toMain() else profileStepFor = pid
                         },
                     )
                 } else ConfigureSourceScreen(
