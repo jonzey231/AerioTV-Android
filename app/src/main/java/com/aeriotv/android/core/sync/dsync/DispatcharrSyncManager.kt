@@ -148,6 +148,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** Categories present inside their v2 key on the server. */
         val present = java.util.Collections.synchronizedSet(HashSet<DsyncKey>())
         val pending = HashMap<DsyncKey, Job>()
+        /** Keys already checked by [healIfLocalDiffers] this session. */
+        val healed = java.util.Collections.synchronizedSet(HashSet<DsyncKey>())
         val retries = HashMap<DsyncKey, Int>()
         val suppressUntil = HashMap<DsyncKey, Long>()
         var users: List<DispatcharrUserSummary>? = null
@@ -410,7 +412,7 @@ class DispatcharrSyncManager @Inject constructor(
         kotlinx.coroutines.coroutineScope {
             DsyncKey.entries.forEach { key ->
                 launch {
-                    sourceFor(key, s.playlistId).distinctUntilChanged().drop(1).collect { onLocalChange(s, key) }
+                    sourceFor(key, s.playlistId, s.token).distinctUntilChanged().drop(1).collect { onLocalChange(s, key) }
                 }
             }
             launch {
@@ -817,8 +819,83 @@ class DispatcharrSyncManager @Inject constructor(
             // Keep the newest raw for round-trip and the row merges.
             state.edit().putString(k("raw", s, key), raw.toString()).apply()
             Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes not newer")
+            if (healIfLocalDiffers(s, key, env) == ApplyResult.NotReady) return
         }
         s.read += key
+    }
+
+    /**
+     * Self-heal, once per session per key: a stamp this device already
+     * consumed skips the apply ("not newer"), so a pull that once applied
+     * into the wrong scope or mapped nothing (2026-10-28 roster add + switch:
+     * Jordan's favorites never appeared) would stay wrong forever. When the
+     * session's own local copy is empty or differs from a non-empty server
+     * copy and there is no unsent local change, apply the server copy anyway.
+     */
+    private suspend fun healIfLocalDiffers(s: Session, key: DsyncKey, env: DsyncEnvelope): ApplyResult? {
+        if (key !in HEAL_KEYS || isDirty(s, key) || key in s.healed) return null
+        val d = env.data
+        val check: Pair<Boolean, Int>? = runCatching {
+            when (key) {
+                DsyncKey.Favorites -> {
+                    val ids = DsyncPayloads.decodeFavorites(d).orEmpty()
+                    val m = channelMap(s)
+                    if (ids.isEmpty() || m.toInt.isEmpty()) null else {
+                        val local = favoriteDao.allOnceIn(s.token).map { it.channelId }.filter { it in m.toInt }.toSet()
+                        val server = ids.mapNotNull { m.toLocal[it] }.toSet()
+                        if (server.isEmpty() || local == server) null else (local.isEmpty() to ids.size)
+                    }
+                }
+                DsyncKey.Recents -> {
+                    val remote = DsyncPayloads.decodeRecents(d).orEmpty()
+                    val m = channelMap(s)
+                    if (remote.isEmpty() || m.toInt.isEmpty()) null else {
+                        val local = prefs.recentChannelIdsIn(s.token).filter { it in m.toInt }.toSet()
+                        val server = remote.mapNotNull { m.toLocal[it.channelId] }.toSet()
+                        if (server.isEmpty() || local.containsAll(server)) null else (local.isEmpty() to remote.size)
+                    }
+                }
+                DsyncKey.Collections -> {
+                    val remote = DsyncPayloads.decodeCollections(d).orEmpty()
+                    val m = channelMap(s)
+                    if (remote.isEmpty() || m.toInt.isEmpty()) null else {
+                        val local = prefs.channelCollectionsIn(s.token)
+                        val l = local.associate { it.id to (it.name to it.memberIds.filter { id -> id in m.toInt }.toSet()) }
+                        val r = remote.associate { it.id to (it.name to it.members.mapNotNull { id -> m.toLocal[id] }.toSet()) }
+                        if (l == r) null else (local.isEmpty() to remote.size)
+                    }
+                }
+                DsyncKey.HiddenGroups -> {
+                    val g = DsyncPayloads.decodeHiddenGroups(d)
+                    if (g == null || (g.live.isEmpty() && g.movies.isEmpty() && g.series.isEmpty())) null else {
+                        val l = Triple(prefs.hiddenGroupsIn(s.token), prefs.hiddenMovieGroupsIn(s.token), prefs.hiddenSeriesGroupsIn(s.token))
+                        if (l == Triple(g.live.toSet(), g.movies.toSet(), g.series.toSet())) null
+                        else ((l.first.isEmpty() && l.second.isEmpty() && l.third.isEmpty()) to (g.live.size + g.movies.size + g.series.size))
+                    }
+                }
+                DsyncKey.GroupOrder -> {
+                    val g = DsyncPayloads.decodeGroupOrder(d)
+                    if (g == null || (g.order.isEmpty() && g.mode == "default")) null else {
+                        val mode = prefs.groupSortModeIn(s.token).lowercase()
+                        val order = prefs.groupOrderIn(s.token)
+                        if (mode == g.mode && order == g.order) null else (order.isEmpty() to g.order.size)
+                    }
+                }
+                else -> null
+            }
+        }.getOrNull()
+        if (check == null) {
+            s.healed += key
+            return null
+        }
+        val applied = runCatching { apply(s, key, env) }.getOrDefault(ApplyResult.Failed)
+        if (applied == ApplyResult.NotReady) return applied // channel list not loaded: try again next pull
+        s.healed += key
+        if (applied == ApplyResult.Applied) {
+            s.suppressUntil[key] = System.currentTimeMillis() + SUPPRESS_MS
+            Log.i(TAG, "[DSYNC] ${key.suffix} in: re-applied after ${if (check.first) "empty local" else "local differs"} (${check.second})")
+        }
+        return applied
     }
 
     // ---- write (section 7.3 to 7.8) ----
@@ -1033,8 +1110,10 @@ class DispatcharrSyncManager @Inject constructor(
 
     // ---- local sources (change detection) ----
 
-    private fun sourceFor(key: DsyncKey, playlistId: String?): Flow<Any?> = when (key) {
-        DsyncKey.Favorites -> favoriteDao.observeAll().map { rows -> rows.map { it.channelId to it.displayOrder } }
+    private fun sourceFor(key: DsyncKey, playlistId: String?, token: String? = null): Flow<Any?> = when (key) {
+        // A session watches its own scope; the between-sessions watcher follows the active one.
+        DsyncKey.Favorites -> (if (token != null) favoriteDao.observeAllIn(token) else favoriteDao.observeAll())
+            .map { rows -> rows.map { it.channelId to it.displayOrder } }
         DsyncKey.Recents -> prefs.recentChannelIds.map { it.also { ids -> stampRecents(ids) } }
         DsyncKey.Progress -> watchProgressDao.observeRecent(1000).map { rows -> rows.map { listOf(it.videoId, it.positionMs, it.updatedAt, it.isFinished) } }
         DsyncKey.Reminders -> reminderDao.observeAll().map { rows -> rows.map { it.reminderKey } }
@@ -1059,8 +1138,16 @@ class DispatcharrSyncManager @Inject constructor(
         val intByName: Map<String, Int>,
     )
 
+    /**
+     * The channel snapshot key of the session's own profile (the same shape
+     * ProfileScope.cacheKey writes: bare playlist id for the default profile,
+     * "<playlistId>@<profileId>" for another). Never the global current scope.
+     */
+    private fun snapshotKey(s: Session): String =
+        if (s.token.isEmpty()) s.playlistId else "${s.playlistId}@${s.token}"
+
     private suspend fun channelMap(s: Session): ChannelMap {
-        val rows = channelSnapshotDao.forPlaylist(s.playlistId)
+        val rows = channelSnapshotDao.forPlaylistKey(snapshotKey(s))
         val toInt = HashMap<String, Int>()
         val toLocal = HashMap<Int, String>()
         val nameOf = HashMap<Int, String>()
@@ -1106,17 +1193,20 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncKey.Favorites -> {
             val m = channelMap(s)
             if (m.toInt.isEmpty()) null else {
-                val local = favoriteDao.allOnce().sortedBy { it.displayOrder }.mapNotNull { m.toInt[it.channelId] }
+                val rows = favoriteDao.allOnceIn(s.token).sortedBy { it.displayOrder }
+                val local = rows.mapNotNull { m.toInt[it.channelId] }
                 // Remote ids this device cannot map (another channel set) are kept.
                 val keep = base?.let(DsyncPayloads::decodeFavorites).orEmpty().filter { it !in m.toLocal }
-                DsyncPayloads.encodeFavorites(base, (local + keep).distinct())
+                val out = (local + keep).distinct()
+                Log.i(TAG, DsyncFavorites.logLine("out", rows.size, local.size, out.size, s.token, s.playlistId))
+                DsyncPayloads.encodeFavorites(base, out)
             }
         }
         DsyncKey.Recents -> {
             val m = channelMap(s)
             if (m.toInt.isEmpty()) null else {
                 val stamps = recentStamps(s)
-                val ids = prefs.recentChannelIds.first()
+                val ids = prefs.recentChannelIdsIn(s.token)
                 val local = ids.mapIndexedNotNull { i, id -> m.toInt[id]?.let { RecentRow(it, stamps[id] ?: (now - i)) } }
                 val remote = base?.let(DsyncPayloads::decodeRecents).orEmpty()
                 DsyncPayloads.encodeRecents(base, DsyncMerge.recents(local, remote))
@@ -1179,14 +1269,14 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncKey.HiddenGroups -> DsyncPayloads.encodeHiddenGroups(
             base,
             DsyncPayloads.HiddenGroups(
-                prefs.hiddenGroups.first().sorted(),
-                prefs.hiddenMovieGroups.first().sorted(),
-                prefs.hiddenSeriesGroups.first().sorted(),
+                prefs.hiddenGroupsIn(s.token).sorted(),
+                prefs.hiddenMovieGroupsIn(s.token).sorted(),
+                prefs.hiddenSeriesGroupsIn(s.token).sorted(),
             ),
         )
         DsyncKey.GroupOrder -> {
-            val mode = prefs.groupSortMode.first().lowercase().takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
-            DsyncPayloads.encodeGroupOrder(base, DsyncPayloads.GroupOrder(mode, prefs.groupOrder.first()))
+            val mode = prefs.groupSortModeIn(s.token).lowercase().takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
+            DsyncPayloads.encodeGroupOrder(base, DsyncPayloads.GroupOrder(mode, prefs.groupOrderIn(s.token)))
         }
         DsyncKey.Settings -> {
             val v = prefs.dsyncSettingsOnce(s.playlistId, s.token)
@@ -1209,12 +1299,12 @@ class DispatcharrSyncManager @Inject constructor(
                 DsyncPayloads.encodeRemoteMap(base, tv)
             }
         }
-        DsyncKey.RadioDefault -> DsyncPayloads.encodeRadioDefault(base, prefs.radioModeByDefault.first())
+        DsyncKey.RadioDefault -> DsyncPayloads.encodeRadioDefault(base, prefs.radioModeByDefaultIn(s.token))
         DsyncKey.Collections -> {
             val m = channelMap(s)
             if (m.toInt.isEmpty()) null else {
                 val remote = base?.let(DsyncPayloads::decodeCollections).orEmpty().associateBy { it.id }
-                val rows = prefs.channelCollections.first().map { c ->
+                val rows = prefs.channelCollectionsIn(s.token).map { c ->
                     val r = remote[c.id]
                     val stale = r?.members.orEmpty().filter { it !in m.toLocal }
                     CollectionRow(
@@ -1357,7 +1447,7 @@ class DispatcharrSyncManager @Inject constructor(
             if (m.toInt.isEmpty()) null else {
                 val remote = DsyncPayloads.decodeFavorites(env.data)
                 if (remote == null) null else {
-                    val local = favoriteDao.allOnce().sortedBy { it.displayOrder }.mapNotNull { m.toInt[it.channelId] }
+                    val local = favoriteDao.allOnceIn(s.token).sortedBy { it.displayOrder }.mapNotNull { m.toInt[it.channelId] }
                     env.copy(data = DsyncPayloads.encodeFavorites(env.data, DsyncGate.favoritesUnion(local, remote)))
                 }
             }
@@ -1366,7 +1456,7 @@ class DispatcharrSyncManager @Inject constructor(
             val m = channelMap(s)
             val remote = DsyncPayloads.decodeCollections(env.data)
             if (m.toInt.isEmpty() || remote == null) null else {
-                val local = prefs.channelCollections.first().map { c ->
+                val local = prefs.channelCollectionsIn(s.token).map { c ->
                     CollectionRow(
                         id = c.id, name = c.name,
                         placement = if (c.placement == ChannelCollection.PLACEMENT_BEGINNING) "b" else "e",
@@ -1395,34 +1485,38 @@ class DispatcharrSyncManager @Inject constructor(
 
     private suspend fun apply(s: Session, key: DsyncKey, env: DsyncEnvelope): ApplyResult {
         val d = env.data
+        // Every write below names the session's scope (s.token). The keys whose
+        // stores still read the global scope (progress, reminders, VOD marks)
+        // are held back once the active profile is no longer this session's.
+        if (ProfileScope.token.value != s.token) {
+            Log.i(TAG, "[DSYNC] apply ${key.suffix}: profile changed; skipped (scope=${s.token.take(8).ifEmpty { "default" }})")
+            return ApplyResult.NotReady
+        }
         when (key) {
             DsyncKey.Favorites -> {
                 val ids = DsyncPayloads.decodeFavorites(d) ?: return ApplyResult.Malformed
                 val m = channelMap(s)
-                if (m.toInt.isEmpty()) return ApplyResult.NotReady
-                val wanted = ids.mapNotNull { m.toLocal[it] }
-                val local = favoriteDao.allOnce()
-                val now = System.currentTimeMillis()
-                local.filter { it.channelId in m.toInt && it.channelId !in wanted }.forEach { favoriteDao.delete(it.channelId) }
-                wanted.forEachIndexed { i, lid ->
-                    val cur = local.firstOrNull { it.channelId == lid }
-                    val name = m.nameOf[m.toInt[lid]] ?: cur?.channelName.orEmpty()
-                    favoriteDao.upsert(
-                        FavoriteChannelEntity(channelId = lid, channelName = name, displayOrder = i.toLong(), addedAt = cur?.addedAt ?: now),
-                    )
+                if (m.toInt.isEmpty()) {
+                    Log.i(TAG, "[DSYNC] favorites in: ${ids.size} ids, snapshot ${snapshotKey(s).take(8)} not loaded; retry next pull")
+                    return ApplyResult.NotReady
                 }
+                val plan = DsyncFavorites.plan(
+                    ids, m.toLocal, m.toInt, m.nameOf, favoriteDao.allOnceIn(s.token), s.token, System.currentTimeMillis(),
+                )
+                val written = favoriteDao.applySyncIn(s.token, plan.deletes, plan.upserts)
+                Log.i(TAG, DsyncFavorites.logLine("in", ids.size, plan.wanted.size, written, s.token, s.playlistId))
             }
             DsyncKey.Recents -> {
                 val remote = DsyncPayloads.decodeRecents(d) ?: return ApplyResult.Malformed
                 val m = channelMap(s)
                 if (m.toInt.isEmpty()) return ApplyResult.NotReady
                 val stamps = recentStamps(s)
-                val ids = prefs.recentChannelIds.first()
+                val ids = prefs.recentChannelIdsIn(s.token)
                 val nowS = System.currentTimeMillis() / 1000
                 val local = ids.mapIndexedNotNull { i, id -> m.toInt[id]?.let { RecentRow(it, stamps[id] ?: (nowS - i)) } }
                 val merged = DsyncMerge.recents(local, remote).mapNotNull { r -> m.toLocal[r.channelId]?.let { it to r.watchedAt } }
                 val others = ids.filter { it !in m.toInt }
-                prefs.setRecentChannels(merged.map { it.first } + others)
+                prefs.setRecentChannelsIn(merged.map { it.first } + others, s.token)
                 val st = stamps.toMutableMap().apply { merged.forEach { (id, at) -> put(id, at) } }
                 state.edit()
                     .putString(k("rstamp", s), JsonObject(st.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }).toString())
@@ -1489,16 +1583,14 @@ class DispatcharrSyncManager @Inject constructor(
             }
             DsyncKey.HiddenGroups -> {
                 val g = DsyncPayloads.decodeHiddenGroups(d) ?: return ApplyResult.Malformed
-                prefs.setHiddenGroups(g.live.toSet())
-                prefs.setHiddenMovieGroups(g.movies.toSet())
-                prefs.setHiddenSeriesGroups(g.series.toSet())
+                prefs.setHiddenGroupsIn(g.live.toSet(), g.movies.toSet(), g.series.toSet(), s.token)
             }
             DsyncKey.GroupOrder -> {
                 val g = DsyncPayloads.decodeGroupOrder(d) ?: return ApplyResult.Malformed
-                prefs.setGroupSortMode(
+                prefs.setGroupOrderIn(
                     when (g.mode) { "alphabetical" -> "Alphabetical"; "manual" -> "Manual"; else -> "Default" },
+                    g.order, s.token,
                 )
-                prefs.setGroupOrder(g.order)
             }
             DsyncKey.Settings -> {
                 val lanes = DsyncPayloads.decodeSettingsLanes(d) ?: return ApplyResult.Malformed
@@ -1518,13 +1610,13 @@ class DispatcharrSyncManager @Inject constructor(
             }
             DsyncKey.RadioDefault -> {
                 val on = DsyncPayloads.decodeRadioDefault(d) ?: return ApplyResult.Malformed
-                prefs.setRadioModeByDefault(on)
+                prefs.setRadioModeByDefaultIn(on, s.token)
             }
             DsyncKey.Collections -> {
                 val rows = DsyncPayloads.decodeCollections(d) ?: return ApplyResult.Malformed
                 val m = channelMap(s)
                 if (m.toInt.isEmpty()) return ApplyResult.NotReady
-                prefs.setChannelCollections(
+                prefs.setChannelCollectionsIn(
                     rows.map { r ->
                         ChannelCollection(
                             id = r.id, name = r.name,
@@ -1532,6 +1624,7 @@ class DispatcharrSyncManager @Inject constructor(
                             placement = if (r.placement == "b") ChannelCollection.PLACEMENT_BEGINNING else ChannelCollection.PLACEMENT_END,
                         )
                     },
+                    s.token,
                 )
             }
             DsyncKey.Profiles -> {
@@ -1629,6 +1722,7 @@ class DispatcharrSyncManager @Inject constructor(
         const val FOREGROUND_PULL_MS = 5L * 60 * 1000
         const val PERIODIC_PULL_MS = 15L * 60 * 1000
         private const val SUPPRESS_MS = 3_000L
+        private val HEAL_KEYS = setOf(DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.HiddenGroups, DsyncKey.GroupOrder)
         val BACKOFF_MS = longArrayOf(30_000L, 120_000L, 600_000L)
         val RECONNECT_MS = longArrayOf(2_000L, 5_000L, 15_000L, 60_000L)
 

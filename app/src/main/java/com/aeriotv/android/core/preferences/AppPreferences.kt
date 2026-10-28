@@ -2273,6 +2273,69 @@ class AppPreferences @Inject constructor(
         }
     }
 
+    // ---- Dispatcharr Sync: reads and writes for ONE profile's scope ----
+    // A sync session is bound to the profile token captured at its start.
+    // These take that token instead of reading ProfileScope.current(), so a
+    // pull or push never lands in (or reads from) another profile's keys.
+
+    private fun scopedString(base: Preferences.Key<String>, token: String) =
+        stringPreferencesKey(ProfileScope.keyName(base.name, token))
+
+    private fun splitLines(raw: String?): List<String> =
+        if (raw.isNullOrBlank()) emptyList() else raw.split('\n').mapNotNull { it.trim().takeIf(String::isNotBlank) }
+
+    private suspend fun setLines(base: Preferences.Key<String>, token: String, lines: Collection<String>) {
+        val k = scopedString(base, token)
+        store.edit { prefs -> if (lines.isEmpty()) prefs.remove(k) else prefs[k] = lines.joinToString("\n") }
+    }
+
+    suspend fun recentChannelIdsIn(token: String): List<String> =
+        splitLines(store.data.first()[scopedString(KEY_RECENT_CHANNEL_IDS, token)])
+    suspend fun setRecentChannelsIn(ids: List<String>, token: String) =
+        setLines(KEY_RECENT_CHANNEL_IDS, token, ids.mapNotNull { it.trim().takeIf(String::isNotBlank) }.distinct().take(RECENT_CHANNELS_CAP))
+
+    suspend fun hiddenGroupsIn(token: String): Set<String> = splitLines(store.data.first()[scopedString(KEY_HIDDEN_GROUPS, token)]).toSet()
+    suspend fun hiddenMovieGroupsIn(token: String): Set<String> = splitLines(store.data.first()[scopedString(KEY_HIDDEN_MOVIE_GROUPS, token)]).toSet()
+    suspend fun hiddenSeriesGroupsIn(token: String): Set<String> = splitLines(store.data.first()[scopedString(KEY_HIDDEN_SERIES_GROUPS, token)]).toSet()
+    suspend fun setHiddenGroupsIn(live: Set<String>, movies: Set<String>, series: Set<String>, token: String) {
+        val kl = scopedString(KEY_HIDDEN_GROUPS, token)
+        val km = scopedString(KEY_HIDDEN_MOVIE_GROUPS, token)
+        val ks = scopedString(KEY_HIDDEN_SERIES_GROUPS, token)
+        store.edit { prefs ->
+            if (live.isEmpty()) prefs.remove(kl) else prefs[kl] = live.joinToString("\n")
+            if (movies.isEmpty()) prefs.remove(km) else prefs[km] = movies.joinToString("\n")
+            if (series.isEmpty()) prefs.remove(ks) else prefs[ks] = series.joinToString("\n")
+        }
+    }
+
+    suspend fun groupOrderIn(token: String): List<String> = splitLines(store.data.first()[scopedString(KEY_GROUP_ORDER, token)])
+    suspend fun groupSortModeIn(token: String): String = store.data.first()[scopedString(KEY_GROUP_SORT_MODE, token)] ?: "Default"
+    suspend fun setGroupOrderIn(mode: String, order: List<String>, token: String) {
+        val km = scopedString(KEY_GROUP_SORT_MODE, token)
+        val ko = scopedString(KEY_GROUP_ORDER, token)
+        store.edit { prefs ->
+            prefs[km] = mode
+            if (order.isEmpty()) prefs.remove(ko) else prefs[ko] = order.joinToString("\n")
+        }
+    }
+
+    suspend fun channelCollectionsIn(token: String): List<ChannelCollection> {
+        val raw = store.data.first()[scopedString(KEY_CHANNEL_COLLECTIONS, token)]
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching { collectionsJson.decodeFromString<List<ChannelCollection>>(raw) }.getOrDefault(emptyList())
+    }
+    suspend fun setChannelCollectionsIn(list: List<ChannelCollection>, token: String) {
+        val k = scopedString(KEY_CHANNEL_COLLECTIONS, token)
+        store.edit { prefs -> if (list.isEmpty()) prefs.remove(k) else prefs[k] = collectionsJson.encodeToString(list) }
+    }
+
+    suspend fun radioModeByDefaultIn(token: String): Boolean =
+        store.data.first()[booleanPreferencesKey(ProfileScope.keyName(KEY_RADIO_MODE_BY_DEFAULT.name, token))] ?: false
+    suspend fun setRadioModeByDefaultIn(value: Boolean, token: String) {
+        val k = booleanPreferencesKey(ProfileScope.keyName(KEY_RADIO_MODE_BY_DEFAULT.name, token))
+        store.edit { it[k] = value }
+    }
+
     // ── In-app updater (github flavor) ───────────────────────────────────
     // Device-local bookkeeping for the GitHub-releases self-updater. NONE of
     // these belong in snapshotSyncablePreferences (per-device state).

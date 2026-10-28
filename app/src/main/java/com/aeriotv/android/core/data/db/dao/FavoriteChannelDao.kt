@@ -57,6 +57,18 @@ interface FavoriteChannelDao {
         orderedChannelIds.forEachIndexed { index, id -> setDisplayOrderIn(id, index.toLong(), scope) }
     }
 
+    /**
+     * Dispatcharr Sync pull: delete and upsert inside ONE scope, in one
+     * transaction. Rows stamped with another scope are skipped, never written.
+     */
+    @androidx.room.Transaction
+    suspend fun applySyncIn(scope: String, deletes: List<String>, upserts: List<FavoriteChannelEntity>): Int {
+        deletes.forEach { deleteIn(it, scope) }
+        var n = 0
+        upserts.forEach { if (it.profileScope == scope) { upsert(it); n++ } }
+        return n
+    }
+
     /** Remove-profile cleanup. */
     @Query("DELETE FROM favorite_channel WHERE profileScope = :scope")
     suspend fun deleteScope(scope: String)
