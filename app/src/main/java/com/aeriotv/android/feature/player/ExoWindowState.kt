@@ -54,6 +54,12 @@ object MiniPlayerChrome {
      *  mini clear of the guide's time bar whatever the bar and banner measure. */
     val bannerArtBottomPx = MutableStateFlow(0f)
 
+    /** Top of that same art card in root px (2026-10-28), 0 when the banner is
+     *  not mounted. With both edges known the mini takes the art's exact frame
+     *  (same top, same bottom, 16:9) so the two cards mirror each other across
+     *  the banner. */
+    val bannerArtTopPx = MutableStateFlow(0f)
+
     /** Mini frame size (tvOS 410x231 pt halved). Lives here so the screens that
      *  RESERVE a slot for the mini reserve exactly what the window draws. */
     val miniWidth = 205.dp

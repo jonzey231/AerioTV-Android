@@ -135,6 +135,7 @@ fun BoxScope.PersistentExoWindow(
     // tabs) the mini keeps its full size at bar bottom + 4 dp.
     val localDensity = androidx.compose.ui.platform.LocalDensity.current
     val artBottomPx by MiniPlayerChrome.bannerArtBottomPx.collectAsStateWithLifecycle()
+    val artTopPx by MiniPlayerChrome.bannerArtTopPx.collectAsStateWithLifecycle()
     // With the Channel Preview banner OFF there is no art card, so the guide
     // publishes its MEASURED timeline top instead and the mini's bottom edge
     // lands on it (the guide reserves that band, so rows start below the mini).
@@ -146,16 +147,23 @@ fun BoxScope.PersistentExoWindow(
             .coerceAtLeast(0.dp)
     } else 0.dp
     val band = artBottom - barBottomInset
+    // Banner ON (2026-10-28, Logan: "symmetrical"): the mini is the art
+    // card's mirror image. Same top, same bottom, 16:9, 20 dp from the
+    // trailing edge as the art is 20 dp from the leading edge. The art is
+    // top-aligned with the title, so the mini follows the title too.
+    val mirrorArt = artBottomPx > 0f && artTopPx > 0f && artBottomPx > artTopPx
+    val artTop = if (mirrorArt) with(localDensity) { artTopPx.toDp() } else 0.dp
     val miniFitHeight = when {
+        mirrorArt -> (artBottom - artTop).coerceAtLeast(MINI_MIN_HEIGHT)
         artBottom <= 0.dp -> MINI_HEIGHT
         band >= MINI_HEIGHT -> MINI_HEIGHT
         else -> band.coerceAtLeast(MINI_MIN_HEIGHT)
     }
-    val miniFitWidth = MINI_WIDTH * (miniFitHeight / MINI_HEIGHT)
-    val miniFitTop = if (artBottom > 0.dp) {
-        (artBottom - miniFitHeight).coerceAtLeast(barBottomInset)
-    } else {
-        barBottomInset
+    val miniFitWidth = if (mirrorArt) miniFitHeight * (16f / 9f) else MINI_WIDTH * (miniFitHeight / MINI_HEIGHT)
+    val miniFitTop = when {
+        mirrorArt -> artTop
+        artBottom > 0.dp -> (artBottom - miniFitHeight).coerceAtLeast(barBottomInset)
+        else -> barBottomInset
     }
 
     // Leaving Hidden starts a fresh set of springs, keyed on [miniEpoch], so

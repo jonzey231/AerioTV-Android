@@ -225,6 +225,8 @@ fun GuidePreviewBanner(
         onDispose {
             com.aeriotv.android.feature.player.MiniPlayerChrome
                 .bannerArtBottomPx.value = 0f
+            com.aeriotv.android.feature.player.MiniPlayerChrome
+                .bannerArtTopPx.value = 0f
         }
     }
     val colors = MaterialTheme.colorScheme
@@ -240,7 +242,10 @@ fun GuidePreviewBanner(
             .height(GuidePreviewBanner.height)
             .background(colors.background)
             .padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.Bottom,
+        // Top-aligned (2026-10-28): the art's top edge lines up with the
+        // title. The banner grew for the 3-line description on 10/26 with
+        // the copy top-anchored, so a bottom-aligned art sat below the title.
+        verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(22.dp),
     ) {
         // The shared program-art slot. Channel logo only once every source
@@ -260,10 +265,15 @@ fun GuidePreviewBanner(
             // Off means both are square.
             containerCorner = GUIDE_ART_CORNER,
             rounded = guideRounded,
-            modifier = Modifier.onGloballyPositioned {
-                com.aeriotv.android.feature.player.MiniPlayerChrome
-                    .bannerArtBottomPx.value = it.boundsInRoot().bottom
-            },
+            modifier = Modifier
+                .padding(top = GuidePreviewBanner.firstTextInset)
+                .onGloballyPositioned {
+                    val b = it.boundsInRoot()
+                    com.aeriotv.android.feature.player.MiniPlayerChrome
+                        .bannerArtTopPx.value = b.top
+                    com.aeriotv.android.feature.player.MiniPlayerChrome
+                        .bannerArtBottomPx.value = b.bottom
+                },
             fallback = {
                 if (artKnown && channel != null && channel.tvgLogo.isNotBlank()) {
                     AsyncImage(
@@ -287,7 +297,7 @@ fun GuidePreviewBanner(
             },
         )
         if (program == null) {
-            Text("Select a program", fontSize = 13.sp.subtext(), fontWeight = FontWeight.Medium, color = colors.tertiary)
+            Text("Select a program", fontSize = 13.sp.subtext(), fontWeight = FontWeight.Medium, color = colors.tertiary, modifier = Modifier.padding(top = GuidePreviewBanner.firstTextInset))
         } else {
             // The mini (205 dp wide, 20 dp from the end) floats over the
             // banner's right end; the copy stops short of it rather than the
@@ -298,7 +308,13 @@ fun GuidePreviewBanner(
                     .fillMaxHeight()
                     // Top-anchored: the title starts firstTextInset below the
                     // banner top and the description takes what is left.
-                    .padding(top = GuidePreviewBanner.firstTextInset, end = if (miniActive) 211.dp else 0.dp),
+                    .padding(
+                        top = GuidePreviewBanner.firstTextInset,
+                        // The mini mirrors the art card (same width at the
+                        // user's Text Size) 20 dp from the end; the copy stops
+                        // short of it.
+                        end = if (miniActive) ProgramArtSlot.maxWidth + 31.dp else 0.dp,
+                    ),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 // Apple parity (2026-10-12): the title wraps to 2 lines and the
