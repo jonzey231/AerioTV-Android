@@ -69,7 +69,8 @@ https://www.apache.org/licenses/LICENSE-2.0
 `androidx.datastore`, `androidx.documentfile`, `androidx.profileinstaller`,
 `androidx.credentials`, `androidx.work`, `androidx.hilt`, `androidx.media`,
 `androidx.media3` (ExoPlayer, HLS, DASH, extractor, session, UI, OkHttp
-datasource), `androidx.mediarouter`
+datasource), `androidx.mediarouter`, `androidx.camera` (CameraX core, Camera2,
+lifecycle, view)
 
 **Kotlin and JetBrains** (JetBrains s.r.o.)
 Kotlin standard library, `kotlinx.coroutines`, `kotlinx.serialization`, Ktor

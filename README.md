@@ -196,6 +196,8 @@ Click each type for the full breakdown:
 - **External XMLTV URL override** <em>(advanced)</em>: point the EPG at a third-party XMLTV source while keeping channels from Dispatcharr's API.
 - **Auto-discovery of recordings scheduled outside the app**: recordings you scheduled from the Dispatcharr web UI appear in AerioTV's DVR tab within a couple of minutes. Xtream Codes and M3U have no server-side scheduler to discover from.
 
+On a phone or tablet you can sign in by scanning the API key QR code that Dispatcharr shows for a user on its Users page (Scan QR code), or by picking a saved image of that code (Choose from Photos).
+
 </details>
 
 <details>

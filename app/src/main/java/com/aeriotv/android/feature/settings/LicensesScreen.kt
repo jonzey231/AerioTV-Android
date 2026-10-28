@@ -311,6 +311,7 @@ private fun LicenseIndex(
 private val APACHE_COMPONENTS = listOf(
     "AndroidX and Jetpack Compose (The Android Open Source Project)",
     "Media3 / ExoPlayer (The Android Open Source Project)",
+    "CameraX (The Android Open Source Project)",
     "Kotlin, kotlinx.coroutines, kotlinx.serialization (JetBrains)",
     "Ktor (JetBrains)",
     "Dagger and Hilt (Google)",
