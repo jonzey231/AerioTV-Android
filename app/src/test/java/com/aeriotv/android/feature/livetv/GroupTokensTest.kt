@@ -194,4 +194,28 @@ class GroupTokensTest {
         assertEquals(fav, fallbackGroupToken(listOf(fav, "News")))
         assertEquals(all, fallbackGroupToken(emptyList()))
     }
+
+    // Profile switch landing (Logan 2026-10-28): Default Group or All, never last used.
+
+    @Test
+    fun switchLandsOnTheDefaultGroupWhenSet() {
+        assertEquals("Sports", switchLandingGroupToken("Sports", groups))
+        assertEquals(
+            PlaylistViewModel.FAVORITES_GROUP,
+            switchLandingGroupToken(PlaylistViewModel.FAVORITES_GROUP, groups),
+        )
+    }
+
+    @Test
+    fun switchWithNoDefaultFallsBackToAllNotTheLastUsedGroup() {
+        // launchGroupToken would restore the last used "News"; a switch must not.
+        assertEquals("News", launchGroupToken("", "News", groups))
+        assertNull(switchLandingGroupToken("", groups))
+        assertNull(switchLandingGroupToken(null, groups))
+    }
+
+    @Test
+    fun switchWithADefaultTheProviderDroppedFallsBackToAll() {
+        assertNull(switchLandingGroupToken("Gone", groups))
+    }
 }

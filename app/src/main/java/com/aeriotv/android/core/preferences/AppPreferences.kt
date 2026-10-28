@@ -1183,11 +1183,14 @@ class AppPreferences @Inject constructor(
     suspend fun liveGroupTokenOnce(playlistId: String): String =
         if (playlistId.isBlank()) "" else store.data.first()[keyLiveGroupToken(playlistId)] ?: ""
 
-    suspend fun setLiveGroupToken(playlistId: String, token: String) {
+    /** [scopeToken] pins the write to the profile the pick was made in
+     *  (captured by the caller before any suspension); omitted = current. */
+    suspend fun setLiveGroupToken(playlistId: String, token: String, scopeToken: String = ProfileScope.current()) {
         if (playlistId.isBlank()) return
+        val key = keyLiveGroupToken(playlistId, scopeToken)
         store.edit { prefs ->
-            if (token.isBlank()) prefs.remove(keyLiveGroupToken(playlistId))
-            else prefs[keyLiveGroupToken(playlistId)] = token
+            if (token.isBlank()) prefs.remove(key)
+            else prefs[key] = token
         }
     }
 
@@ -2798,7 +2801,8 @@ class AppPreferences @Inject constructor(
             androidx.datastore.preferences.core.intPreferencesKey("catchupTimeOffsetMinutes.$playlistId")
 
         /** GH #81: per-playlist Live TV group token (see [liveGroupToken]). */
-        private fun keyLiveGroupToken(playlistId: String) = stringPreferencesKey(ProfileScope.keyName("live_group_token_$playlistId"))
+        private fun keyLiveGroupToken(playlistId: String, scopeToken: String = ProfileScope.current()) =
+            stringPreferencesKey(ProfileScope.keyName("live_group_token_$playlistId", scopeToken))
 
         /** GH #81: per-playlist Default Group setting (see [defaultGroupToken]). */
         private fun keyDefaultGroupToken(playlistId: String) = stringPreferencesKey(ProfileScope.keyName("default_group_token_$playlistId"))

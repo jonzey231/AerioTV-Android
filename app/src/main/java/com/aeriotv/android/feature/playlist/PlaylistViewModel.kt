@@ -430,7 +430,7 @@ class PlaylistViewModel @Inject constructor(
                 // the scrim now; the first-ever switch still waits for the fetch.
                 if (fastProfileSwitchFromCache(r)) return@collect
                 // The switch already re-read permissions; skip the second probe.
-                switchToPlaylist(r.playlistId, probe = false) { profileManager.finishSwitch(r.gen) }
+                switchToPlaylist(r.playlistId, probe = false, profileSwitch = true) { profileManager.finishSwitch(r.gen) }
             }
         }
         viewModelScope.launch {
@@ -927,7 +927,11 @@ class PlaylistViewModel @Inject constructor(
         // rebuilt by name at launch (which is what dropped it).
         val playlistId = _state.value.playlist?.id
         if (!playlistId.isNullOrBlank()) {
-            viewModelScope.launch { appPreferences.setLiveGroupToken(playlistId, group) }
+            // The profile scope is captured NOW: a pick made just before a
+            // profile switch must land under the profile it was made in, never
+            // under the one the switch activates before this write runs.
+            val scopeToken = com.aeriotv.android.core.profiles.ProfileScope.current()
+            viewModelScope.launch { appPreferences.setLiveGroupToken(playlistId, group, scopeToken) }
         }
     }
 
@@ -947,8 +951,9 @@ class PlaylistViewModel @Inject constructor(
      * The group Live TV opens on at launch for [playlistId] in the ACTIVE
      * profile's scope (both prefs are profile-scoped keys): the explicit
      * "Default Group" when it still exists, else the last used group, else
-     * All. A profile switch applies the same rule, in the same state update
-     * as the new channel list, so the guide never composes the new channels
+     * All. A profile switch uses [launchGroupForSwitch] instead (Default
+     * Group or All, never the last used group), in the same state update as
+     * the new channel list, so the guide never composes the new channels
      * under the previous profile's group.
      */
     private suspend fun launchGroupFor(playlistId: String, knownGroups: Collection<String>): String {
@@ -956,6 +961,21 @@ class PlaylistViewModel @Inject constructor(
         val saved = appPreferences.liveGroupTokenOnce(playlistId)
         return com.aeriotv.android.feature.livetv.launchGroupToken(preferred, saved, knownGroups)
             ?: ALL_GROUPS
+    }
+
+    /**
+     * The group the guide lands on after a PROFILE switch (the TV launch
+     * picker choosing another profile included, it runs the same switch):
+     * the new profile's Default Group for [playlistId] when set and still
+     * present, else All. The last used group is never consulted here (Logan
+     * 2026-10-28); [launchGroupFor] keeps it for an ordinary relaunch.
+     */
+    private suspend fun launchGroupForSwitch(playlistId: String, knownGroups: Collection<String>): String {
+        val preferred = appPreferences.defaultGroupTokenOnce(playlistId)
+        val landing = com.aeriotv.android.feature.livetv.switchLandingGroupToken(preferred, knownGroups)
+            ?: ALL_GROUPS
+        Log.i(TAG, "[PROFILE] switch landing group=$landing (default=${if (preferred.isBlank()) "unset" else "set"})")
+        return landing
     }
 
     private fun groupNamesOf(channels: List<M3UChannel>): List<String> =
@@ -2907,7 +2927,12 @@ class PlaylistViewModel @Inject constructor(
      * [onDone] (the profile scrim) fires at once; the channel fetch runs
      * behind the painted guide and replaces the list only when it changed.
      * Only a target with no snapshot at all waits on the fetch. */
-    fun switchToPlaylist(playlistId: String, probe: Boolean = true, onDone: (() -> Unit)? = null) {
+    fun switchToPlaylist(
+        playlistId: String,
+        probe: Boolean = true,
+        profileSwitch: Boolean = false,
+        onDone: (() -> Unit)? = null,
+    ) {
         viewModelScope.launch {
           // onDone fires once, as soon as the channels are on screen: a profile
           // switch's scrim must not wait for the guide (EPG) load behind it.
@@ -2932,7 +2957,8 @@ class PlaylistViewModel @Inject constructor(
                 ?.takeIf { (row, _) -> !snapshotIsOtherUser(row) }
             if (cachedTarget != null) {
                 val (row, cached) = cachedTarget
-                val launchGroup = launchGroupFor(row.id, groupNamesOf(cached))
+                val launchGroup = if (profileSwitch) launchGroupForSwitch(row.id, groupNamesOf(cached))
+                    else launchGroupFor(row.id, groupNamesOf(cached))
                 val applyCached: (UiState) -> UiState = {
                     it.copy(
                         phase = Phase.ChannelsReady,
@@ -2971,7 +2997,8 @@ class PlaylistViewModel @Inject constructor(
                         publishRefreshedChannels(entity, channels, "switch fetch")
                         return@fold
                     }
-                    val launchGroup = launchGroupFor(entity.id, groupNamesOf(channels))
+                    val launchGroup = if (profileSwitch) launchGroupForSwitch(entity.id, groupNamesOf(channels))
+                        else launchGroupFor(entity.id, groupNamesOf(channels))
                     val applyFetched: (UiState) -> UiState = {
                         it.copy(
                             phase = Phase.ChannelsReady,
@@ -3143,7 +3170,7 @@ class PlaylistViewModel @Inject constructor(
         runCatching { miniPlayerSession.dismiss() }
         runCatching { exoWindowState.hide() }
         runCatching { exoHolder.stop() }
-        val launchGroup = launchGroupFor(entity.id, groupNamesOf(cached))
+        val launchGroup = launchGroupForSwitch(entity.id, groupNamesOf(cached))
         Log.i(TAG, "[SWITCH] profile launch group=$launchGroup")
         val applySwitch: (UiState) -> UiState = {
             it.copy(

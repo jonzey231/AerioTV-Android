@@ -111,6 +111,19 @@ fun launchGroupToken(
     ?: restoredGroupToken(lastUsedToken, knownGroupNames)
 
 /**
+ * Which group the guide lands on after a PROFILE SWITCH (Logan 2026-10-28):
+ * the new profile's "Default Group" for the playlist when it still resolves,
+ * else null (the caller's All Channels fallback). The last used group is
+ * deliberately NOT consulted: open Logan, pick News, switch to Jordan, switch
+ * back to Logan, and the guide is on Logan's default (All when unset), not on
+ * News. An ordinary relaunch within one profile still uses [launchGroupToken].
+ */
+fun switchLandingGroupToken(
+    defaultToken: String?,
+    knownGroupNames: Collection<String>,
+): String? = restoredGroupToken(defaultToken, knownGroupNames)
+
+/**
  * Split what Manage Groups committed back into its two stores (Logan
  * 2026-09-14). The sheets know one mechanism, the hidden set, so the synthetic
  * Recently Watched group rides in it: absent from the set means checked, which
