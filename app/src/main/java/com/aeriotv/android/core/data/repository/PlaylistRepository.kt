@@ -1816,7 +1816,11 @@ class PlaylistRepository @Inject constructor(
         }
         if (programmes.isEmpty()) return 0
         runCatching { saveEpgToCache(playlist.id, programmes, authoritative = authoritative) }
-            .onFailure { Log.w("PlaylistRepo", "grid window merge failed", it) }
+            .getOrElse {
+                if (it is CancellationException) throw it
+                Log.w("PlaylistRepo", "grid window merge failed; stopping", it)
+                return null
+            }
         return programmes.size
     }
 
