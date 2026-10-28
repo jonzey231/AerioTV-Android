@@ -237,7 +237,7 @@ class DispatcharrSyncManager @Inject constructor(
     private fun watchBetweenSessions() {
         DsyncKey.entries.filter { it != DsyncKey.Profiles }.forEach { key ->
             scope.launch {
-                sourceFor(key).distinctUntilChanged().drop(1).collect {
+                sourceFor(key, null).distinctUntilChanged().drop(1).collect {
                     if (session != null) return@collect
                     val old = lastEnded ?: return@collect
                     if (profileManager.get().switching.value) return@collect
@@ -358,7 +358,7 @@ class DispatcharrSyncManager @Inject constructor(
         kotlinx.coroutines.coroutineScope {
             DsyncKey.entries.forEach { key ->
                 launch {
-                    sourceFor(key).distinctUntilChanged().drop(1).collect { onLocalChange(s, key) }
+                    sourceFor(key, s.playlistId).distinctUntilChanged().drop(1).collect { onLocalChange(s, key) }
                 }
             }
             launch {
@@ -972,7 +972,7 @@ class DispatcharrSyncManager @Inject constructor(
 
     // ---- local sources (change detection) ----
 
-    private fun sourceFor(key: DsyncKey): Flow<Any?> = when (key) {
+    private fun sourceFor(key: DsyncKey, playlistId: String?): Flow<Any?> = when (key) {
         DsyncKey.Favorites -> favoriteDao.observeAll().map { rows -> rows.map { it.channelId to it.displayOrder } }
         DsyncKey.Recents -> prefs.recentChannelIds.map { it.also { ids -> stampRecents(ids) } }
         DsyncKey.Progress -> watchProgressDao.observeRecent(1000).map { rows -> rows.map { listOf(it.videoId, it.positionMs, it.updatedAt, it.isFinished) } }
@@ -981,7 +981,8 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncKey.HiddenTitles -> hiddenTitlesStore.observe(null)
         DsyncKey.HiddenGroups -> combine(prefs.hiddenGroups, prefs.hiddenMovieGroups, prefs.hiddenSeriesGroups) { a, b, c -> Triple(a, b, c) }
         DsyncKey.GroupOrder -> combine(prefs.groupOrder, prefs.groupSortMode) { a, b -> a to b }
-        DsyncKey.Settings -> prefs.dsyncSettings
+        DsyncKey.Settings -> if (playlistId != null) prefs.dsyncSettings(playlistId)
+        else combine(prefs.dsyncSettings(null), prefs.defaultGroupTokensAll) { a, b -> a to b }
         DsyncKey.RemoteMap -> prefs.remoteControlMap
         DsyncKey.RadioDefault -> prefs.radioModeByDefault
         DsyncKey.Collections -> prefs.channelCollections
@@ -1126,7 +1127,11 @@ class DispatcharrSyncManager @Inject constructor(
             val mode = prefs.groupSortMode.first().lowercase().takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
             DsyncPayloads.encodeGroupOrder(base, DsyncPayloads.GroupOrder(mode, prefs.groupOrder.first()))
         }
-        DsyncKey.Settings -> DsyncPayloads.encodeSettings(base, SETTINGS_OWNED, prefs.dsyncSettingsOnce())
+        DsyncKey.Settings -> {
+            val v = prefs.dsyncSettingsOnce(s.playlistId)
+            Log.i(TAG, "[DSYNC] settings: defaultGroup=${v["defaultGroup"]?.content ?: ""}")
+            DsyncPayloads.encodeSettings(base, SETTINGS_OWNED, v)
+        }
         DsyncKey.RemoteMap -> {
             // Phones and tablets round-trip the TV map untouched: never write it.
             if (!isTv) null else {
@@ -1412,7 +1417,8 @@ class DispatcharrSyncManager @Inject constructor(
                 // Only owned names are validated; foreign names round-trip untouched.
                 val r = DsyncSettingsValidator.filter(v.filterKeys { it in SETTINGS_OWNED })
                 r.ignored.forEach { Log.i(TAG, "[DSYNC] settings: ignored $it") }
-                prefs.applyDsyncSettings(r.accepted)
+                r.accepted["defaultGroup"]?.let { Log.i(TAG, "[DSYNC] settings: defaultGroup=${it.content}") }
+                prefs.applyDsyncSettings(r.accepted, s.playlistId)
             }
             DsyncKey.RemoteMap -> {
                 val tv = DsyncPayloads.decodeRemoteMap(d) ?: return ApplyResult.Malformed
@@ -1527,7 +1533,7 @@ class DispatcharrSyncManager @Inject constructor(
             "programInfoButtonGuide", "programInfoButtonList", "showEpgBadgesTv", "showRemoteHints",
             "guideGroupSelector", "guideSidebarLayout", "guideTuneInMini",
             "playerInfoCard.showOnChannelChange", "phoneGroupSelector", "liveTvEdgeSwipeOpensSidebar",
-            "skipLoadingScreen", "appleTVChannelFlip",
+            "skipLoadingScreen", "appleTVChannelFlip", "defaultGroup",
         )
     }
 }

@@ -35,8 +35,12 @@ object DsyncSettingsValidator {
         "liveTvEdgeSwipeOpensSidebar", "skipLoadingScreen", "appleTVChannelFlip",
     )
 
+    /** Free strings with a max length (any value). */
+    private val STRINGS: Map<String, Int> = mapOf("defaultGroup" to 200)
+
     /** True when [value] is acceptable for [name]. Unknown names are not accepted. */
     fun accepts(name: String, value: JsonPrimitive): Boolean {
+        STRINGS[name]?.let { max -> return value.isString && value.content.length <= max }
         ENUMS[name]?.let { allowed -> return value.isString && value.content in allowed }
         RANGES[name]?.let { r ->
             if (value.isString) return false

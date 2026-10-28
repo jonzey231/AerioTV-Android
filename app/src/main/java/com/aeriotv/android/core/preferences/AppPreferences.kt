@@ -1816,6 +1816,15 @@ class AppPreferences @Inject constructor(
         // Skip Intervals: one global pair that follows the user everywhere.
         data[KEY_SKIP_BACK_SECONDS]?.let { out["skipBackSeconds"] = it.toString() }
         data[KEY_SKIP_FORWARD_SECONDS]?.let { out["skipForwardSeconds"] = it.toString() }
+        // GH #81 Default Group: Drive spans every playlist, so the per-playlist
+        // tokens travel as one JSON object {playlistId: token}.
+        val dgPrefix = ProfileScope.keyName("default_group_token_")
+        val dg = data.asMap().entries.mapNotNull { (k, v) ->
+            val t = v as? String ?: return@mapNotNull null
+            if (!k.name.startsWith(dgPrefix) || t.isBlank()) null
+            else k.name.removePrefix(dgPrefix) to kotlinx.serialization.json.JsonPrimitive(t)
+        }.toMap()
+        if (dg.isNotEmpty()) out["defaultGroup"] = kotlinx.serialization.json.JsonObject(dg).toString()
         ProgramCategory.entries.forEach { bucket ->
             data[stringPreferencesKey(bucket.hexStorageKey)]?.let { out[bucket.hexStorageKey] = it }
             data[booleanPreferencesKey(bucket.enabledStorageKey)]?.let { out[bucket.enabledStorageKey] = it.toString() }
@@ -1877,6 +1886,10 @@ class AppPreferences @Inject constructor(
                     }
                 }
                 syncedKeys.forEach { (name, key) -> if (name !in keys) prefs.remove(key) }
+                if ("defaultGroup" !in keys) {
+                    val dgPrefix = ProfileScope.keyName("default_group_token_")
+                    prefs.asMap().keys.filter { it.name.startsWith(dgPrefix) }.forEach { prefs.remove(it) }
+                }
             }
             keys["selectedTheme"]?.let { prefs[KEY_SELECTED_THEME] = it }
             keys["textScale"]?.toFloatOrNull()?.let { prefs[KEY_TEXT_SCALE] = snapTextScale(it).toDouble() }
@@ -1930,6 +1943,14 @@ class AppPreferences @Inject constructor(
             keys["skipForwardSeconds"]?.toIntOrNull()
                 ?.takeIf { it in com.aeriotv.android.core.ui.SkipIntervals.CHOICES }
                 ?.let { prefs[KEY_SKIP_FORWARD_SECONDS] = it }
+            keys["defaultGroup"]?.let { blob ->
+                val obj = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(blob) as? kotlinx.serialization.json.JsonObject }.getOrNull()
+                obj?.forEach { (pid, e) ->
+                    val t = (e as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: return@forEach
+                    if (pid.isBlank() || t.length > 200) return@forEach
+                    if (t.isBlank()) prefs.remove(keyDefaultGroupToken(pid)) else prefs[keyDefaultGroupToken(pid)] = t
+                }
+            }
             ProgramCategory.entries.forEach { bucket ->
                 keys[bucket.hexStorageKey]?.let { prefs[stringPreferencesKey(bucket.hexStorageKey)] = it }
                 keys[bucket.enabledStorageKey]?.toBooleanStrictOrNull()?.let {
@@ -1960,7 +1981,7 @@ class AppPreferences @Inject constructor(
     suspend fun syncRadioModeByDefaultOnce(): Boolean = syncRadioModeByDefault.first()
 
     /** Schema 4.9 names this platform owns (Android column of the allowlist). */
-    private fun dsyncSettingsOf(p: Preferences): Map<String, kotlinx.serialization.json.JsonPrimitive> {
+    private fun dsyncSettingsOf(p: Preferences, playlistId: String?): Map<String, kotlinx.serialization.json.JsonPrimitive> {
         val out = LinkedHashMap<String, kotlinx.serialization.json.JsonPrimitive>()
         fun put(name: String, v: Any?) {
             when (v) {
@@ -1990,15 +2011,26 @@ class AppPreferences @Inject constructor(
         put("liveTvEdgeSwipeOpensSidebar", p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR])
         put("skipLoadingScreen", p[KEY_SKIP_LOADING_SCREEN])
         put("appleTVChannelFlip", p[KEY_APPLE_TV_CHANNEL_FLIP])
+        // GH #81 Default Group for the session's playlist; "" = none. Dsync data
+        // is already per profile and per playlist, so the token goes as is.
+        if (!playlistId.isNullOrBlank()) put("defaultGroup", p[keyDefaultGroupToken(playlistId)] ?: "")
         return out
     }
 
     /** Current values of [DSYNC_SETTINGS_NAMES] in the active profile's scope. */
-    val dsyncSettings: Flow<Map<String, kotlinx.serialization.json.JsonPrimitive>> = scopedData.map { dsyncSettingsOf(it) }
-    suspend fun dsyncSettingsOnce(): Map<String, kotlinx.serialization.json.JsonPrimitive> = dsyncSettingsOf(store.data.first())
+    fun dsyncSettings(playlistId: String?): Flow<Map<String, kotlinx.serialization.json.JsonPrimitive>> =
+        scopedData.map { dsyncSettingsOf(it, playlistId) }
+    suspend fun dsyncSettingsOnce(playlistId: String?): Map<String, kotlinx.serialization.json.JsonPrimitive> =
+        dsyncSettingsOf(store.data.first(), playlistId)
+
+    /** Every playlist's Default Group token in the active scope (Dsync change detection between sessions). */
+    val defaultGroupTokensAll: Flow<Map<String, String>> = scopedData.map { p ->
+        val marker = ProfileScope.keyName("default_group_token_")
+        p.asMap().entries.filter { it.key.name.startsWith(marker) }.associate { it.key.name to (it.value as? String ?: "") }
+    }
 
     /** Apply a pulled `settings.v`. Names this platform does not own, and values of the wrong type, are ignored. */
-    suspend fun applyDsyncSettings(v: Map<String, kotlinx.serialization.json.JsonPrimitive>) {
+    suspend fun applyDsyncSettings(v: Map<String, kotlinx.serialization.json.JsonPrimitive>, playlistId: String?) {
         fun str(n: String) = v[n]?.takeIf { it.isString }?.content
         fun bool(n: String) = v[n]?.takeIf { !it.isString }?.content?.toBooleanStrictOrNull()
             ?: v[n]?.takeIf { it.isString }?.content?.toBooleanStrictOrNull()
@@ -2027,6 +2059,10 @@ class AppPreferences @Inject constructor(
             bool("liveTvEdgeSwipeOpensSidebar")?.let { p[KEY_LIVE_TV_EDGE_SWIPE_OPENS_SIDEBAR] = it }
             bool("skipLoadingScreen")?.let { p[KEY_SKIP_LOADING_SCREEN] = it }
             bool("appleTVChannelFlip")?.let { p[KEY_APPLE_TV_CHANNEL_FLIP] = it }
+            // An unknown group is stored as is; the launch path falls back when it is not in knownGroups.
+            if (!playlistId.isNullOrBlank()) str("defaultGroup")?.let { t ->
+                if (t.isBlank()) p.remove(keyDefaultGroupToken(playlistId)) else p[keyDefaultGroupToken(playlistId)] = t
+            }
         }
     }
 
