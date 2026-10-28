@@ -57,4 +57,55 @@ class DsyncSettingsValidatorTest {
         assertEquals(setOf("appearanceMode"), r.accepted.keys)
         assertEquals(listOf("trueBlack=\"yes\"", "textScale=3"), r.ignored)
     }
+
+    @Test fun expandedAllowlist2026_10_27() {
+        assertTrue(ok("guideLayout", JsonPrimitive("preview")))
+        assertFalse(ok("guideLayout", JsonPrimitive("grid")))
+        assertTrue(ok("brightnessEdge", JsonPrimitive("right")))
+        assertTrue(ok("dvrDefaultDestination", JsonPrimitive("local")))
+        assertFalse(ok("dvrDefaultDestination", JsonPrimitive("cloud")))
+        // Ints: allowed set or range, never strings or fractions.
+        assertTrue(ok("skipBack", JsonPrimitive(15)))
+        assertFalse(ok("skipBack", JsonPrimitive(20)))
+        assertFalse(ok("skipForward", JsonPrimitive("30")))
+        assertTrue(ok("channelLogoSize", JsonPrimitive(250)))
+        assertFalse(ok("channelLogoSize", JsonPrimitive(251)))
+        assertFalse(ok("dvrPreRollMins", JsonPrimitive(1.5)))
+        assertTrue(ok("liveRewindKeepCount", JsonPrimitive(5)))
+        assertFalse(ok("liveRewindKeepCount", JsonPrimitive(6)))
+        assertTrue(ok("multiview.logoSize", JsonPrimitive(5)))
+        // Doubles.
+        assertTrue(ok("displayScaleGuide", JsonPrimitive(2.0)))
+        assertFalse(ok("displayScaleLiveTv", JsonPrimitive(2.0)))
+        // Strings and hex.
+        assertTrue(ok("customAccentHex", JsonPrimitive("")))
+        assertTrue(ok("customAccentHex", JsonPrimitive("#1A2B3C")))
+        assertFalse(ok("customAccentHex", JsonPrimitive("blue")))
+        assertTrue(ok("categoryColor.sports", JsonPrimitive("FF8800")))
+        assertFalse(ok("categoryColor.sports", JsonPrimitive("orange")))
+        assertTrue(ok("categoryBucketEnabled.news", JsonPrimitive(false)))
+        assertFalse(ok("categoryBucketEnabled.news", JsonPrimitive("false")))
+        assertTrue(ok("hiddenEpgBadges", JsonPrimitive("NEW,LIVE")))
+        assertFalse(ok("customCategories", JsonPrimitive("x".repeat(4097))))
+        assertTrue(ok("lastGroup", JsonPrimitive("Sports")))
+        // Apple-only names are not owned here and round-trip untouched.
+        assertFalse(DsyncSettingsValidator.isOwned("liquidGlassStyle"))
+        assertFalse(DsyncSettingsValidator.isOwned("tintChannelCards"))
+        assertTrue(DsyncSettingsValidator.isOwned("categoryColor.kids"))
+        // Every name a Sync Categories item carries is owned (except prefix families).
+        com.aeriotv.android.core.sync.SyncItemCatalog.allItems.flatMap { it.names }
+            .forEach { assertTrue(it, DsyncSettingsValidator.isOwned(it)) }
+    }
+
+    @Test fun settingsLanesRoundTrip() {
+        val base = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"v":{"liquidGlassStyle":"clear","textScale":1.0},"tv":{"textScale":1.2},"x":1}""",
+        ) as kotlinx.serialization.json.JsonObject
+        val out = DsyncPayloads.encodeSettingsLanes(base, mapOf("mobile" to mapOf("textScale" to JsonPrimitive(1.3))))
+        // Lanes this device does not write, foreign names, and unknown fields round-trip.
+        assertEquals("""{"v":{"liquidGlassStyle":"clear","textScale":1.0},"tv":{"textScale":1.2},"x":1,"mobile":{"textScale":1.3}}""", out.toString())
+        val lanes = DsyncPayloads.decodeSettingsLanes(out)!!
+        assertEquals(JsonPrimitive(1.2), lanes["tv"]!!["textScale"])
+        assertEquals(null, DsyncPayloads.decodeSettingsLanes(kotlinx.serialization.json.Json.parseToJsonElement("""{"tv":[1]}""") as kotlinx.serialization.json.JsonObject))
+    }
 }
