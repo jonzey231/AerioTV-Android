@@ -63,11 +63,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.pip.findActivity
 import com.aeriotv.android.core.sync.DriveSyncManager
 import com.aeriotv.android.core.sync.SyncCategory
+import com.aeriotv.android.core.sync.SyncItemCatalog
+import com.aeriotv.android.core.sync.SyncScope
 import com.aeriotv.android.core.sync.SyncConfig
 import com.aeriotv.android.ui.settings.settingsFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsSection
+import com.aeriotv.android.ui.settings.SettingsPickerRow
+import com.aeriotv.android.ui.settings.SettingsPickerOption
+import com.aeriotv.android.ui.settings.SettingsToggleRow
+import com.aeriotv.android.ui.settings.SettingsSectionFooter
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.settingsRowCard
 import com.aeriotv.android.ui.settings.settingsTvFocusableRow
@@ -1002,6 +1008,7 @@ fun SyncCategoriesScreen(
     val masterEnabled = if (dsync) true else driveEnabled
     val categories = if (dsync) SyncCategory.entries.filter { it != SyncCategory.Playlists && it != SyncCategory.Credentials } else SyncCategory.entries
     val clearStatuses by viewModel.categoryClearStatus.collectAsState()
+    val scopes by viewModel.syncScopes.collectAsStateWithLifecycle(initialValue = emptyMap())
     var pendingDelete by remember { mutableStateOf<SyncCategory?>(null) }
 
     // Delete needs a live token; restore it silently as the Sync page does.
@@ -1013,10 +1020,10 @@ fun SyncCategoriesScreen(
     // true on Android (DriveSyncWorker runs every 6 hours; the toggles are
     // per-device), so those sentences state what Android actually does.
     val footer = if (dsync) {
-        "Each toggle controls whether this device sends and receives that category through your Dispatcharr server. The toggles apply to this device only."
+        "Each choice controls whether this device sends and receives that item through your Dispatcharr server: on all devices, only on devices like this one, or not at all. The choices apply to this device only."
     } else if (masterEnabled) {
         "Syncing is automatic: AerioTV syncs about every 6 hours while you are on Wi-Fi and the battery is not low. Push to Drive on the previous screen just forces that round trip immediately.\n\n" +
-            "Each toggle controls whether this device pushes and pulls that category. The toggles apply to this device only. Use the Delete buttons to remove a category's cloud copy without affecting local data."
+            "Each choice controls whether this device pushes and pulls that item: on all devices, only on devices like this one, or not at all. The choices apply to this device only. Use the Delete buttons to remove a category's cloud copy without affecting local data."
     } else {
         "Drive Sync is off. Per-category toggles take effect when you re-enable Sync at the top. The Delete buttons still work: useful for scrubbing stale Drive state before re-enabling Sync."
     }
@@ -1034,56 +1041,55 @@ fun SyncCategoriesScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                item {
-                    SettingsSection(header = "Categories", footer = if (isTv) null else footer) {
-                        categories.forEach { category ->
-                            val enabled by viewModel.categoryEnabled(category)
-                                .collectAsStateWithLifecycle(initialValue = true)
-                            SyncTileToggleRow(
-                                icon = settingsCategoryIcon(category),
-                                title = settingsCategoryTitle(category),
-                                subtitle = settingsCategorySubtitle(category),
-                                checked = enabled,
-                                onCheckedChange = { viewModel.setCategoryEnabled(category, it) },
-                                enabled = masterEnabled,
-                            )
-                            if (!isTv && !dsync) {
-                                CategoryDeleteButton(
-                                    status = clearStatuses[category],
-                                    onClick = { pendingDelete = category },
+                // Every synced option is its own row (owner decision 2026-10-27).
+                // Settings rows take a scope from this device's class only
+                // (All devices, TVs only or Phones and tablets only, Off); a group
+                // row sets its whole group and reads "Mixed" when rows differ.
+                // Data rows are plain on/off toggles.
+                val choices = SyncScope.choices(viewModel.syncDeviceIsTv)
+                val scopeOptions = choices.map { SettingsPickerOption(it, it.title) }
+                SyncItemCatalog.groups.forEach { group ->
+                    val items = group.items.filter { (!dsync || !it.driveOnly) && (dsync || !it.dsyncOnly) }
+                    if (items.isEmpty()) return@forEach
+                    item(key = "sync-group-${group.id}") {
+                        SettingsSection(header = group.title) {
+                            val settingsItems = items.filterNot { it.isData }
+                            if (settingsItems.size > 1) {
+                                val values = settingsItems.map { scopes[it.id] ?: SyncScope.All }.distinct()
+                                SettingsPickerRow(
+                                    title = "All ${group.title} Settings",
+                                    options = scopeOptions,
+                                    selected = values.singleOrNull() ?: SyncScope.All,
+                                    onSelect = { sc -> viewModel.setSyncScope(settingsItems.map { it.id }, sc) },
+                                    pageKey = "sync-group-${group.id}",
+                                    choiceSheet = true,
+                                    summaryOverride = if (values.size > 1) "Mixed" else null,
                                 )
                             }
-                            // Slice of App Preferences rather than a category of
-                            // its own: the map rides preferences.v1.json and each
-                            // SyncCategory owns exactly one Drive file, so it has
-                            // no Delete of its own. Sits under its parent so the
-                            // nesting reads.
-                            if (category == SyncCategory.Preferences) {
-                                val shareRemoteMap by viewModel.syncRemoteControlMap
-                                    .collectAsStateWithLifecycle(initialValue = true)
-                                SyncTileToggleRow(
-                                    icon = Icons.Filled.SettingsRemote,
-                                    title = "Remote Button Map",
-                                    subtitle = "Your customized remote button assignments. Turn this off on a TV whose remote is a different model from your others.",
-                                    checked = shareRemoteMap,
-                                    onCheckedChange = { viewModel.setSyncRemoteControlMap(it) },
-                                    enabled = masterEnabled,
-                                )
-                                val shareRadioDefault by viewModel.syncRadioModeByDefault
-                                    .collectAsStateWithLifecycle(initialValue = false)
-                                SyncTileToggleRow(
-                                    icon = Icons.Filled.Radio,
-                                    title = "Radio Mode by Default",
-                                    subtitle = "Whether every channel opens in Radio Mode. Off by default, so each device keeps its own choice.",
-                                    checked = shareRadioDefault,
-                                    onCheckedChange = { viewModel.setSyncRadioModeByDefault(it) },
-                                    enabled = masterEnabled,
-                                )
+                            items.forEach { syncItem ->
+                                val sc = scopes[syncItem.id] ?: SyncScope.All
+                                if (syncItem.isData) {
+                                    SettingsToggleRow(
+                                        title = syncItem.label,
+                                        checked = sc != SyncScope.Off,
+                                        onCheckedChange = { on -> viewModel.setSyncScope(listOf(syncItem.id), if (on) SyncScope.All else SyncScope.Off) },
+                                        enabled = masterEnabled,
+                                    )
+                                } else {
+                                    SettingsPickerRow(
+                                        title = syncItem.label,
+                                        options = scopeOptions,
+                                        selected = sc,
+                                        onSelect = { v -> viewModel.setSyncScope(listOf(syncItem.id), v) },
+                                        pageKey = "sync-item-${syncItem.id}",
+                                        choiceSheet = true,
+                                    )
+                                }
                             }
                         }
                     }
                 }
-                if (isTv && !dsync) {
+                if (!dsync) {
                     item {
                         SettingsSection(header = "Delete from Drive", footer = footer) {
                             SyncCategory.entries.forEach { category ->
@@ -1100,6 +1106,8 @@ fun SyncCategoriesScreen(
                             }
                         }
                     }
+                } else {
+                    item { SettingsSectionFooter(footer) }
                 }
             }
         }

@@ -106,15 +106,20 @@ fun <T> ColumnScope.SettingsPickerRow(
     /** Rows drawn first on the picker's page, above the choices (Program
      *  Info Button's Guide View / List View toggles). Inline too. */
     headerContent: (@Composable ColumnScope.() -> Unit)? = null,
+    /** Every input: one value row that opens the choices in a themed radio
+     *  sheet (Sync Categories scopes), not only on TV. */
+    choiceSheet: Boolean = false,
+    /** Value shown on the collapsed row instead of the selected label ("Mixed"). */
+    summaryOverride: String? = null,
 ) {
-    if (tvChoiceSheet && rememberIsTvDevice()) {
+    if ((tvChoiceSheet && rememberIsTvDevice()) || choiceSheet) {
         // The sheet opens with focus on the CURRENT value (a long list such
         // as Catch-Up Time Offset opened on its first option, -180).
         val selectedFocus = remember { androidx.compose.ui.focus.FocusRequester() }
         val hasSelected = options.any { it.value == selected }
         SettingsTvOptionsSheetRow(
             title = title,
-            summary = options.firstOrNull { it.value == selected }?.label.orEmpty(),
+            summary = summaryOverride ?: options.firstOrNull { it.value == selected }?.label.orEmpty(),
             leadingIcon = leadingIcon,
             footer = footer,
             modifier = modifier,
@@ -319,7 +324,7 @@ private fun SettingsTvOptionsSheetRow(
         ) {
             val firstFocus = remember { androidx.compose.ui.focus.FocusRequester() }
             androidx.compose.material3.Surface(
-                modifier = Modifier.fillMaxWidth(0.55f),
+                modifier = Modifier.fillMaxWidth(if (rememberIsTvDevice()) 0.55f else 0.9f),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
                 color = com.aeriotv.android.ui.tv.TvChrome.dialogSurface(),
             ) {

@@ -121,6 +121,15 @@ class SyncSettingsViewModel @Inject constructor(
         _pullStatus.value = ActionStatus.Idle
     }
 
+    /** Per-item sync choices (Sync Categories), by item id, as this device honors them. */
+    val syncScopes: Flow<Map<String, com.aeriotv.android.core.sync.SyncScope>> = prefs.syncScopes
+    val syncDeviceIsTv: Boolean get() = prefs.syncDeviceIsTv
+
+    /** Sets one item, or a whole group, to [scope] (data items: All = on, Off = off). */
+    fun setSyncScope(itemIds: List<String>, scope: com.aeriotv.android.core.sync.SyncScope) {
+        viewModelScope.launch { prefs.setSyncScope(itemIds, scope) }
+    }
+
     fun categoryEnabled(category: SyncCategory): Flow<Boolean> =
         prefs.syncCategoryEnabled(category)
 
