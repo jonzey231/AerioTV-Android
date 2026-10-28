@@ -20,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -309,8 +310,8 @@ private fun Offering(offer: SetupReceiver.Offer, onCancel: () -> Unit) {
             Spacer(Modifier.height(24.dp))
             OutlinedButton(
                 onClick = onCancel,
-                modifier = Modifier.focusRequester(focus).dpadFocusRing(RoundedCornerShape(50)),
-            ) { Text("Cancel") }
+                modifier = Modifier.focusRequester(focus).secondaryButtonFrame(),
+            ) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
         }
     }
 }
@@ -326,7 +327,20 @@ private fun Message(title: String, body: String, primary: Pair<String, () -> Uni
         Spacer(Modifier.height(24.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = primary.second, modifier = Modifier.focusRequester(focus).dpadFocusRing(RoundedCornerShape(50))) { Text(primary.first) }
-            OutlinedButton(onClick = onCancel, modifier = Modifier.dpadFocusRing(RoundedCornerShape(50))) { Text("Cancel") }
+            OutlinedButton(onClick = onCancel, modifier = Modifier.secondaryButtonFrame()) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
         }
     }
 }
+
+/**
+ * Secondary outlined button frame, as Skip on the Dispatcharr Sync step: a
+ * 54 dp tall pill so the focus ring sits exactly on the button's own outline
+ * (a wrap-content OutlinedButton is drawn smaller than its 48 dp touch box,
+ * which left the ring floating outside the outline as a double border), plus
+ * the accent wash on focus.
+ */
+@Composable
+private fun Modifier.secondaryButtonFrame(): Modifier = this
+    .widthIn(min = 220.dp)
+    .heightIn(min = 54.dp)
+    .dpadFocusRing(RoundedCornerShape(50), washTint = MaterialTheme.colorScheme.primary)
