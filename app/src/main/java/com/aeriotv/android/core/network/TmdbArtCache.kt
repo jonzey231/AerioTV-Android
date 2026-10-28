@@ -53,6 +53,12 @@ class TmdbArtCache @Inject constructor(
     private val saveLock = Any()
     private val enrichJobs = ConcurrentHashMap<String, Job>()
 
+    /** Session-only synopsis text; never persisted (Apple parity 2026-10-27). */
+    private val overviews = object : java.util.LinkedHashMap<String, String>(OVERVIEW_LRU, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > OVERVIEW_LRU
+    }
+    @Volatile private var lastWriteAt = 0L
+
     @Volatile private var loaded = false
     private var saveJob: Job? = null
 
@@ -66,11 +72,21 @@ class TmdbArtCache @Inject constructor(
         if (loaded) return
         loadLock.withLock {
             if (loaded) return
-            val rows = runCatching { dao.getAll() }.getOrElse {
+            val rows = runCatching {
+                // Cap and strip on load (Apple TestFlight OOM 2026-10-27: an
+                // unbounded art cache, 53778 titles on the Streamer).
+                val total = dao.count()
+                if (total > MAX_ENTRIES) {
+                    val removed = dao.pruneTo(MAX_ENTRIES)
+                    Log.i(TAG, "[TMDB-ART] pruned $removed entries (now ${total - removed})")
+                }
+                runCatching { dao.clearOverviews() }
+                dao.newest(MAX_ENTRIES)
+            }.getOrElse {
                 Log.w(TAG, "[TMDB-ART] load failed: ${it.message}")
                 emptyList()
             }
-            rows.forEach { entries[it.key] = TmdbArtEntry(it.tmdbId, it.poster, it.backdrop, it.overview, it.at) }
+            rows.forEach { entries[it.key] = TmdbArtEntry(it.tmdbId, it.poster, it.backdrop, null, it.at) }
             loaded = true
             if (rows.isNotEmpty()) {
                 Log.i(TAG, "[TMDB-ART] loaded ${rows.size} cached titles")
@@ -88,7 +104,11 @@ class TmdbArtCache @Inject constructor(
     fun backdropUrl(key: String, size: String = "w1280"): String? =
         entries[key]?.backdrop?.takeIf { it.isNotEmpty() }?.let { tmdbService.imageUrlFor(it, size) }
 
-    fun overview(key: String): String? = entries[key]?.overview?.takeIf { it.isNotBlank() }
+    /**
+     * Synopsis from this session's LRU (500 titles), or null on a miss; the
+     * caller fetches it on demand. Overview text is never persisted.
+     */
+    fun overview(key: String): String? = synchronized(overviews) { overviews[key] }
 
     fun tmdbId(key: String): String? = entries[key]?.tmdbId?.takeIf { it.isNotEmpty() }
 
@@ -106,16 +126,33 @@ class TmdbArtCache @Inject constructor(
                 tmdbId = tmdbId.ifBlank { old?.tmdbId ?: "" },
                 poster = poster.ifBlank { old?.poster ?: "" },
                 backdrop = backdrop.ifBlank { old?.backdrop ?: "" },
-                overview = overview?.takeIf { it.isNotBlank() } ?: old?.overview,
+                overview = overview?.takeIf { it.isNotBlank() },
                 at = System.currentTimeMillis(),
             ),
         )
     }
 
     private fun store(key: String, entry: TmdbArtEntry) {
-        entries[key] = entry
-        dirty[key] = entry
+        entry.overview?.takeIf { it.isNotBlank() }?.let { text ->
+            synchronized(overviews) { overviews[key] = text }
+        }
+        val slim = if (entry.overview == null) entry else entry.copy(overview = null)
+        entries[key] = slim
+        dirty[key] = slim
         scheduleSave()
+    }
+
+    private fun enrichRunning(): Boolean = enrichJobs.values.any { it.isActive }
+
+    /** Keep newest [MAX_ENTRIES] in memory, confirmed misses dropped first. */
+    private fun pruneMemory() {
+        val size = entries.size
+        if (size <= MAX_ENTRIES) return
+        val drop = entries.entries
+            .sortedWith(compareBy<Map.Entry<String, TmdbArtEntry>>({ it.value.poster.isNotEmpty() }, { it.value.at }))
+            .take(size - MAX_ENTRIES)
+        drop.forEach { entries.remove(it.key); dirty.remove(it.key) }
+        Log.i(TAG, "[TMDB-ART] pruned ${drop.size} entries (now ${entries.size})")
     }
 
     private fun scheduleSave() {
@@ -123,15 +160,40 @@ class TmdbArtCache @Inject constructor(
             if (saveJob?.isActive == true) return
             saveJob = scope.launch {
                 delay(SAVE_DEBOUNCE_MS)
-                val rows = dirty.entries.map { (k, e) ->
-                    TmdbArtEntity(k, e.tmdbId, e.poster, e.backdrop, e.overview, e.at)
-                }
-                rows.forEach { dirty.remove(it.key) }
-                if (rows.isEmpty()) return@launch
-                runCatching { dao.upsertAll(rows) }
-                    .onFailure { Log.w(TAG, "[TMDB-ART] save failed: ${it.message}") }
+                // Cards re-read on the short tick; the table write is
+                // throttled to once per 30 s while a pass runs.
                 _version.value = _version.value + 1
+                val sinceWrite = System.currentTimeMillis() - lastWriteAt
+                if (enrichRunning() && sinceWrite < SAVE_THROTTLE_MS) {
+                    delay(SAVE_THROTTLE_MS - sinceWrite)
+                }
+                writeDirty()
+                synchronized(saveLock) { saveJob = null }
+                if (dirty.isNotEmpty()) scheduleSave()
             }
+        }
+    }
+
+    /** Off the main thread (scope is IO); a failure is logged, never thrown. */
+    private suspend fun writeDirty() {
+        try {
+            pruneMemory()
+            val rows = dirty.entries.map { (k, e) ->
+                TmdbArtEntity(k, e.tmdbId, e.poster, e.backdrop, null, e.at)
+            }
+            rows.forEach { dirty.remove(it.key) }
+            lastWriteAt = System.currentTimeMillis()
+            if (rows.isEmpty()) return
+            dao.upsertAll(rows)
+            val total = dao.count()
+            if (total > MAX_ENTRIES) {
+                val removed = dao.pruneTo(MAX_ENTRIES)
+                Log.i(TAG, "[TMDB-ART] pruned $removed entries (now ${total - removed})")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.w(TAG, "[TMDB-ART] save failed: ${t.message}")
         }
     }
 
@@ -191,6 +253,7 @@ class TmdbArtCache @Inject constructor(
                 delay(PACE_MS)
             }
             Log.i(TAG, "[TMDB-ART] enrich $kind: done, $resolved resolved")
+            finalSave()
         }
     }
 
@@ -246,10 +309,22 @@ class TmdbArtCache @Inject constructor(
                 page = next.second
             }
             Log.i(TAG, "[TMDB-ART] enrich $kind (paged): done, $resolved resolved")
+            finalSave()
+        }
+    }
+
+    /** Final debounced save once a pass ends (the throttle no longer applies). */
+    private fun finalSave() {
+        scope.launch {
+            delay(SAVE_DEBOUNCE_MS)
+            if (dirty.isNotEmpty() && !enrichRunning()) writeDirty()
         }
     }
 
     private companion object {
+        const val MAX_ENTRIES = 60_000
+        const val OVERVIEW_LRU = 500
+        const val SAVE_THROTTLE_MS = 30_000L
         const val TAG = "TmdbArtCache"
         const val SAVE_DEBOUNCE_MS = 2_000L
         const val BACKOFF_MS = 2_000L
