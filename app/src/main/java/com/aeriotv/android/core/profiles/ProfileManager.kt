@@ -1003,6 +1003,7 @@ class ProfileManager @Inject constructor(
         val added = addProfile(playlistId, user, password, apiKey, role, seed = row).getOrElse { return Result.failure(it) }
         refreshActiveRole()
         Log.i(TAG, "[DSYNC] profiles: added ${row.username} from the roster (explicit choice) role=${role?.label ?: "default"} order=${row.order}")
+        rosterUndoable += added.id
         return Result.success(store.byId(added.id) ?: added)
     }
 
@@ -1137,7 +1138,40 @@ class ProfileManager @Inject constructor(
             .isSuccess
     }
 
-    private suspend fun deleteLocal(p: DispatcharrProfile, fromSync: Boolean) {
+    /** Profile ids added from the roster in this process; only these can be undone. */
+    private val rosterUndoable = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    /**
+     * Undo a roster add ("Remove" beside "Added"): the same local cleanup as
+     * [remove] on THIS DEVICE ONLY, with no Admin PIN and no tombstone.
+     *
+     * Server copy decision: a roster row is by definition already in the
+     * server `profiles` key (another device pushed it). The add may have
+     * re-sent that row (same userId, server name and avatar kept by
+     * ProfileRoster.guardFreshRosterAdd). After the undo the local profile is
+     * gone, and buildProfiles keeps every server row this device has no
+     * profile for, so the server copy stays exactly as the other devices
+     * wrote it. The undo therefore writes no tombstone, marks nothing
+     * pending, and pushes nothing; the sync hook only drops this device's
+     * per-row stamps ("undo-add").
+     */
+    suspend fun undoAdd(profileId: String): Result<Unit> = runCatching {
+        check(profileId in rosterUndoable) { "Only a profile just added here can be undone." }
+        val p = store.byId(profileId) ?: run { rosterUndoable -= profileId; return@runCatching }
+        check(!p.isDefault) { "The default profile cannot be removed." }
+        deleteLocal(p, fromSync = false, tombstone = false)
+        rosterUndoable -= profileId
+        refreshActiveRole()
+        Log.i(TAG, "[PROFILES] undo add ${p.username}")
+    }
+
+    /**
+     * [fromSync]: the removal came from a synced tombstone (log wording only
+     * beyond the hook). [tombstone]: emit the "remove" sync hook, which
+     * stamps a schema 4.12 tombstone that removes the profile on every
+     * device. A roster undo passes false and gets the "undo-add" hook instead.
+     */
+    private suspend fun deleteLocal(p: DispatcharrProfile, fromSync: Boolean, tombstone: Boolean = !fromSync) {
         val profileId = p.id
         if (store.activeProfileId(p.playlistId) == profileId) {
             val def = store.forPlaylist(p.playlistId).first { it.isDefault }
@@ -1172,7 +1206,8 @@ class ProfileManager @Inject constructor(
         runCatching { pinStore.remove(profileId) }
         runCatching { snapshotStamps.remove("${p.playlistId}@$profileId") }
         runCatching { vodCatalogStore.deleteForPlaylistUser(p.playlistId, p.username) }
-        if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove", 0L) }
+        if (tombstone) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove", 0L) }
+        else if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "undo-add", 0L) }
         store.remove(profileId)
         Log.i(TAG, "[PROFILE] removed ${p.username} on ${p.playlistId.take(8)}; local state deleted${if (fromSync) " (synced removal)" else ""}")
     }

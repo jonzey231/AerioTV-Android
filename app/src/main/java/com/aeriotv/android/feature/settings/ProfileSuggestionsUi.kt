@@ -82,6 +82,24 @@ internal fun RosterSuggestions(
     // Rows added here leave the roster flow; keep them listed as "Added"
     // (not focusable) so the list does not jump under the D-pad.
     val added = remember { androidx.compose.runtime.mutableStateListOf<ProfileRow>() }
+    // Username (lowercase) -> profile id from addFromRoster, for the undo.
+    val addedIds = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    fun undo(row: ProfileRow) {
+        val id = addedIds[row.username.lowercase()] ?: return
+        if (busy != null) return
+        busy = row.username
+        error = null
+        scope.launch {
+            vm.undoAdd(id).fold(
+                {
+                    busy = null
+                    addedIds.remove(row.username.lowercase())
+                    added.removeAll { it.username.equals(row.username, ignoreCase = true) }
+                },
+                { busy = null; error = it.message ?: "Could not remove profile" },
+            )
+        }
+    }
     // Per-row role before Add, prefilled from the roster role.
     val roles = remember { androidx.compose.runtime.mutableStateMapOf<String, ProfileRole>() }
     fun roleFor(r: ProfileRow) = roles[r.username.lowercase()] ?: ProfileRole.fromWire(r.role) ?: ProfileRole.User
@@ -98,7 +116,7 @@ internal fun RosterSuggestions(
         busy = r.username
         scope.launch {
             vm.addFromRoster(playlistId, r, listed!!, null, null).fold(
-                { busy = null; added += r; onAdded() },
+                { busy = null; addedIds[r.username.lowercase()] = it.id; added += r; onAdded() },
                 { busy = null; error = it.message ?: "Could not add profile" },
             )
         }
@@ -151,6 +169,9 @@ internal fun RosterSuggestions(
                         )
                         Spacer(Modifier.size(4.dp))
                         Text("Added", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        if (!isTv && addedIds.containsKey(r.username.lowercase())) {
+                            TextButton(onClick = { undo(r) }, enabled = busy == null) { Text("Remove") }
+                        }
                     }
                     isTv -> {
                         // One focus stop per row: the row takes focus and
@@ -174,6 +195,24 @@ internal fun RosterSuggestions(
                 }
             }
             if (isTv && !isAdded) RoleChip(roleFor(r), enabled = canAdd) { roles[r.username.lowercase()] = it }
+            if (isTv && isAdded && addedIds.containsKey(r.username.lowercase())) {
+                // TV undo: its own focus stop, styled like the Add pill.
+                var pillFocused by remember { mutableStateOf(false) }
+                val shape = RoundedCornerShape(50)
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    "Remove",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .onFocusChanged { pillFocused = it.isFocused }
+                        .then(if (pillFocused) Modifier.border(2.dp, androidx.compose.ui.graphics.Color.White, shape) else Modifier)
+                        .clip(shape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .clickable(enabled = busy == null) { undo(r) }
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
             }
         }
         footnote?.let {
@@ -190,7 +229,7 @@ internal fun RosterSuggestions(
                 val user = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
                     ?: DispatcharrUserSummary(id = r.userId, username = r.username)
                 vm.addFromRoster(playlistId, r, user, pw, key).fold(
-                    { credFor = null; added += r; onAdded(); null },
+                    { credFor = null; addedIds[r.username.lowercase()] = it.id; added += r; onAdded(); null },
                     { it.message ?: "Could not add profile" },
                 )
             },

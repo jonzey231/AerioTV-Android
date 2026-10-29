@@ -150,6 +150,7 @@ class ProfilesViewModel @Inject constructor(
     fun rosterSuggestions(playlistId: String) = manager.rosterSuggestions(playlistId)
     suspend fun addFromRoster(playlistId: String, row: com.aeriotv.android.core.sync.dsync.ProfileRow, user: DispatcharrUserSummary, password: String?, apiKey: String?) =
         manager.addFromRoster(playlistId, row, user, password, apiKey)
+    suspend fun undoAdd(profileId: String) = manager.undoAdd(profileId)
     fun adminHasPin(playlistId: String) = manager.adminHasPin(playlistId)
     suspend fun canManageUserApiKeys(playlistId: String) = manager.canManageUserApiKeys(playlistId)
     suspend fun generateUserApiKey(playlistId: String, userId: Int) = manager.generateUserApiKey(playlistId, userId)

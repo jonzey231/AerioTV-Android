@@ -195,6 +195,21 @@ fun AddProfilesStepScreen(
     // users on this server" unless there are no suggestions.
     var serverOpen by remember { mutableStateOf(false) }
     val serverExpanded = serverOpen
+    // TV focus: first list row on reveal, back to the card on hide.
+    val cardFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val firstRowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    var focusMove by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(focusMove) {
+        val open = focusMove ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(50)
+        runCatching { if (open) firstRowFocus.requestFocus() else cardFocus.requestFocus() }
+        focusMove = null
+    }
+    fun toggleServer() {
+        serverOpen = !serverOpen
+        if (!serverOpen) query = ""
+        focusMove = serverOpen
+    }
     // Server users not suggested and not already a profile on this device.
     val rest = remember(list, suggested, localProfiles) {
         list.filter { u ->
@@ -232,18 +247,30 @@ fun AddProfilesStepScreen(
                     )
                     if (rest.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
-                        AddFromDispatcharrRow(enabled = !busy) { serverOpen = !serverOpen; if (!serverOpen) query = "" }
+                        AddFromDispatcharrRow(
+                            enabled = !busy,
+                            expanded = serverExpanded,
+                            modifier = Modifier.focusRequester(cardFocus),
+                        ) { toggleServer() }
                     }
                     if (serverExpanded && rest.isNotEmpty()) {
                         com.aeriotv.android.feature.settings.ExpandableSearch(query, { query = it }, enabled = !busy)
                     }
-                    if (serverExpanded) shown.forEach { user ->
+                    if (serverExpanded && rest.isNotEmpty()) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { toggleServer() },
+                            enabled = !busy,
+                            modifier = Modifier.dpadFocusRing(RoundedCornerShape(50)),
+                        ) { Text("Hide") }
+                    }
+                    if (serverExpanded) shown.forEachIndexed { index, user ->
                         val checked = user.id in selected
                         // TV: the row and the role chip are two focus stops.
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Row(
                             modifier = Modifier
                                 .weight(1f)
+                                .then(if (index == 0) Modifier.focusRequester(firstRowFocus) else Modifier)
                                 .heightIn(min = 56.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .dpadFocusRing(RoundedCornerShape(12.dp), washTint = MaterialTheme.colorScheme.primary)

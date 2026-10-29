@@ -299,6 +299,14 @@ class DispatcharrSyncManager @Inject constructor(
     private fun onProfilesMutated(playlistId: String, username: String, what: String, stampAt: Long = 0L) {
         // Called from UI actions on the main thread: all disk work happens on IO.
         // A roster add keeps the row's own stamp (stampAt); every real edit stamps now.
+        if (what == "undo-add") {
+            // Roster undo: local only. No tombstone, no pending mark, no push;
+            // the server row the add came from stays as other devices wrote it.
+            rosterAdds.remove(rowKey(playlistId, username))
+            state.edit().remove(rowKey(playlistId, username)).remove(customKey(playlistId, username)).commit()
+            Log.i(TAG, "[DSYNC] profiles: undo add $username; server row left as is")
+            return
+        }
         val now = if (stampAt > 0) stampAt else System.currentTimeMillis() / 1000
         if (what == "roster-add") rosterAdds[rowKey(playlistId, username)] = System.currentTimeMillis()
         // Stamp synchronously (apply() writes to disk in the background): the

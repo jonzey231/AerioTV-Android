@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -109,15 +111,29 @@ private fun AddedChip() {
     }
 }
 
-/** Opens the existing server-user list (sign in once per added user). */
+/**
+ * Toggles the server-user list under it (sign in once per added user). The
+ * list and its Search row are hidden until this card is tapped; the
+ * chevron points down while the list is open.
+ */
 @Composable
-internal fun AddFromDispatcharrRow(enabled: Boolean, onClick: () -> Unit) {
+internal fun AddFromDispatcharrRow(enabled: Boolean, expanded: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     OnboardingCard(
         icon = Icons.Outlined.PersonAdd,
         title = "Add from Dispatcharr",
         subtitle = "Choose an existing Dispatcharr user to add as a profile on this device.",
         onClick = onClick,
         enabled = enabled,
+        modifier = modifier,
+        highlighted = expanded,
+        trailing = {
+            Icon(
+                if (expanded) Icons.Filled.ExpandMore
+                else Icons.Filled.ChevronRight,
+                contentDescription = if (expanded) "Hide users" else "Show users",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
     )
 }
 
