@@ -35,11 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.onboarding.components.OnboardingCard
@@ -103,20 +100,7 @@ internal fun DispatcharrHeroCard(
                 }
             }
         }
-        Text(
-            buildAnnotatedString {
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)) { append("You will need: ") }
-                append(
-                    if (isTv) "a server address, plus a username and password (with API key access on) or an API key. " +
-                        "Have the QR code from the Users page? Scan it with AerioTV on your phone and set up from there."
-                    else "a server address, plus a username and password (with API key access on), an API key, " +
-                        "or the QR code from the Users page in Dispatcharr.",
-                )
-            },
-            style = MaterialTheme.typography.bodySmall.subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        YouWillNeed(isTv)
         val filled = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -144,6 +128,40 @@ internal fun DispatcharrHeroCard(
                 }
             }
         }
+    }
+}
+
+/** "You will need" as a short list instead of a run-on sentence (Logan, 2026-10-29). */
+@Composable
+private fun YouWillNeed(isTv: Boolean) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val body = MaterialTheme.typography.bodySmall.subtext()
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            "You will need",
+            style = body,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Bullet("A server address", body, muted)
+        Bullet("A username and password (with API key access on), or an API key", body, muted)
+        if (isTv) {
+            Text(
+                "Have the QR code from the Users page? Scan it with AerioTV on your phone and set up from there.",
+                style = body, color = muted, modifier = Modifier.padding(top = 2.dp),
+            )
+        } else {
+            Text("or", style = body, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            Bullet("The QR code from the Users page in Dispatcharr", body, muted)
+        }
+    }
+}
+
+@Composable
+private fun Bullet(text: String, style: androidx.compose.ui.text.TextStyle, color: androidx.compose.ui.graphics.Color) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("\u2022", style = style, color = color)
+        Text(text, style = style, color = color, modifier = Modifier.weight(1f))
     }
 }
 
