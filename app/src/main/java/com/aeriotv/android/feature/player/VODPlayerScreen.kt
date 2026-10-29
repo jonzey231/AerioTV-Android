@@ -394,6 +394,7 @@ fun VODPlayerScreen(
     var showVersionSheet by remember { mutableStateOf(false) }
     var showAudioSheet by remember { mutableStateOf(false) }
     var showSubtitlesSheet by remember { mutableStateOf(false) }
+    var showSpeedSheet by remember { mutableStateOf(false) }
 
     // The copy has a video track this device has no decoder for, so ExoPlayer
     // dropped it and is playing audio only. AerioMediaCodecVideoRenderer
@@ -2368,6 +2369,10 @@ fun VODPlayerScreen(
                         showOptionsSheet = false
                         showSubtitlesSheet = true
                     }
+                    PlayerOptionRow("Playback Speed") {
+                        showOptionsSheet = false
+                        showSpeedSheet = true
+                    }
                     // Fit / Fill, cycled in place (all state in VideoScale.kt:
                     // this composable is at the JVM verifier register limit).
                     VideoScaleOptionRow(settingsVm)
@@ -2416,6 +2421,10 @@ fun VODPlayerScreen(
                 )
             }
         }
+        // Sheet body lives in VodPlaybackSpeed.kt (register limit, see above).
+        if (showSpeedSheet) {
+            VodPlaybackSpeedSheetHost(exoPlayer) { showSpeedSheet = false }
+        }
     }
 
     // Auto-hide. The extra keys are inert on phone (lastInteractionAt stays
@@ -2430,7 +2439,7 @@ fun VODPlayerScreen(
     // visible, and it stands down while a sheet is open, while the scrubber
     // holds a pending target, and while a drag or a pause holds the chrome.
     val vodInteractionLocked = showOptionsSheet || showVersionSheet ||
-        showAudioSheet || showSubtitlesSheet
+        showAudioSheet || showSubtitlesSheet || showSpeedSheet
     LaunchedEffect(
         chromeVisible, isDragging, lastInteractionAt, scrubTargetMs, tvHoldChrome,
         vodInteractionLocked,
