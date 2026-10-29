@@ -69,6 +69,32 @@ object ProfileRoster {
         )
     }
 
+    /**
+     * Push guard for a profile this device never renamed or gave an avatar:
+     * it carries no claim on those fields, so a server row that has them
+     * keeps its name and avatar. Null = unchanged.
+     */
+    fun guardUncustomized(out: ProfileRow, prev: ProfileRow?, customized: Boolean): ProfileRow? {
+        if (customized || prev == null || isStripped(prev)) return null
+        val next = out.copy(
+            displayName = prev.displayName.ifBlank { out.displayName },
+            avatar = prev.avatar ?: out.avatar,
+        )
+        return next.takeIf { it != out }
+    }
+
+    /**
+     * Pull side of the same rule: the server name and avatar to adopt on a
+     * profile with no local claim, whatever the stamps say. Null = nothing.
+     */
+    fun adoptUncustomized(localName: String, localAvatar: AvatarSpec?, customized: Boolean, r: ProfileRow): Pair<String, AvatarSpec?>? {
+        if (customized || isStripped(r)) return null
+        val name = r.displayName.ifBlank { localName }
+        val avatar = r.avatar?.let(AvatarCatalog::normalize) ?: localAvatar
+        if (name == localName && avatar == localAvatar) return null
+        return name to avatar
+    }
+
     enum class Repair { None, ResendLocal, ApplyServer }
 
     /** How long after the local stamp a stripped server row counts as a duplicate of it. */

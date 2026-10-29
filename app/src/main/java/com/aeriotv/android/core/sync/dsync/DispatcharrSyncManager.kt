@@ -304,6 +304,10 @@ class DispatcharrSyncManager @Inject constructor(
         // racing that removal must already see the removed stamp.
         val e = state.edit().putLong(rowKey(playlistId, username), now)
         if (what == "remove") e.putLong(removedKey(playlistId, username), now) else e.remove(removedKey(playlistId, username))
+        // Only an explicit rename or avatar change claims name and avatar;
+        // a profile that never had one takes the synced row's (schema 4.12).
+        if (what == "rename" || what == "avatar") e.putBoolean(customKey(playlistId, username), true)
+        if (what == "remove") e.remove(customKey(playlistId, username))
         // Playlist-level pending mark: survives no session, a non-admin
         // session, and process death; cleared only by a successful PUT.
         e.putBoolean(profilesPendingKey(playlistId), true)
@@ -429,7 +433,7 @@ class DispatcharrSyncManager @Inject constructor(
             users.forEach { u ->
                 val at = ProfileTombstones.find(tombs, u)?.removedAt ?: 0L
                 if (profileManager.get().removeFromSync(playlistId, u)) {
-                    state.edit().remove(rowKey(playlistId, u)).apply()
+                    state.edit().remove(rowKey(playlistId, u)).remove(customKey(playlistId, u)).apply()
                     Log.i(TAG, "[DSYNC] profiles: removed local $u (tombstone removedAt=$at)")
                 }
             }
@@ -462,6 +466,18 @@ class DispatcharrSyncManager @Inject constructor(
 
     private fun rowKey(playlistId: String, username: String) = "prow|$playlistId|${username.lowercase()}"
     private fun removedKey(playlistId: String, username: String) = "pgone|$playlistId|${username.lowercase()}"
+    /** Set by a local rename or avatar change: this device claims name and avatar. */
+    private fun customKey(playlistId: String, username: String) = "pcust|$playlistId|${username.lowercase()}"
+
+    /**
+     * Name/avatar claim. Profiles from before the flag existed count as
+     * customized only while an unsent local change is pending and they carry
+     * a name or avatar of their own (their pushed edits are on the server).
+     */
+    private fun nameCustomized(playlistId: String, username: String, displayName: String, avatar: com.aeriotv.android.core.profiles.AvatarSpec?): Boolean =
+        state.getBoolean(customKey(playlistId, username), false) ||
+            (state.getBoolean(profilesPendingKey(playlistId), false) &&
+                !com.aeriotv.android.core.profiles.ProfileRoster.isStripped(displayName, username, avatar))
 
     private suspend fun runSession(t: Target, trigger: String) {
         val profileKey = currentProfileId(t.playlistId) ?: t.profileToken.ifEmpty { "default" }
@@ -1480,6 +1496,10 @@ class DispatcharrSyncManager @Inject constructor(
             val fresh = (rosterAdds[rowKey(s.playlistId, p.username)] ?: 0L) > System.currentTimeMillis() - 60_000L
             com.aeriotv.android.core.profiles.ProfileRoster.guardFreshRosterAdd(out, prev, fresh)?.also {
                 Log.i(TAG, "[DSYNC] profiles: row ${p.username} kept server name/avatar (fresh roster add)")
+            } ?: com.aeriotv.android.core.profiles.ProfileRoster.guardUncustomized(
+                out, prev, nameCustomized(s.playlistId, p.username, p.displayName, p.avatar),
+            )?.also {
+                Log.i(TAG, "[DSYNC] profiles: row ${p.username} kept server name/avatar (not customized here)")
             } ?: out
         }
         // Stale-device guard: a local row the server list lacks, with no
@@ -1733,6 +1753,7 @@ class DispatcharrSyncManager @Inject constructor(
                     localUpdatedAt = { u -> state.getLong(rowKey(s.playlistId, u), 0L) },
                     adopted = { u, at -> if (at > 0) state.edit().putLong(rowKey(s.playlistId, u), at).apply() },
                     removedAt = { u -> state.getLong(removedKey(s.playlistId, u), 0L) },
+                    customized = { u, name, avatar -> nameCustomized(s.playlistId, u, name, avatar) },
                 )
             }
         }

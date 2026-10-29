@@ -876,6 +876,7 @@ class ProfileManager @Inject constructor(
         localUpdatedAt: (String) -> Long = { 0L },
         adopted: (String, Long) -> Unit = { _, _ -> },
         removedAt: (String) -> Long = { 0L },
+        customized: (String, String, AvatarSpec?) -> Boolean = { _, _, _ -> true },
     ): Int {
         publishRoster(playlistId, rows)
         val plan = ProfileRoster.plan(rows, store.forPlaylist(playlistId).map { it.username })
@@ -891,6 +892,14 @@ class ProfileManager @Inject constructor(
             val id = local.id
             if (local.userId == 0 && r.userId > 0) store.update(id) { it.copy(userId = r.userId) }
             val mine = localUpdatedAt(local.username)
+            // No local claim on name/avatar (never renamed or given an avatar
+            // here): the server's name and avatar apply whatever the stamps say.
+            val adopt = ProfileRoster.adoptUncustomized(local.displayName, local.avatar, customized(local.username, local.displayName, local.avatar), r)
+            if (adopt != null) {
+                store.update(id) { it.copy(displayName = adopt.first, avatar = adopt.second) }
+                Log.i(TAG, "[DSYNC] profiles: adopted synced name/avatar for ${local.username}")
+                local = store.byId(id) ?: local
+            }
             val repair = ProfileRoster.repair(local.displayName, local.avatar, mine, r)
             if (repair == ProfileRoster.Repair.ResendLocal) {
                 Log.i(TAG, "[DSYNC] profiles: server row ${local.username} looks stripped; re-sending local")

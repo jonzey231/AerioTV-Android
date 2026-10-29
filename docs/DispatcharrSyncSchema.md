@@ -455,6 +455,11 @@ Row: `[userId:int, username:string, displayName:string(max 40 B), pinType:"none"
   local displayName, role, avatar, order, pinType, pinHash, and pinSalt only when its `updatedAt` is newer than the
   local row's; otherwise the local row stays and goes back up on the next write. A writer keeps
   rows it does not have locally unless a tombstone covers them.
+- Name and avatar claim: only an explicit local rename or avatar change claims displayName and
+  avatar, so a profile created by onboarding, a QR login, or any other path that never customized
+  them takes the server row's displayName and avatar on the next pull whatever the stamps say (logs
+  `[DSYNC] profiles: adopted synced name/avatar for <user>`), and its writes keep the server's
+  values; with no server row it keeps its username as the display name.
 - Catalog semantics: the rows are the profiles AVAILABLE to devices, not a mandate. A pull never
   creates a local profile. Metadata (displayName, role, avatar, order, PIN) merges only into
   profiles already present on the device; rows for users with no local profile are offered as
