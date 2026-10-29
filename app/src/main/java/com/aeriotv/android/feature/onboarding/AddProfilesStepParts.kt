@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.filled.ChevronRight
@@ -112,13 +114,24 @@ internal fun OnThisDeviceSection(
                             onFocusConsumed()
                         }
                     }
-                    androidx.compose.material3.TextButton(
+                    // Added chip stays; a red minus beside it removes the
+                    // profile from this device (Logan, 2026-10-29).
+                    AddedChip()
+                    Spacer(Modifier.size(6.dp))
+                    androidx.compose.material3.IconButton(
                         onClick = { onRemove(p) },
                         enabled = removeEnabled,
                         modifier = Modifier
+                            .size(40.dp)
                             .focusRequester(focus)
-                            .dpadFocusRing(RoundedCornerShape(50)),
-                    ) { Text("Remove") }
+                            .dpadFocusRing(CircleShape),
+                    ) {
+                        Icon(
+                            Icons.Filled.RemoveCircle,
+                            contentDescription = "Remove ${p.displayName.ifBlank { p.username }} from this device",
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 } else AddedChip()
             }
         }
