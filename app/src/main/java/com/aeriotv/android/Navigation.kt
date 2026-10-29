@@ -810,14 +810,6 @@ fun AerioTVNavHost(
                         navController.navigate(Routes.CHOOSE_TYPE)
                     },
                     onSetUpFromPhone = { navController.navigate(Routes.TV_SETUP) },
-                    onScanQr = {
-                        // Same path as Connect a Server > Dispatcharr, with the
-                        // scanner opened on arrival.
-                        vm.enableDispatcharrSyncAfterConnect = false
-                        vm.startNewSource(SourceType.DispatcharrUserPass)
-                        com.aeriotv.android.feature.onboarding.components.QrAutoScan.request()
-                        navController.navigate(Routes.configure(SourceType.DispatcharrUserPass))
-                    },
                     onSyncViaDispatcharr = {
                         vm.enableDispatcharrSyncAfterConnect = true
                         vm.startNewSource(SourceType.DispatcharrUserPass)

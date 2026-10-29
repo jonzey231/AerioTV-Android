@@ -48,7 +48,8 @@ import com.aeriotv.android.ui.theme.textAccent
 
 /**
  * Cold-start welcome (onboarding redesign 2026-10-29): wordmark, headline,
- * START HERE (fastest path first, accent-outlined, then Connect a Server),
+ * START HERE (TV: Set up from your phone first, accent-outlined, then Connect a Server;
+ * phone and tablet: Connect a Server only, QR scanning lives on Connect a Server),
  * KEEP YOUR DEVICES IN SYNC (Google Drive, Dispatcharr), then Skip directly
  * under the sync rows so it is one D-pad press from the last row.
  *
@@ -68,8 +69,6 @@ fun WelcomeScreen(
     onSyncViaDispatcharr: (() -> Unit)? = null,
     /** TV only: "Set up from your phone" (docs/DeviceSetupHandoff.md). Null hides it. */
     onSetUpFromPhone: (() -> Unit)? = null,
-    /** Phone and tablet: "Scan a QR code" opens the Dispatcharr form with the scanner up. Null hides it. */
-    onScanQr: (() -> Unit)? = null,
 ) {
     val config = LocalConfiguration.current
     val isTv = com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor().isTv
@@ -82,7 +81,7 @@ fun WelcomeScreen(
         googleSignInInProgress = googleSignInInProgress,
         googleSignedInEmail = googleSignedInEmail,
         onSyncViaDispatcharr = onSyncViaDispatcharr,
-        onFastest = if (isTv) onSetUpFromPhone else onScanQr,
+        onFastest = if (isTv) onSetUpFromPhone else null,
     )
     // TV: Welcome is the top of onboarding, and Back never closes the app.
     BackHandler(enabled = isTv) { }
