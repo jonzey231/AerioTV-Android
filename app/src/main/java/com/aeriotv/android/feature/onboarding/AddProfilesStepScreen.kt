@@ -195,6 +195,11 @@ fun AddProfilesStepScreen(
     // users on this server" unless there are no suggestions.
     var serverOpen by remember { mutableStateOf(false) }
     val serverExpanded = serverOpen
+    // Roster undo on ON THIS PHONE rows, and TV focus hand-offs after Add/Remove.
+    val undoable by profilesVm.undoableRosterAdds.collectAsStateWithLifecycle()
+    var undoBusy by remember { mutableStateOf(false) }
+    var focusRemove by remember { mutableStateOf<String?>(null) }
+    var focusRoster by remember { mutableStateOf<String?>(null) }
     // TV focus: first list row on reveal, back to the card on hide.
     val cardFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val firstRowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -238,12 +243,31 @@ fun AddProfilesStepScreen(
                     modifier = listModifier.fillMaxWidth().verticalScroll(listScroll),
                     verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 0.dp),
                 ) {
-                    OnThisDeviceSection(device, localProfiles)
+                    OnThisDeviceSection(
+                        device, localProfiles,
+                        undoable = undoable,
+                        removeEnabled = !busy && !undoBusy,
+                        onRemove = { p ->
+                            undoBusy = true
+                            scope.launch {
+                                profilesVm.undoAdd(p.id).fold(
+                                    { undoBusy = false; if (isTv) focusRoster = p.username },
+                                    { undoBusy = false; error = it.message ?: "Could not remove profile" },
+                                )
+                            }
+                        },
+                        focusRemoveFor = focusRemove,
+                        onFocusConsumed = { focusRemove = null },
+                    )
                     Spacer(Modifier.height(10.dp))
                     com.aeriotv.android.feature.settings.RosterSuggestions(
                         playlistId, profilesVm, list, enabled = !busy,
                         title = "FROM YOUR OTHER DEVICES",
                         footnote = ROSTER_FOOTNOTE,
+                        keepAdded = false,
+                        onAddedProfile = { id -> if (isTv) focusRemove = id },
+                        focusUsername = focusRoster,
+                        onFocusConsumed = { focusRoster = null },
                     )
                     if (rest.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))

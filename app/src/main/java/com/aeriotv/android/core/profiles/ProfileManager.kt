@@ -1,5 +1,6 @@
 package com.aeriotv.android.core.profiles
 
+import kotlinx.coroutines.flow.update
 import android.util.Log
 import com.aeriotv.android.core.data.capability.CAPABILITIES_SCHEMA
 import com.aeriotv.android.core.data.capability.CapabilityCorrections
@@ -1003,7 +1004,7 @@ class ProfileManager @Inject constructor(
         val added = addProfile(playlistId, user, password, apiKey, role, seed = row).getOrElse { return Result.failure(it) }
         refreshActiveRole()
         Log.i(TAG, "[DSYNC] profiles: added ${row.username} from the roster (explicit choice) role=${role?.label ?: "default"} order=${row.order}")
-        rosterUndoable += added.id
+        rosterUndoable.update { it + added.id }
         return Result.success(store.byId(added.id) ?: added)
     }
 
@@ -1139,7 +1140,11 @@ class ProfileManager @Inject constructor(
     }
 
     /** Profile ids added from the roster in this process; only these can be undone. */
-    private val rosterUndoable = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+    private val rosterUndoable = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+    /** Ids [undoAdd] accepts right now (onboarding shows Remove on these rows). */
+    val undoableRosterAdds: kotlinx.coroutines.flow.StateFlow<Set<String>> get() = rosterUndoable
+    fun canUndoAdd(profileId: String): Boolean = profileId in rosterUndoable.value
 
     /**
      * Undo a roster add ("Remove" beside "Added"): the same local cleanup as
@@ -1156,11 +1161,11 @@ class ProfileManager @Inject constructor(
      * per-row stamps ("undo-add").
      */
     suspend fun undoAdd(profileId: String): Result<Unit> = runCatching {
-        check(profileId in rosterUndoable) { "Only a profile just added here can be undone." }
-        val p = store.byId(profileId) ?: run { rosterUndoable -= profileId; return@runCatching }
+        check(profileId in rosterUndoable.value) { "Only a profile just added here can be undone." }
+        val p = store.byId(profileId) ?: run { rosterUndoable.update { it - profileId }; return@runCatching }
         check(!p.isDefault) { "The default profile cannot be removed." }
         deleteLocal(p, fromSync = false, tombstone = false)
-        rosterUndoable -= profileId
+        rosterUndoable.update { it - profileId }
         refreshActiveRole()
         Log.i(TAG, "[PROFILES] undo add ${p.username}")
     }

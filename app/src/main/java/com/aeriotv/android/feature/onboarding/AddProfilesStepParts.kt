@@ -23,6 +23,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.aeriotv.android.ui.settings.dpadFocusRing
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -68,7 +71,17 @@ private fun DispatcharrProfile.roleLabel(): String =
 
 /** ON THIS PHONE/TABLET/TV: the profiles already here, each with an "Added" chip. */
 @Composable
-internal fun OnThisDeviceSection(device: String, profiles: List<DispatcharrProfile>) {
+internal fun OnThisDeviceSection(
+    device: String,
+    profiles: List<DispatcharrProfile>,
+    /** Profiles added from the roster this session: Remove instead of the chip. */
+    undoable: Set<String> = emptySet(),
+    onRemove: (DispatcharrProfile) -> Unit = {},
+    removeEnabled: Boolean = true,
+    /** Profile id whose Remove should take focus (TV, right after Add). */
+    focusRemoveFor: String? = null,
+    onFocusConsumed: () -> Unit = {},
+) {
     if (profiles.isEmpty()) return
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         OnboardingSectionLabel("On this $device")
@@ -90,7 +103,23 @@ internal fun OnThisDeviceSection(device: String, profiles: List<DispatcharrProfi
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                AddedChip()
+                if (!p.isDefault && p.id in undoable) {
+                    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+                    if (focusRemoveFor == p.id) {
+                        androidx.compose.runtime.LaunchedEffect(focusRemoveFor) {
+                            kotlinx.coroutines.delay(50)
+                            runCatching { focus.requestFocus() }
+                            onFocusConsumed()
+                        }
+                    }
+                    androidx.compose.material3.TextButton(
+                        onClick = { onRemove(p) },
+                        enabled = removeEnabled,
+                        modifier = Modifier
+                            .focusRequester(focus)
+                            .dpadFocusRing(RoundedCornerShape(50)),
+                    ) { Text("Remove") }
+                } else AddedChip()
             }
         }
     }

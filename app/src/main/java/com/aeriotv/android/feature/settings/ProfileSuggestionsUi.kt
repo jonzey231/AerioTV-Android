@@ -70,6 +70,17 @@ internal fun RosterSuggestions(
     title: String = "From your other devices",
     /** Onboarding: explains what adding copies, under the rows. */
     footnote: String? = null,
+    /**
+     * Settings dialog: true, an added row stays listed as "Added" with Remove.
+     * Onboarding: false, an added row leaves this list (ON THIS PHONE above
+     * lists it, with Remove there).
+     */
+    keepAdded: Boolean = true,
+    /** Called with the new profile id after a successful add. */
+    onAddedProfile: (String) -> Unit = {},
+    /** Onboarding focus: the username whose row should take focus when listed. */
+    focusUsername: String? = null,
+    onFocusConsumed: () -> Unit = {},
 ) {
     val flow = remember(playlistId) { vm.rosterSuggestions(playlistId) }
     val rows by flow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -116,7 +127,7 @@ internal fun RosterSuggestions(
         busy = r.username
         scope.launch {
             vm.addFromRoster(playlistId, r, listed!!, null, null).fold(
-                { busy = null; addedIds[r.username.lowercase()] = it.id; added += r; onAdded() },
+                { busy = null; addedIds[r.username.lowercase()] = it.id; if (keepAdded) added += r; onAddedProfile(it.id); onAdded() },
                 { busy = null; error = it.message ?: "Could not add profile" },
             )
         }
@@ -127,6 +138,14 @@ internal fun RosterSuggestions(
         Text(title, style = MaterialTheme.typography.titleSmall)
         listedRows.forEach { r ->
             var focused by remember { mutableStateOf(false) }
+            val rowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+            if (focusUsername != null && focusUsername.equals(r.username, ignoreCase = true)) {
+                androidx.compose.runtime.LaunchedEffect(focusUsername) {
+                    kotlinx.coroutines.delay(50)
+                    runCatching { rowFocus.requestFocus() }
+                    onFocusConsumed()
+                }
+            }
             val isAdded = added.any { it.username.equals(r.username, ignoreCase = true) }
             val canAdd = enabled && busy == null && !isAdded
             // TV: the row (Center adds) and the role chip are two focus
@@ -135,6 +154,7 @@ internal fun RosterSuggestions(
             Row(
                 Modifier
                     .weight(1f)
+                    .then(if (isTv) Modifier.focusRequester(rowFocus) else Modifier)
                     .heightIn(min = 56.dp)
                     .onFocusChanged { focused = it.isFocused }
                     .settingsRowCard(focused)
@@ -229,7 +249,7 @@ internal fun RosterSuggestions(
                 val user = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
                     ?: DispatcharrUserSummary(id = r.userId, username = r.username)
                 vm.addFromRoster(playlistId, r, user, pw, key).fold(
-                    { credFor = null; addedIds[r.username.lowercase()] = it.id; added += r; onAdded(); null },
+                    { credFor = null; addedIds[r.username.lowercase()] = it.id; if (keepAdded) added += r; onAddedProfile(it.id); onAdded(); null },
                     { it.message ?: "Could not add profile" },
                 )
             },
