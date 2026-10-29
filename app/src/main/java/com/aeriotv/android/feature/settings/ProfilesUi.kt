@@ -1160,7 +1160,7 @@ internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): 
  * row menu Role; cancelling keeps the previous choice.
  */
 @Composable
-internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, vertical: Boolean = false, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
+internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, vertical: Boolean = false, descriptionPerChoice: Boolean = false, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
     var gate by remember { mutableStateOf(false) }
     // Compact by design: one row of radio choices (Standard, Child) plus a single
     // helper line for the selected role, so the user list above it keeps
@@ -1186,7 +1186,10 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
                         colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
                     )
                     Spacer(Modifier.size(6.dp))
-                    Text(r.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                    if (descriptionPerChoice) Column {
+                        Text(r.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                        Text(roleDescription(r), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else Text(r.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
                 }
         }
         if (vertical) {
@@ -1198,7 +1201,7 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
                 com.aeriotv.android.core.profiles.ProfileRole.optionsFor(serverAdmin = null).forEach { r -> choice(r, Modifier.weight(1f)) }
             }
         }
-        Text(
+        if (!descriptionPerChoice) Text(
             roleDescription(selected),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

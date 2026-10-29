@@ -810,10 +810,11 @@ fun AerioTVNavHost(
                         navController.navigate(Routes.CHOOSE_TYPE)
                     },
                     onSetUpFromPhone = { navController.navigate(Routes.TV_SETUP) },
+                    // Same flow as Connect a Server > Dispatcharr (Scan QR code or
+                    // Enter details), with Dispatcharr Sync turned on after connect.
                     onSyncViaDispatcharr = {
                         vm.enableDispatcharrSyncAfterConnect = true
-                        vm.startNewSource(SourceType.DispatcharrUserPass)
-                        navController.navigate(Routes.configure(SourceType.DispatcharrUserPass))
+                        navController.navigate(Routes.CHOOSE_TYPE)
                     },
                     // "Skip for now" is iOS parity. With no playlist saved the channel
                     // list is empty; user can reach Settings -> Change playlist later.
@@ -915,7 +916,11 @@ fun AerioTVNavHost(
                     onSetUpFromPhone = if (chooseIsTv) ({ navController.navigate(Routes.TV_SETUP) }) else null,
                     onBack = { navController.popBackStack() },
                     onChoose = { type ->
-                        vm.enableDispatcharrSyncAfterConnect = false
+                        // Welcome's Sync with Dispatcharr card arrives here with the flag
+                        // on; it holds only for a Dispatcharr pick (Connect a Server clears it).
+                        if (type != SourceType.DispatcharrUserPass && type != SourceType.DispatcharrApiKey) {
+                            vm.enableDispatcharrSyncAfterConnect = false
+                        }
                         // Start a FRESH draft so the add creates a NEW row and
                         // never edits the active playlist (and so the form can't
                         // carry over the active server's API key).

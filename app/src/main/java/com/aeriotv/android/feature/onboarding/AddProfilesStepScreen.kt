@@ -3,7 +3,7 @@ package com.aeriotv.android.feature.onboarding
 import com.aeriotv.android.feature.settings.isServerAdmin
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.QrCodeScanner
@@ -591,6 +591,7 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
     // null = unanswered, true = Yes (ADD A PROFILE open), false = Not now.
     var wantsMore by remember { mutableStateOf<Boolean?>(null) }
     var scanOpen by remember { mutableStateOf(false) }
+    var scanTrigger by remember { mutableStateOf(0) }
     var detailsOpen by remember { mutableStateOf(false) }
     val firstCardFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val firstFieldFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -677,31 +678,35 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
                     if (expanded) { wantsMore = false; scanOpen = false; detailsOpen = false; focusTarget = 2 }
                     else { wantsMore = true; focusTarget = 1 }
                 },
-                highlighted = expanded,
+                // One accent outline at a time: the open child card carries it.
+                highlighted = false,
                 trailing = {
                     Icon(
-                        if (expanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
+                        if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ChevronRight,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 },
             )
             if (wantsMore == true) {
-                com.aeriotv.android.feature.onboarding.components.OnboardingSectionLabel("Add a profile")
                 // TVs have no camera and QrScanActions draws nothing there.
                 if (!isTv) {
                     com.aeriotv.android.feature.onboarding.components.OnboardingCard(
                         icon = Icons.Outlined.QrCodeScanner,
                         title = "Scan a QR code",
                         subtitle = "Use the QR code from your Dispatcharr administrator, or import it from Photos.",
-                        onClick = { scanOpen = !scanOpen; if (scanOpen) detailsOpen = false },
+                        // The card starts the camera directly; Photos and file import sit under it.
+                        onClick = { scanOpen = true; detailsOpen = false; scanStatus = null; scanTrigger++ },
                         highlighted = scanOpen,
                         modifier = Modifier.focusRequester(firstCardFocus),
                     )
-                    if (scanOpen) {
+                    run {
                         com.aeriotv.android.feature.qrscan.QrScanActions(
                             enabled = !scanBusy,
+                            linksOnly = true,
+                            scanTrigger = scanTrigger,
                             onResult = { r ->
+                                scanOpen = true; detailsOpen = false
                                 when (r) {
                                     is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> if (!scanBusy) {
                                         scanBusy = true; scanStatus = null
@@ -740,7 +745,7 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
                         firstFieldModifier = Modifier.focusRequester(firstFieldFocus),
                         beforeSubmit = {
                             // Picking Child runs the existing Child-PIN gate inside RolePicker.
-                            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role, vertical = true) { role = it }
+                            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role, vertical = true, descriptionPerChoice = true) { role = it }
                         },
                     )
                 }
@@ -748,13 +753,20 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth()) }
             Spacer(Modifier.height(4.dp))
             // onDone is the caller's wrapper: adding next to a Child walks the PIN step first.
-            Button(
+            // While Enter details is open, Add profile is the single filled primary.
+            val continueModifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 54.dp)
+                .focusRequester(continueFocus)
+            if (expanded && detailsOpen) androidx.compose.material3.OutlinedButton(
                 onClick = onDone,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 54.dp)
-                    .focusRequester(continueFocus)
-                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+                modifier = continueModifier.dpadFocusRing(RoundedCornerShape(50)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+            ) { Text("Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+            else Button(
+                onClick = onDone,
+                modifier = continueModifier.dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,

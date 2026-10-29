@@ -105,6 +105,10 @@ fun QrScanActions(
     enabled: Boolean = true,
     prompt: String = "Point the camera at a Dispatcharr user QR code or an AerioTV setup code.",
     accept: (ScannedCode.Result) -> String? = ::acceptAnyKnownCode,
+    /** Onboarding: only "Choose from Photos" and "Import file" as small text links; the card above starts the camera. */
+    linksOnly: Boolean = false,
+    /** Bump to open the camera from outside (the onboarding Scan a QR code card). */
+    scanTrigger: Int = 0,
 ) {
     if (rememberIsTvDevice()) return
     val context = LocalContext.current
@@ -147,7 +151,24 @@ fun QrScanActions(
             }
         }
     }
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    androidx.compose.runtime.LaunchedEffect(scanTrigger) {
+        if (scanTrigger > 0) { error = null; scanning = true }
+    }
+    if (linksOnly) Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            androidx.compose.material3.TextButton(
+                onClick = { error = null; picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                enabled = enabled && !busy,
+            ) { Text("Choose from Photos", style = MaterialTheme.typography.bodyMedium) }
+            Spacer(Modifier.size(8.dp))
+            androidx.compose.material3.TextButton(
+                onClick = { error = null; filePicker.launch(CodeTextImport.PICKER_MIME_TYPES) },
+                enabled = enabled && !busy,
+            ) { Text("Import file", style = MaterialTheme.typography.bodyMedium) }
+            if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    } else Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
                 onClick = { error = null; scanning = true },
