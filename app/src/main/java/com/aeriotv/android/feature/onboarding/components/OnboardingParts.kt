@@ -161,3 +161,16 @@ object QrAutoScan {
     fun request() { pending = true }
     fun consume(): Boolean = pending.also { pending = false }
 }
+
+/**
+ * One-shot handoff from a Welcome Drive restore into the configure route's
+ * "Turn on Dispatcharr Sync?" step. [answered] holds playlists whose step was
+ * shown this session so the providers offer leaves Dispatcharr out for them.
+ */
+object RestoreSyncStep {
+    @Volatile private var pending: String? = null
+    private val answered = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    fun request(playlistId: String) { pending = playlistId; answered.add(playlistId) }
+    fun consume(): String? = pending.also { pending = null }
+    fun wasShown(playlistId: String): Boolean = playlistId in answered
+}

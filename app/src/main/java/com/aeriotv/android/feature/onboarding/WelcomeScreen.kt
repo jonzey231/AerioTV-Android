@@ -270,6 +270,11 @@ private fun SyncSection(c: WelcomeContent, sideBySide: Boolean) {
     val dispatcharr = c.onSyncViaDispatcharr
     if (google == null && dispatcharr == null) return
     OnboardingSectionLabel("Keep your devices in sync")
+    Text(
+        "Pick one to start. You can turn on the other at any time, and both work together.",
+        style = MaterialTheme.typography.bodySmall.subtext(),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     val googleRow: @Composable (Modifier) -> Unit = { m ->
         if (google != null) OnboardingCard(
             icon = Icons.Filled.CloudSync,

@@ -31,6 +31,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navigation
 import com.aeriotv.android.core.data.SourceType
+import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
+import kotlinx.coroutines.flow.first
 import com.aeriotv.android.core.data.db.entity.canRecordToServer
 import com.aeriotv.android.core.data.db.entity.dispatcharrEffectiveDvrAccess
 import com.aeriotv.android.ui.LocalDvrAccess
@@ -694,6 +696,21 @@ fun AerioTVNavHost(
 
                 LaunchedEffect(state.phase) {
                     if (state.phase == PlaylistViewModel.Phase.ChannelsReady) {
+                        // A Drive restore that activated a Dispatcharr Direct
+                        // Connect playlist with Dispatcharr Sync off continues
+                        // to the same "Turn on Dispatcharr Sync?" step (then
+                        // Add Profiles) the connect path shows, never auto-on.
+                        val restored = vm.state.value.playlist
+                        if (restoreActivatedPlaylist && restored != null &&
+                            restored.isDispatcharrDirectConnect() &&
+                            !runCatching { syncVm.dispatcharrSyncEnabled.first() }.getOrDefault(false)
+                        ) {
+                            com.aeriotv.android.feature.onboarding.components.RestoreSyncStep.request(restored.id)
+                            navController.navigate(Routes.configure(SourceType.DispatcharrUserPass)) {
+                                popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
+                            }
+                            return@LaunchedEffect
+                        }
                         navController.navigate(Routes.MAIN) {
                             popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
                         }
@@ -952,7 +969,13 @@ fun AerioTVNavHost(
                 var roleStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
                 var childOnly by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
                 var profileStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
-                var syncStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+                // Entered from a Welcome Drive restore: open straight on the
+                // sync step for the restored playlist; Back goes to MAIN.
+                val restorePid = androidx.compose.runtime.saveable.rememberSaveable {
+                    com.aeriotv.android.feature.onboarding.components.RestoreSyncStep.consume() ?: ""
+                }
+                val fromRestore = restorePid.isNotEmpty()
+                var syncStepFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(restorePid.ifEmpty { null }) }
                 // Signed in from a Dispatcharr user QR: the sync step asks the
                 // server for existing AerioTV data (restore offer). Memory only.
                 var qrSignIn by remember { mutableStateOf<com.aeriotv.android.core.qr.QrImportBus.SignIn?>(null) }
@@ -981,6 +1004,11 @@ fun AerioTVNavHost(
 
                 val rolePid = roleStepFor
                 val stepPid = profileStepFor
+                androidx.activity.compose.BackHandler(enabled = fromRestore) {
+                    syncStepFor = null
+                    profileStepFor = null
+                    toMain()
+                }
                 if (rolePid != null) {
                     com.aeriotv.android.feature.onboarding.ProfileRoleStepScreen(
                         playlistId = rolePid,

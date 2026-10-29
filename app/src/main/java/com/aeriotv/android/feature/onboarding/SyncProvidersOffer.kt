@@ -55,6 +55,8 @@ class SyncProvidersOfferViewModel @Inject constructor(
         val active = playlistDao.allOnce().firstOrNull { it.isActive } ?: return null
         val offers = if (store.offerShown(active.id)) emptyList() else {
             val isD = active.isDispatcharrDirectConnect()
+            // The onboarding restore already asked about Dispatcharr Sync for this playlist.
+            val offerD = isD && !com.aeriotv.android.feature.onboarding.components.RestoreSyncStep.wasShown(active.id)
             val drive = store.record(SyncProvidersStore.DRIVE)
             val dsync = if (isD) store.record(SyncProvidersStore.dsyncScope(active.id)) else null
             // Either copy saying "in use" counts; both describe the same owner.
@@ -66,7 +68,7 @@ class SyncProvidersOfferViewModel @Inject constructor(
                 union,
                 driveOnHere = prefs.syncMasterEnabled.first(),
                 dispatcharrOnHere = prefs.dispatcharrSyncEnabledOnce(),
-                activeIsDispatcharr = isD,
+                activeIsDispatcharr = offerD,
             )
         }
         store.disarm()
