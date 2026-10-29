@@ -156,6 +156,7 @@ object SyncItemCatalog {
         )),
         SyncItemGroup("remote", "Remote Control", listOf(
             SyncItem("remoteHints", "Show Remote Hints", listOf("showRemoteHints")),
+            SyncItem("exitFocus", "Default to Exit", listOf("exitDialogFocusExit")),
             SyncItem("playChannelsIn", "Play Channels In", listOf("guideTuneInMini")),
             SyncItem("remoteMap", "Remote Button Map", isData = true, dsyncSuffix = "remoteMap"),
         )),

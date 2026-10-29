@@ -55,7 +55,7 @@ object DsyncSettingsValidator {
 
     val BOOLEANS: Set<String> = setOf(
         "trueBlack", "useCustomAccent", "programInfoButtonGuide", "programInfoButtonList", "showEpgBadgesTv",
-        "showEpgBadgesMobile", "showRemoteHints", "guideTuneInMini", "playerInfoCard.showOnChannelChange",
+        "showEpgBadgesMobile", "showRemoteHints", "exitDialogFocusExit", "guideTuneInMini", "playerInfoCard.showOnChannelChange",
         "liveTvEdgeSwipeOpensSidebar", "skipLoadingScreen", "appleTVChannelFlip", "enableCategoryColors",
         "tmdbPostersEnabled", "autoResumeLastChannel", "logoCornersList", "logoCornersGuide", "logoCornersGuideCells",
         "channelListShowLogos", "channelListShowNumbers", "channelListShowNames", "channelListShowProgramSubtitles",

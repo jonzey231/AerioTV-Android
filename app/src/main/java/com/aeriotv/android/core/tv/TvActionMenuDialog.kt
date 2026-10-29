@@ -80,13 +80,19 @@ fun TvActionMenuDialog(
     // Opens with D-pad focus on the appended Cancel row instead of the first
     // action (the Exit AerioTV? confirm: a stray OK must not close the app).
     focusCancel: Boolean = false,
+    // Opens with D-pad focus explicitly on the first action (Exit AerioTV?
+    // with Default to Exit on). Safe: the OK latch below still ignores the
+    // bare KeyUp of the press that opened the dialog.
+    focusFirstAction: Boolean = false,
 ) {
     val cancelFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-    if (focusCancel) {
+    val firstFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val focusFirst = focusFirstAction && !focusCancel && actions.isNotEmpty()
+    if (focusCancel || focusFirst) {
         androidx.compose.runtime.LaunchedEffect(Unit) {
             // The Dialog window attaches a frame after composition.
             kotlinx.coroutines.delay(50)
-            runCatching { cancelFocus.requestFocus() }
+            runCatching { (if (focusCancel) cancelFocus else firstFocus).requestFocus() }
         }
     }
     // Apple TV look (Logan 2026-09-02): a centred translucent card, the
@@ -129,6 +135,11 @@ fun TvActionMenuDialog(
                         destructive = action.destructive,
                         accent = accent,
                         onActivate = guard.wrap { onDismiss(); action.onClick() },
+                        modifier = if (focusFirst && i == 0) {
+                            Modifier.focusRequester(firstFocus)
+                        } else {
+                            Modifier
+                        },
                     )
                 }
                 TvMenuCapsule(

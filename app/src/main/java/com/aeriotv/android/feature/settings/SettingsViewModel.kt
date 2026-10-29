@@ -357,6 +357,12 @@ class SettingsViewModel @Inject constructor(
     fun setShowRemoteHints(value: Boolean) {
         viewModelScope.launch { prefs.setShowRemoteHints(value) }
     }
+    /** Exit AerioTV? confirm opens focused on Exit instead of Cancel. Default OFF. */
+    val exitDialogFocusExit: StateFlow<Boolean> = prefs.exitDialogFocusExit
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    fun setExitDialogFocusExit(value: Boolean) {
+        viewModelScope.launch { prefs.setExitDialogFocusExit(value) }
+    }
 
     /** TV guide group-selector style: "pills" (top row) or "sidebar". */
     /** Read-only mirror of the Drive sync master switch, for the Settings root

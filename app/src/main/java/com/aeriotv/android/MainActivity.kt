@@ -1520,12 +1520,18 @@ class MainActivity : ComponentActivity() {
                             // on Android TV (issue #16). Sibling of the NavHost so it
                             // overlays every screen. Cancel (appended by the dialog,
                             // initial D-pad focus) dismisses; Exit finishes.
+                            // Default to Exit (Remote Control settings) opens with
+                            // focus on Exit instead; the per-row OK latch still
+                            // ignores the release of the press that opened it.
+                            val exitFocusExit by appPreferences.exitDialogFocusExit
+                                .collectAsState(initial = false)
                             if (showExitConfirm.value) {
                                 val exitGuard = rememberTvMenuGuard()
                                 TvActionMenuDialog(
                                     title = "Exit AerioTV?",
                                     guard = exitGuard,
-                                    focusCancel = true,
+                                    focusCancel = !exitFocusExit,
+                                    focusFirstAction = exitFocusExit,
                                     onDismiss = {
                                         // The dialog calls onDismiss before an action's
                                         // onClick, so decide "cancelled" a frame later.

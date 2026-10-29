@@ -314,6 +314,7 @@ compatibility):
 | dvrDefaultDestination | string | defaultDestination | (Android only) | dvr_default_destination | |
 | dvrSortOrder | string | dvrSortOrder | dvrSortOrder | dvr_sort_order | |
 | showRemoteHints | bool | remoteHints | showRemoteHintsKey | show_remote_hints | |
+| exitDialogFocusExit | bool | exitFocus | (Android only) | exit_dialog_focus_exit | |
 | guideTuneInMini | bool | playChannelsIn | RemoteControlStore.tuneInMiniKey | guide_tune_in_mini | |
 | defaultGroup | string | groupOrder | defaultChannelGroup | default_group_token_<playlistId> | defaultGroup (JSON object, playlist id to token) |
 | lastGroup | string | groupOrder | (Android only) | live_group_token_<playlistId> | lastGroup (JSON object) |

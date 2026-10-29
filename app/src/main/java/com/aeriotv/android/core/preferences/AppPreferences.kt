@@ -663,6 +663,18 @@ class AppPreferences @Inject constructor(
     }
 
     /**
+     * Exit AerioTV? confirm focus (community request 2026-10-29): when true
+     * the dialog opens with D-pad focus on Exit instead of Cancel, since
+     * remote users cancel with Back. Default OFF. Synced as
+     * `exitDialogFocusExit`.
+     */
+    val exitDialogFocusExit: Flow<Boolean> =
+        scopedData.map { it[KEY_EXIT_DIALOG_FOCUS_EXIT.s()] ?: false }
+    suspend fun setExitDialogFocusExit(value: Boolean) {
+        store.edit { it[KEY_EXIT_DIALOG_FOCUS_EXIT.s()] = value }
+    }
+
+    /**
      * TV guide group-selector style (Logan 2026-07-20): "pills" = the top
      * group-pill row (the original layout), "sidebar" = a docked left menu
      * opened with a Left press from the currently-airing column. Mutually
@@ -1882,6 +1894,7 @@ class AppPreferences @Inject constructor(
             r("dvrDefaultDestination", KEY_DVR_DEFAULT_DESTINATION, s),
             r("dvrSortOrder", KEY_DVR_SORT_ORDER, s),
             r("showRemoteHints", KEY_SHOW_REMOTE_HINTS, b),
+            r("exitDialogFocusExit", KEY_EXIT_DIALOG_FOCUS_EXIT, b),
             r("guideTuneInMini", KEY_GUIDE_TUNE_IN_MINI, b),
         ) + ProgramCategory.entries.flatMap { bucket ->
             listOf(Reg(bucket.hexStorageKey, bucket.hexStorageKey, s), Reg(bucket.enabledStorageKey, bucket.enabledStorageKey, b))
@@ -2865,6 +2878,7 @@ class AppPreferences @Inject constructor(
         val KEY_PROGRAM_INFO_BUTTON_LIST = booleanPreferencesKey("programInfoButtonList")
         val KEY_PLAYER_SHOW_CHANNEL_INFO_CARD = booleanPreferencesKey("playerShowChannelInfoCard")
         val KEY_SHOW_REMOTE_HINTS = booleanPreferencesKey("show_remote_hints")
+        val KEY_EXIT_DIALOG_FOCUS_EXIT = booleanPreferencesKey("exit_dialog_focus_exit")
         val KEY_STARTUP_REFRESH_RATE = stringPreferencesKey("startup_refresh_rate")
         val KEY_VOD_LIBRARY_REFRESH_HOURS = intPreferencesKey("vod_library_refresh_hours")
         val KEY_MOVIES_SORT_ORDER = stringPreferencesKey("movies_sort_order")
