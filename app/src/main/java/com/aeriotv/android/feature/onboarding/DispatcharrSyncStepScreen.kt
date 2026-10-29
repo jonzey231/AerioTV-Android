@@ -133,7 +133,8 @@ fun DispatcharrSyncStepScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = vp.gutter, vertical = 24.dp),
-        contentAlignment = Alignment.TopCenter,
+        // Centered like the Welcome and Connect steps before it (Logan, 2026-10-29).
+        contentAlignment = Alignment.Center,
     ) {
         Column(
             modifier = if (vp.onboardingMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
