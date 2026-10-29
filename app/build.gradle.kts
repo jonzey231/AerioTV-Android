@@ -272,10 +272,16 @@ dependencies {
     implementation(libs.zxing.core)
     // In-app QR scanner (phones and tablets): CameraX preview + ImageAnalysis
     // frames fed to the same zxing core decoder. No Play services scanner.
-    implementation(libs.androidx.camera.core)
-    implementation(libs.androidx.camera.camera2)
-    implementation(libs.androidx.camera.lifecycle)
-    implementation(libs.androidx.camera.view)
+    // camera-video (recording) is excluded everywhere: nothing records, and
+    // CameraX 1.6.2's camera-video depends on media3-muxer 1.9.0, which
+    // dragged EVERY Media3 runtime artifact to 1.9.0 while the app compiles
+    // against the catalog's 1.4.1 (2026-10-28: NoSuchMethodError on
+    // MediaSession.getSessionCompatToken, every play crashed on the Streamer).
+    // The media3 pin in configurations.all below is the second guard.
+    implementation(libs.androidx.camera.core) { exclude(group = "androidx.camera", module = "camera-video") }
+    implementation(libs.androidx.camera.camera2) { exclude(group = "androidx.camera", module = "camera-video") }
+    implementation(libs.androidx.camera.lifecycle) { exclude(group = "androidx.camera", module = "camera-video") }
+    implementation(libs.androidx.camera.view) { exclude(group = "androidx.camera", module = "camera-video") }
 
     // ProfileInstaller: hooks into androidx.startup to AOT-compile the methods
     // listed in src/main/baseline-prof.txt at install time. Without this the
@@ -288,4 +294,18 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
 
     debugImplementation(libs.androidx.ui.tooling)
+}
+
+// Every androidx.media3 artifact resolves to the catalog version on every
+// classpath. A transitive dependency asking for a newer Media3 (CameraX's
+// camera-video did, 2026-10-28) would otherwise raise the RUNTIME classpath
+// above the COMPILE classpath and the app would crash on APIs that moved.
+// Media3 is bumped on purpose only, together with libs/media3-decoder-ffmpeg.aar.
+configurations.all {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "androidx.media3") {
+            useVersion(libs.versions.media3.get())
+            because("Media3 runtime must match the compile classpath (see app/build.gradle.kts dependencies)")
+        }
+    }
 }
