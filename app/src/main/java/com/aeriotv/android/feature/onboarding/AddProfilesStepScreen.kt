@@ -134,6 +134,19 @@ fun AddProfilesStepScreen(
     onboarding: Boolean = false,
     vm: AddProfilesStepViewModel = hiltViewModel(),
 ) {
+    // Assumption A (2026-10-29): once a Child exists, every Admin and Standard
+    // profile added here sets its PIN before the step ends; cancel undoes those adds.
+    val pinVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
+    var pinWalk by remember { mutableStateOf(false) }
+    val finishStep = onDone
+    @Suppress("NAME_SHADOWING")
+    val onDone: () -> Unit = {
+        if (pinVm.anyChild(playlistId) && pinVm.pinsMissingForChild(playlistId).isNotEmpty()) pinWalk = true else finishStep()
+    }
+    if (pinWalk) {
+        com.aeriotv.android.feature.settings.PinAfterAdd(playlistId, pinVm) { pinWalk = false; finishStep() }
+        return
+    }
     var users by remember { mutableStateOf<List<DispatcharrUserSummary>?>(null) }
     val selected = remember { mutableStateListOf<Int>() }
     var busy by remember { mutableStateOf(false) }
@@ -367,9 +380,9 @@ fun AddProfilesStepScreen(
                     onClick = {
                         when {
                             selected.isEmpty() -> onDone()
-                            // A Child row needs an Admin PIN on this device first.
+                            // A Child row needs every Admin and Standard profile to hold a PIN first.
                             list.any { it.id in selected && roleOf(it) == com.aeriotv.android.core.profiles.ProfileRole.Child } &&
-                                !profilesVm.adminHasPin(playlistId) -> childGate = true
+                                !profilesVm.childGateClear(playlistId) -> childGate = true
                             else -> addSelected()
                         }
                     },

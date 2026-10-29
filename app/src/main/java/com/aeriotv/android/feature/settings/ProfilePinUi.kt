@@ -407,17 +407,19 @@ fun SetPinFlow(
     playlistId: String,
     profile: DispatcharrProfile,
     vm: ProfilesViewModel,
+    /** Reset with a temporary PIN: hand the new PIN back instead of saving it (no current PIN step). */
+    onChosen: ((PinType, List<String>) -> Unit)? = null,
     onClose: (String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var needsCurrent by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(profile.id) { needsCurrent = vm.needsCurrentPin(playlistId, profile.id) }
+    LaunchedEffect(profile.id) { needsCurrent = onChosen == null && vm.needsCurrentPin(playlistId, profile.id) }
     val nc = needsCurrent ?: return
     var current by remember { mutableStateOf<List<String>?>(null) }
     var type by remember { mutableStateOf<PinType?>(null) }
     var first by remember { mutableStateOf<List<String>?>(null) }
     var mismatch by remember { mutableStateOf<String?>(null) }
-    val title = if (vm.hasPin(profile.id)) "Change PIN" else "Set PIN"
+    val title = if (vm.hasPin(profile.id) && onChosen == null) "Change PIN" else "Set PIN"
 
     when {
         nc && current == null -> PinEntryDialog(
@@ -466,6 +468,7 @@ fun SetPinFlow(
                     null
                 } else {
                     val t = type!!
+                    if (onChosen != null) { onChosen(t, seq); return@PinEntryDialog null }
                     scope.launch {
                         onClose(vm.setPin(playlistId, profile.id, t, seq, current).exceptionOrNull()?.message)
                     }

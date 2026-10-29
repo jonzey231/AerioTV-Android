@@ -66,7 +66,7 @@ import kotlinx.coroutines.launch
 /**
  * Profiles phase 2b (2026-10-17): the Child profile's Manage Profiles row
  * and page, the TV launch picker, and the "Ask who is watching at launch"
- * toggle. Copy: "Manage Profiles", "Enter an Admin PIN", "Who is watching?".
+ * toggle. Copy: "Manage Profiles", "Enter a PIN from an Admin or Standard profile", "Who is watching?".
  */
 
 /** Bottom of a Child's Settings root list. */
@@ -143,7 +143,7 @@ fun ManageProfilesPage(onBack: () -> Unit) {
                             },
                         )
                     }
-                    SettingsSectionFooter("Enter an Admin PIN to switch profiles.")
+                    SettingsSectionFooter("Enter a PIN from an Admin or Standard profile to switch profiles.")
                 }
             } else {
                 itemsIndexed(profiles, key = { _, p -> p.id }) { i, p ->
@@ -184,7 +184,7 @@ fun ManageProfilesPage(onBack: () -> Unit) {
         }
     }
     if (asking) {
-        AdminPinDialog(pid, vm, title = "Enter an Admin PIN", onDismiss = { asking = false }) {
+        AdminPinDialog(pid, vm, title = "Enter a PIN from an Admin or Standard profile", onDismiss = { asking = false }) {
             asking = false
             unlocked = true
         }
@@ -279,7 +279,7 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
                             enabled = !busy,
                             modifier = (if (isLast) Modifier.focusRequester(lastFocus) else Modifier)
                                 .focusRequester(adder.requester(p.id)),
-                            onLongClick = if (launchRole == com.aeriotv.android.core.profiles.ProfileRole.Admin) {
+                            onLongClick = if (com.aeriotv.android.core.profiles.RoleRules.isFullAccess(launchRole)) {
                                 { if (!busy) moveFor = p }
                             } else null,
                         ) { if (manager.hasPin(p.id)) pinFor = p else choose(p) }
@@ -473,7 +473,7 @@ fun TvProfilePickerDialog(onDismiss: () -> Unit) {
                             current = isCurrent,
                             modifier = (if (isCurrent) Modifier.focusRequester(currentFocus) else Modifier)
                                 .focusRequester(adder.requester(p.id)),
-                            onLongClick = if (role == com.aeriotv.android.core.profiles.ProfileRole.Admin) {
+                            onLongClick = if (com.aeriotv.android.core.profiles.RoleRules.isFullAccess(role)) {
                                 { if (!busy) moveFor = p }
                             } else null,
                         ) {
@@ -615,7 +615,7 @@ internal class PickerAdder(
     @Composable
     fun Dialogs() {
         if (askPin) {
-            AdminPinDialog(playlistId, vm, title = "Enter an Admin PIN", onDismiss = { askPin = false; knownIds = null }) {
+            AdminPinDialog(playlistId, vm, title = "Enter a PIN from an Admin or Standard profile", onDismiss = { askPin = false; knownIds = null }) {
                 askPin = false
                 open()
             }

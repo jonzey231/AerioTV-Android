@@ -468,7 +468,7 @@ Row: `[userId:int, username:string, displayName:string(max 40 B), pinType:"none"
   Sync step has pulled, and Settings > Playlists > (playlist) > Add Profile) and are added only by
   an explicit choice on that device. Adding one uses the normal credential path (admin-listed
   `api_key`, else a typed password or API key) and then applies the row's role, PIN, avatar,
-  displayName, and order. A Child row needs an Admin PIN on the device first. Tombstones apply on
+  displayName, and order. A Child row needs every Admin and Standard profile on the device to hold a PIN first. Tombstones apply on
   every device. Each pull logs `[DSYNC] profiles: N roster rows available, not added (opt-in)`.
 - Stale-device rule: a writer does not send a local row the server list lacks when that row has no
   unsent local change (its `updatedAt` is at or before this device's last acknowledged write) and
@@ -476,7 +476,8 @@ Row: `[userId:int, username:string, displayName:string(max 40 B), pinType:"none"
   row is older than the server's newest row by more than the 90-day tombstone window. The writer
   logs `[DSYNC] profiles: local row <user> older than server roster, not re-sent` and adopts the
   server list; the local profile stays on that device until a tombstone or the user removes it.
-- `role` is the app-local role set by an Admin on the device (default: `"admin"` when the Dispatcharr user level is Admin, else `"user"`). `child` hides the switcher, the Profiles section, and every other profile name; leaving a child profile needs an Admin PIN.
+- `role` is the app-local role set by an Admin or Standard profile on the device (default: `"admin"` when the Dispatcharr user level is Admin, else `"user"`). Inside AerioTV `admin` and `user` (shown as Standard) are identical (owner rule 2026-10-29): the label only reflects the user's Dispatcharr access, and both can add, remove, and reorder profiles, change roles, reset other profiles' PINs, and write this key. Only actions that call Dispatcharr admin endpoints (Channel Profiles, Enable API access, the server users list) check the server admin flag. `child` hides the switcher, the Profiles section, and every other profile name; leaving a child profile needs a PIN from an Admin or Standard profile.
+- While any profile is a Child, every Admin and Standard profile holds a PIN (Numbers or Directions): setting a role to Child first walks the acting profile through each missing PIN (its own first, then a temporary PIN per other profile); an Admin or Standard profile added while a Child exists sets its PIN right after the add (cancel undoes the add); removing such a PIN is denied ("While a Child profile exists, Admin and Standard profiles keep a PIN."), and a reset sets a temporary PIN instead of clearing it.
 - `pinHash` = lowercase hex SHA-256 of `pinSalt bytes || UTF-8 PIN` where the PIN is digits for
   numbers and the letters `U D L R` for directions (example `"UULR"`). Empty when `pinType` is `"none"`.
 - `pinSalt` = 16 random bytes from the platform CSPRNG, lowercase hex, regenerated on every PIN set
@@ -486,11 +487,11 @@ Row: `[userId:int, username:string, displayName:string(max 40 B), pinType:"none"
 - Device Admin PIN (device-local, never synced, not in this key): when onboarding signs in as a
   Standard Dispatcharr user, "Who is this profile for?" offers Standard (default; wire value `user`) or Child. Child sets a
   Device Admin PIN (Numbers or Directions) tied to no profile, and the profile becomes a Child: a
-  kid-only device. Every "Enter an Admin PIN" gate (leaving a Child, Manage Profiles, Add Profile,
-  role changes, removing a Child) accepts the Device Admin PIN as well as any Admin profile's PIN,
+  kid-only device. Every "Enter a PIN from an Admin or Standard profile" gate (leaving a Child, Manage Profiles, Add Profile,
+  role changes, removing a Child) accepts the Device Admin PIN as well as any Admin or Standard profile's PIN,
   and it stays valid after an Admin profile is added. It is changed or removed in Settings >
-  Playlists > Profiles (Admin profiles) or Manage Profiles behind the PIN, both needing the current
-  Device Admin PIN; the last Admin PIN stays while any profile is a Child.
+  Playlists > Profiles (Admin and Standard profiles) or Manage Profiles behind the PIN, both needing the current
+  Device Admin PIN; it stays while any profile is a Child and no Admin or Standard profile has a PIN.
 
 ## 5. Profiles flow
 

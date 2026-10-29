@@ -44,13 +44,14 @@ class RoleRulesTest {
         assertEquals(RoleRules.AddPath.Manual, RoleRules.addPath(baseIsServerAdmin = false, usersListForbidden = true))
     }
 
-    @Test fun channelProfilesNeedServerAdminAndProfilesKeyNeedsLocalAdmin() {
+    @Test fun channelProfilesNeedServerAdminAndProfilesKeyNeedsFullAccess() {
         assertTrue(RoleRules.canAssignChannelProfiles(true, true, A))
+        assertTrue(RoleRules.canAssignChannelProfiles(true, true, U))
         assertFalse(RoleRules.canAssignChannelProfiles(false, true, A))
-        assertFalse(RoleRules.canAssignChannelProfiles(true, false, A))
-        assertFalse(RoleRules.canAssignChannelProfiles(true, true, U))
+        assertFalse(RoleRules.canAssignChannelProfiles(true, false, U))
+        assertFalse(RoleRules.canAssignChannelProfiles(true, true, C))
         assertTrue(RoleRules.canWriteProfilesKey(A))
-        assertFalse(RoleRules.canWriteProfilesKey(U))
+        assertTrue(RoleRules.canWriteProfilesKey(U))
         assertFalse(RoleRules.canWriteProfilesKey(C))
         assertFalse(RoleRules.canWriteProfilesKey(null))
     }
@@ -71,35 +72,66 @@ class RoleRulesTest {
         assertTrue(RoleRules.deepLinkAllowed(U, "developer"))
     }
 
-    @Test fun onlyAdminManages() {
+    @Test fun adminAndStandardManageAlike() {
         assertTrue(RoleRules.canManageProfiles(A))
-        assertFalse(RoleRules.canManageProfiles(U))
+        assertTrue(RoleRules.canManageProfiles(U))
         assertFalse(RoleRules.canManageProfiles(C))
-        assertFalse(RoleRules.canChangeRoles(U))
+        assertTrue(RoleRules.canChangeRoles(A))
+        assertTrue(RoleRules.canChangeRoles(U))
+        assertFalse(RoleRules.canChangeRoles(C))
+        assertTrue(RoleRules.isFullAccess(U))
+        assertFalse(RoleRules.isFullAccess(C))
+        assertFalse(RoleRules.isFullAccess(null))
     }
 
     @Test fun roleChangeGates() {
-        assertTrue(RoleRules.roleChange(U, U, C, true, false) is RoleChange.Denied)
-        assertEquals(RoleChange.NeedsAdminPinCreated, RoleRules.roleChange(A, U, C, adminHasPin = false, targetIsLastAdmin = false))
-        assertEquals(RoleChange.Allowed, RoleRules.roleChange(A, U, C, adminHasPin = true, targetIsLastAdmin = false))
-        assertEquals(RoleChange.NeedsAdminPinEntry, RoleRules.roleChange(A, C, U, true, false))
-        assertEquals(RoleChange.NeedsAdminPinEntry, RoleRules.roleChange(A, C, A, true, false))
-        assertTrue(RoleRules.roleChange(A, A, U, true, targetIsLastAdmin = true) is RoleChange.Denied)
-        assertEquals(RoleChange.Allowed, RoleRules.roleChange(A, A, U, false, targetIsLastAdmin = false))
-        assertEquals(RoleChange.Allowed, RoleRules.roleChange(A, U, U, false, false))
+        // Child cannot change roles; Admin and Standard act alike.
+        assertTrue(RoleRules.roleChange(C, U, C, 0, true, false) is RoleChange.Denied)
+        listOf(A, U).forEach { actor ->
+            assertEquals(RoleChange.NeedsPinsCreated, RoleRules.roleChange(actor, U, C, missingPins = 1, anyPinExists = true, targetIsLastFullAccess = false))
+            assertEquals(RoleChange.NeedsPinsCreated, RoleRules.roleChange(actor, U, C, missingPins = 0, anyPinExists = false, targetIsLastFullAccess = false))
+            assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, U, C, missingPins = 0, anyPinExists = true, targetIsLastFullAccess = false))
+            assertEquals(RoleChange.NeedsPinEntry, RoleRules.roleChange(actor, C, U, 0, true, false))
+            assertEquals(RoleChange.NeedsPinEntry, RoleRules.roleChange(actor, C, A, 0, true, false))
+            assertTrue(RoleRules.roleChange(actor, A, C, 0, true, targetIsLastFullAccess = true) is RoleChange.Denied)
+            assertTrue(RoleRules.roleChange(actor, U, C, 0, true, targetIsLastFullAccess = true) is RoleChange.Denied)
+            // Admin to Standard is free: both are full access.
+            assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, A, U, 0, false, targetIsLastFullAccess = true))
+            assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, U, U, 0, false, false))
+        }
+    }
+
+    @Test fun pinsMissingForChildListsAdminAndStandardOwnFirst() {
+        val holders = listOf(
+            RoleRules.PinHolder("a", A, hasPin = true),
+            RoleRules.PinHolder("u1", U, hasPin = false),
+            RoleRules.PinHolder("me", A, hasPin = false, isActor = true),
+            RoleRules.PinHolder("c", C, hasPin = false),
+            RoleRules.PinHolder("u2", U, hasPin = false),
+        )
+        assertEquals(listOf("me", "u1", "u2"), RoleRules.pinsMissingForChild(holders))
+        assertEquals(listOf("me", "u2"), RoleRules.pinsMissingForChild(holders, becomingChild = "u1"))
+        assertTrue(RoleRules.pinsMissingForChild(holders.filter { it.hasPin || it.role == C }).isEmpty())
     }
 
     @Test fun pinRemovalAndReset() {
-        assertTrue(RoleRules.removeNeedsAdminPin(C))
-        assertFalse(RoleRules.removeNeedsAdminPin(U))
-        assertFalse(RoleRules.canRemoveAdminPin(A, childExists = true, otherAdminPins = 0))
-        assertTrue(RoleRules.canRemoveAdminPin(A, childExists = true, otherAdminPins = 1))
-        assertTrue(RoleRules.canRemoveAdminPin(A, childExists = false, otherAdminPins = 0))
-        assertTrue(RoleRules.canRemoveAdminPin(U, childExists = true, otherAdminPins = 0))
-        assertEquals(ResetGate.EnterOwnPin, RoleRules.resetGate(A, actorHasPin = true, childExists = true))
-        assertEquals(ResetGate.ConfirmOnly, RoleRules.resetGate(A, actorHasPin = false, childExists = false))
-        assertTrue(RoleRules.resetGate(A, actorHasPin = false, childExists = true) is ResetGate.Denied)
-        assertTrue(RoleRules.resetGate(U, actorHasPin = true, childExists = false) is ResetGate.Denied)
+        assertTrue(RoleRules.removeNeedsPin(C))
+        assertFalse(RoleRules.removeNeedsPin(U))
+        // While a Child exists Admin and Standard keep a PIN (covers the old last Admin PIN rule).
+        assertFalse(RoleRules.canRemovePin(A, childExists = true))
+        assertFalse(RoleRules.canRemovePin(U, childExists = true))
+        assertTrue(RoleRules.canRemovePin(C, childExists = true))
+        assertTrue(RoleRules.canRemovePin(A, childExists = false))
+        assertTrue(RoleRules.canRemovePin(U, childExists = false))
+        assertFalse(RoleRules.canRemoveDevicePin(childExists = true, otherPins = 0))
+        assertTrue(RoleRules.canRemoveDevicePin(childExists = true, otherPins = 1))
+        assertTrue(RoleRules.canRemoveDevicePin(childExists = false, otherPins = 0))
+        listOf(A, U).forEach { actor ->
+            assertEquals(ResetGate.EnterOwnPin, RoleRules.resetGate(actor, actorHasPin = true, childExists = true))
+            assertEquals(ResetGate.ConfirmOnly, RoleRules.resetGate(actor, actorHasPin = false, childExists = false))
+            assertTrue(RoleRules.resetGate(actor, actorHasPin = false, childExists = true) is ResetGate.Denied)
+        }
+        assertTrue(RoleRules.resetGate(C, actorHasPin = true, childExists = false) is ResetGate.Denied)
     }
 
     @Test fun launchPicker() {
@@ -116,7 +148,7 @@ class RoleRulesTest {
         assertTrue(RoleRules.canEditAvatar(ProfileRole.Admin, isOwn = false))
         assertTrue(RoleRules.canEditAvatar(ProfileRole.User, isOwn = true))
         assertTrue(RoleRules.canEditAvatar(ProfileRole.Child, isOwn = true))
-        assertFalse(RoleRules.canEditAvatar(ProfileRole.User, isOwn = false))
+        assertTrue(RoleRules.canEditAvatar(ProfileRole.User, isOwn = false))
         assertFalse(RoleRules.canEditAvatar(ProfileRole.Child, isOwn = false))
     }
 }

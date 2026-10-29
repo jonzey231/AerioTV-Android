@@ -269,11 +269,44 @@ class ProfileManager @Inject constructor(
 
     fun anyChild(playlistId: String): Boolean = store.forPlaylist(playlistId).any { it.effectiveRole() == ProfileRole.Child }
 
-    /** Admin profiles on [playlistId] that have a PIN. */
+    /** Admin and Standard profiles on [playlistId] that have a PIN (equivalent in AerioTV). */
     fun adminPinHolders(playlistId: String): List<DispatcharrProfile> =
-        store.forPlaylist(playlistId).filter { it.effectiveRole() == ProfileRole.Admin && pinStore.hasPin(it.id) }
+        store.forPlaylist(playlistId).filter { RoleRules.isFullAccess(it.effectiveRole()) && pinStore.hasPin(it.id) }
 
     fun adminHasPin(playlistId: String): Boolean = adminPinHolders(playlistId).isNotEmpty() || hasDeviceAdminPin(playlistId)
+
+    /**
+     * Assumption A: Admin and Standard profiles that still need a PIN while
+     * a Child exists (or once [becomingChild] turns Child), own first.
+     */
+    fun pinsMissingForChild(playlistId: String, becomingChild: String? = null): List<DispatcharrProfile> {
+        val actor = activeProfileIdNow(playlistId)
+        val all = store.forPlaylist(playlistId)
+        val ids = RoleRules.pinsMissingForChild(
+            all.map { RoleRules.PinHolder(it.id, it.effectiveRole(), pinStore.hasPin(it.id), it.id == actor) },
+            becomingChild,
+        )
+        return ids.mapNotNull { id -> all.firstOrNull { it.id == id } }
+    }
+
+    /** Profiles added while a Child exists that still owe their PIN (assumption A, add flow). */
+    private val pendingPinAdds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun isPendingPinAdd(profileId: String): Boolean = profileId in pendingPinAdds
+
+    /** True when [profileId] was just added while a Child exists and has no PIN yet. */
+    fun needsPinAfterAdd(playlistId: String, profileId: String): Boolean =
+        anyChild(playlistId) && RoleRules.isFullAccess(roleOf(profileId)) && !pinStore.hasPin(profileId)
+
+    /** The PIN step after an add was cancelled: the add is undone (a Child exists, so a PIN is required). */
+    suspend fun discardPendingAdds(playlistId: String) {
+        val drop = store.forPlaylist(playlistId).filter { it.id in pendingPinAdds && !pinStore.hasPin(it.id) && !it.isDefault }
+        drop.forEach { p ->
+            pendingPinAdds.remove(p.id)
+            deleteLocal(p, fromSync = false)
+            Log.i(TAG, "[PROFILE] add of ${p.username} undone: no PIN while a Child exists")
+        }
+    }
 
     // ---- Device Admin PIN (device-local, never synced) ----
     // A PIN tied to no profile: set in onboarding when the first profile is a
@@ -299,7 +332,7 @@ class ProfileManager @Inject constructor(
         if (pinStore.hasPin(id)) {
             check(verifyPin(id, current.orEmpty()) == PinCheck.Ok) { "Wrong PIN" }
         } else {
-            check(onboarding || activeRole(playlistId) == ProfileRole.Admin) { "Only an Admin profile can set the Device Admin PIN." }
+            check(onboarding || RoleRules.isFullAccess(activeRole(playlistId))) { "Only an Admin or Standard profile can set the Device Admin PIN." }
         }
         check(pinStore.set(id, type, entries)) { "Enter 4 to 6" }
         Log.i(TAG, "[PROFILE] device admin pin set on ${playlistId.take(8)}")
@@ -307,8 +340,8 @@ class ProfileManager @Inject constructor(
 
     /** Null = removable; otherwise why the device PIN must stay. */
     fun deviceAdminPinRemovalBlock(playlistId: String): String? =
-        if (RoleRules.canRemoveAdminPin(ProfileRole.Admin, anyChild(playlistId), adminPinHolders(playlistId).size)) null
-        else "This is the last Admin PIN. A Child profile needs an Admin PIN to leave it, so this PIN stays while any profile is a Child."
+        if (RoleRules.canRemoveDevicePin(anyChild(playlistId), adminPinHolders(playlistId).size)) null
+        else "This is the last PIN that can leave a Child profile, so it stays while any profile is a Child."
 
     fun removeDeviceAdminPin(playlistId: String, current: List<String>): Result<Unit> = runCatching {
         val id = deviceAdminPinId(playlistId)
@@ -339,9 +372,10 @@ class ProfileManager @Inject constructor(
     private val adminTickets = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
-     * "Enter an Admin PIN": any Admin profile's PIN on [playlistId] passes.
-     * Each Admin keeps its own wrong-PIN backoff. Ok grants one Admin ticket
-     * and a switch ticket for the matching Admin.
+     * "Enter a PIN from an Admin or Standard profile": any full-access
+     * profile's PIN (or the Device Admin PIN) on [playlistId] passes. Each
+     * keeps its own wrong-PIN backoff. Ok grants one ticket and a switch
+     * ticket for the matching profile.
      */
     @Synchronized
     fun verifyAnyAdminPin(playlistId: String, entries: List<String>): PinCheck {
@@ -393,23 +427,24 @@ class ProfileManager @Inject constructor(
     /** Pure decision for the UI: what setting [profileId] to [to] needs. */
     fun roleChangeGate(playlistId: String, profileId: String, to: ProfileRole): RoleRules.RoleChange {
         val target = store.byId(profileId) ?: return RoleRules.RoleChange.Denied("Profile not found")
-        val admins = store.forPlaylist(playlistId).count { it.effectiveRole() == ProfileRole.Admin }
+        val full = store.forPlaylist(playlistId).count { RoleRules.isFullAccess(it.effectiveRole()) }
         return RoleRules.roleChange(
             actor = activeRole(playlistId),
             from = target.effectiveRole(),
             to = to,
-            adminHasPin = adminHasPin(playlistId),
-            targetIsLastAdmin = target.effectiveRole() == ProfileRole.Admin && admins <= 1,
+            missingPins = pinsMissingForChild(playlistId, becomingChild = profileId).size,
+            anyPinExists = adminPinIds(playlistId).any { it != profileId },
+            targetIsLastFullAccess = RoleRules.isFullAccess(target.effectiveRole()) && full <= 1,
         )
     }
 
-    /** Set [profileId]'s role. Leaving Child needs an Admin ticket ([verifyAnyAdminPin]). */
+    /** Set [profileId]'s role. Leaving Child needs a PIN ticket ([verifyAnyAdminPin]). */
     fun setRole(playlistId: String, profileId: String, to: ProfileRole): Result<Unit> = runCatching {
         val target = store.byId(profileId) ?: error("Profile not found")
         when (val g = roleChangeGate(playlistId, profileId, to)) {
             is RoleRules.RoleChange.Denied -> error(g.reason)
-            RoleRules.RoleChange.NeedsAdminPinCreated -> error("Set a PIN on an Admin profile first.")
-            RoleRules.RoleChange.NeedsAdminPinEntry -> check(consumeAdminTicket(playlistId)) { "Enter an Admin PIN" }
+            RoleRules.RoleChange.NeedsPinsCreated -> error(RoleRules.KEEP_PIN_REASON)
+            RoleRules.RoleChange.NeedsPinEntry -> check(consumeAdminTicket(playlistId)) { "Enter a PIN from an Admin or Standard profile" }
             RoleRules.RoleChange.Allowed -> Unit
         }
         val from = target.effectiveRole()
@@ -461,36 +496,47 @@ class ProfileManager @Inject constructor(
         return r
     }
 
-    /** An Admin profile may manage any profile's PIN; anyone else only their own. */
+    /**
+     * An Admin or Standard profile may manage any profile's PIN; a Child only
+     * its own. A profile just added while a Child exists may set its first
+     * PIN from the add flow whoever is active (kid-only device picker add).
+     */
     suspend fun canManagePin(playlistId: String, profileId: String): Boolean =
-        activeRole(playlistId) == ProfileRole.Admin || activeProfileIdNow(playlistId) == profileId
+        RoleRules.isFullAccess(activeRole(playlistId)) || activeProfileIdNow(playlistId) == profileId ||
+            (profileId in pendingPinAdds && !pinStore.hasPin(profileId))
 
     /** Changing or removing ANY PIN needs that profile's existing PIN (phase 2b). */
     @Suppress("UNUSED_PARAMETER")
     suspend fun needsCurrentPin(playlistId: String, profileId: String): Boolean = pinStore.hasPin(profileId)
 
-    /** Null = removable; otherwise why the PIN must stay (last Admin PIN while a Child exists). */
+    /** Null = removable; otherwise why the PIN must stay (assumption A: a Child exists). */
     fun pinRemovalBlock(playlistId: String, profileId: String): String? {
         val role = roleOf(profileId) ?: return null
-        val others = adminPinIds(playlistId).count { it != profileId }
-        return if (RoleRules.canRemoveAdminPin(role, anyChild(playlistId), others)) null
-        else "This is the last Admin PIN. A Child profile needs an Admin PIN to leave it, so this PIN stays while any profile is a Child."
+        return if (RoleRules.canRemovePin(role, anyChild(playlistId))) null else RoleRules.KEEP_PIN_REASON
     }
 
-    /** What an Admin reset of another profile's PIN needs. */
+    /** What a reset of another profile's PIN needs. */
     fun resetGate(playlistId: String): RoleRules.ResetGate {
         val actor = activeProfile(playlistId)
         return RoleRules.resetGate(activeRole(playlistId), actor?.let { pinStore.hasPin(it.id) } == true, anyChild(playlistId))
     }
 
     /**
-     * Admin reset of [profileId]'s forgotten PIN. [adminEntries] is the acting
-     * Admin's own PIN (null for the confirm-only case).
+     * Reset of [profileId]'s forgotten PIN by an Admin or Standard profile.
+     * [adminEntries] is the actor's own PIN (null for the confirm-only case).
+     * While a Child exists an Admin or Standard target must keep a PIN, so
+     * [replacement] (a temporary PIN the actor sets) is required then.
      */
-    suspend fun resetPin(playlistId: String, profileId: String, adminEntries: List<String>?): Result<Unit> = runCatching {
+    suspend fun resetPin(
+        playlistId: String,
+        profileId: String,
+        adminEntries: List<String>?,
+        replacement: Pair<PinType, List<String>>? = null,
+    ): Result<Unit> = runCatching {
         val actor = activeProfile(playlistId) ?: error("Profile not found")
         check(actor.id != profileId) { "Use Remove PIN for this profile." }
-        pinRemovalBlock(playlistId, profileId)?.let { error(it) }
+        val mustKeep = pinRemovalBlock(playlistId, profileId)
+        if (mustKeep != null && replacement == null) error(mustKeep)
         when (val g = resetGate(playlistId)) {
             is RoleRules.ResetGate.Denied -> error(g.reason)
             RoleRules.ResetGate.EnterOwnPin -> {
@@ -499,9 +545,15 @@ class ProfileManager @Inject constructor(
             }
             RoleRules.ResetGate.ConfirmOnly -> Unit
         }
-        pinStore.remove(profileId)
-        mutated(profileId, "pin reset")
-        Log.i(TAG, "[PROFILE] pin removed for ${store.byId(profileId)?.username}")
+        if (replacement != null) {
+            check(pinStore.set(profileId, replacement.first, replacement.second)) { "Enter 4 to 6" }
+            mutated(profileId, "pin reset")
+            Log.i(TAG, "[PROFILE] pin reset to a temporary pin for ${store.byId(profileId)?.username}")
+        } else {
+            pinStore.remove(profileId)
+            mutated(profileId, "pin reset")
+            Log.i(TAG, "[PROFILE] pin removed for ${store.byId(profileId)?.username}")
+        }
     }
 
     suspend fun setPin(
@@ -511,19 +563,20 @@ class ProfileManager @Inject constructor(
         entries: List<String>,
         current: List<String>?,
     ): Result<Unit> = runCatching {
-        check(canManagePin(playlistId, profileId)) { "Only an Admin profile can change another profile's PIN." }
+        check(canManagePin(playlistId, profileId)) { "Only an Admin or Standard profile can change another profile's PIN." }
         val had = pinStore.hasPin(profileId)
         if (needsCurrentPin(playlistId, profileId)) {
             check(verifyPin(profileId, current.orEmpty()) == PinCheck.Ok) { "Wrong PIN" }
             switchTickets.remove(profileId)
         }
         check(pinStore.set(profileId, type, entries)) { "Enter 4 to 6" }
+        pendingPinAdds.remove(profileId)
         mutated(profileId, "pin set")
         Log.i(TAG, "[PROFILE] pin ${if (had) "changed" else "set"} for ${store.byId(profileId)?.username}")
     }
 
     suspend fun removePin(playlistId: String, profileId: String, current: List<String>?): Result<Unit> = runCatching {
-        check(canManagePin(playlistId, profileId)) { "Only an Admin profile can remove another profile's PIN." }
+        check(canManagePin(playlistId, profileId)) { "Only an Admin or Standard profile can remove another profile's PIN." }
         pinRemovalBlock(playlistId, profileId)?.let { error(it) }
         if (needsCurrentPin(playlistId, profileId)) {
             check(verifyPin(profileId, current.orEmpty()) == PinCheck.Ok) { "Wrong PIN" }
@@ -545,7 +598,7 @@ class ProfileManager @Inject constructor(
 
     /** The server's channel profiles and [profileId]'s user's current list. */
     suspend fun channelProfileAssignment(playlistId: String, profileId: String): Result<ChannelProfileAssignment> = runCatching {
-        check(activeIsAdmin(playlistId)) { "Only an Admin profile can assign channel profiles." }
+        check(activeIsAdmin(playlistId)) { "Only a Dispatcharr admin can assign channel profiles." }
         val p = store.byId(profileId) ?: error("Profile not found")
         val row = playlistDao.byId(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
@@ -559,7 +612,7 @@ class ProfileManager @Inject constructor(
     /** PATCH the user's channel_profiles (empty = All). Reloads channels when
      *  [profileId] is the active profile. */
     suspend fun saveChannelProfiles(playlistId: String, profileId: String, userId: Int, ids: List<Int>): Result<Unit> = runCatching {
-        check(activeIsAdmin(playlistId)) { "Only an Admin profile can assign channel profiles." }
+        check(activeIsAdmin(playlistId)) { "Only a Dispatcharr admin can assign channel profiles." }
         val p = store.byId(profileId) ?: error("Profile not found")
         val row = playlistDao.byId(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
@@ -698,7 +751,7 @@ class ProfileManager @Inject constructor(
      * form (username, then password or API key, validated by signing in).
      */
     suspend fun addCandidates(playlistId: String): Result<AddCandidates> = runCatching {
-        check(canAdd(playlistId)) { "Only an Admin profile can add profiles." }
+        check(canAdd(playlistId)) { "Only an Admin or Standard profile can add profiles." }
         val serverAdmin = baseIsServerAdmin(playlistId) && activeIsAdmin(playlistId)
         if (RoleRules.addPath(serverAdmin, usersListForbidden = false) == RoleRules.AddPath.Manual) {
             return@runCatching AddCandidates.Manual
@@ -758,7 +811,8 @@ class ProfileManager @Inject constructor(
     /** Add Profile step 1: the server's users, fetched with the admin key. */
     suspend fun listServerUsers(playlistId: String): Result<List<DispatcharrUserSummary>> = runCatching {
         val row = playlistDao.byId(playlistId) ?: error("Playlist not found")
-        check(activeIsAdmin(playlistId) && canAdd(playlistId)) { "Only an Admin profile can add profiles." }
+        check(canAdd(playlistId)) { "Only an Admin or Standard profile can add profiles." }
+        check(activeIsAdmin(playlistId)) { "Only a Dispatcharr admin can list server users." }
         val base = repository.effectiveBaseUrl(row)
         val key = row.apiKey?.takeIf { it.isNotBlank() } ?: error("No API key for this playlist")
         val taken = store.forPlaylist(playlistId).map { it.username }.toSet()
@@ -797,11 +851,12 @@ class ProfileManager @Inject constructor(
         role: ProfileRole? = null,
         seed: com.aeriotv.android.core.sync.dsync.ProfileRow? = null,
     ): Result<DispatcharrProfile> = runCatching {
-        // Same rule as setRole: a Child needs an Admin PIN to leave it.
-        if (role == ProfileRole.Child) check(adminHasPin(playlistId)) { "Set a PIN on an Admin profile first." }
+        // Same rule as setRole (assumption A): before a Child is added, every
+        // Admin and Standard profile holds a PIN.
+        if (role == ProfileRole.Child) check(adminHasPin(playlistId) && pinsMissingForChild(playlistId).isEmpty()) { RoleRules.KEEP_PIN_REASON }
         // Local Admin role, not the server level: a profile is added by
         // signing in as that user, which never changes the server.
-        check(canAdd(playlistId)) { "Only an Admin profile can add profiles." }
+        check(canAdd(playlistId)) { "Only an Admin or Standard profile can add profiles." }
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
         val id = UUID.randomUUID().toString()
@@ -829,6 +884,7 @@ class ProfileManager @Inject constructor(
             // FIRST store write, so the row never exists (or syncs) half built.
             .let { if (seed != null) ProfileRoster.applyRow(it, seed) else it }
         store.upsert(profile)
+        if (needsPinAfterAdd(playlistId, id)) pendingPinAdds.add(id)
         appPreferences.seedProfileSettings(id)
         if (seed != null) {
             PinRules.typeFromWire(seed.pinType)?.let { type ->
@@ -1012,7 +1068,7 @@ class ProfileManager @Inject constructor(
 
     /** Sender gate: an Admin profile, or the default profile, is active here. */
     fun canSetUpTv(playlistId: String): Boolean =
-        activeRole(playlistId) == ProfileRole.Admin || activeProfile(playlistId)?.isDefault != false
+        RoleRules.isFullAccess(activeRole(playlistId)) || activeProfile(playlistId)?.isDefault != false
 
     /** The playlist row with the DEFAULT profile's credential (never a switched profile's). */
     suspend fun defaultPlaylistRow(playlistId: String): PlaylistEntity? = playlistDao.rawById(playlistId)
@@ -1069,7 +1125,7 @@ class ProfileManager @Inject constructor(
     fun setAvatar(playlistId: String, profileId: String, avatar: AvatarSpec?): Result<Unit> = runCatching {
         val target = store.byId(profileId) ?: error("Profile not found")
         val isOwn = activeProfileIdNow(playlistId) == profileId
-        check(RoleRules.canEditAvatar(activeRole(playlistId), isOwn)) { "Only an Admin profile can change another profile's avatar." }
+        check(RoleRules.canEditAvatar(activeRole(playlistId), isOwn)) { "Only an Admin or Standard profile can change another profile's avatar." }
         val clean = AvatarCatalog.normalize(avatar)
         if (clean == target.avatar) return@runCatching
         store.update(profileId) { it.copy(avatar = clean) }
@@ -1086,7 +1142,7 @@ class ProfileManager @Inject constructor(
      * order syncs per row. Returns the moved profile's new index.
      */
     fun move(playlistId: String, profileId: String, how: Move): Result<Int> = runCatching {
-        check(activeRole(playlistId) == ProfileRole.Admin) { "Only an Admin profile can reorder profiles." }
+        check(RoleRules.isFullAccess(activeRole(playlistId))) { "Only an Admin or Standard profile can reorder profiles." }
         val list = store.forPlaylist(playlistId).toMutableList()
         val from = list.indexOfFirst { it.id == profileId }
         check(from >= 0) { "Profile not found" }
@@ -1117,9 +1173,9 @@ class ProfileManager @Inject constructor(
     suspend fun remove(profileId: String): Result<Unit> = runCatching {
         val p = store.byId(profileId) ?: return@runCatching
         check(!p.isDefault) { "The default profile cannot be removed." }
-        check(activeRole(p.playlistId) == ProfileRole.Admin) { "Only an Admin profile can remove profiles." }
-        if (RoleRules.removeNeedsAdminPin(p.effectiveRole())) {
-            check(consumeAdminTicket(p.playlistId)) { "Enter an Admin PIN" }
+        check(RoleRules.isFullAccess(activeRole(p.playlistId))) { "Only an Admin or Standard profile can remove profiles." }
+        if (RoleRules.removeNeedsPin(p.effectiveRole())) {
+            check(consumeAdminTicket(p.playlistId)) { "Enter a PIN from an Admin or Standard profile" }
         }
         deleteLocal(p, fromSync = false)
     }

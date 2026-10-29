@@ -42,6 +42,7 @@ import com.aeriotv.android.core.network.DispatcharrUserSummary
 import com.aeriotv.android.core.profiles.PinType
 import com.aeriotv.android.core.profiles.ProfileManager
 import com.aeriotv.android.core.profiles.ProfileRole
+import com.aeriotv.android.core.profiles.RoleRules
 import com.aeriotv.android.core.sync.dsync.ProfileRow
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
@@ -90,6 +91,8 @@ internal fun RosterSuggestions(
     var error by remember { mutableStateOf<String?>(null) }
     var credFor by remember { mutableStateOf<ProfileRow?>(null) }
     var childGate by remember { mutableStateOf<ProfileRow?>(null) }
+    // Assumption A: an Admin or Standard add while a Child exists sets its PIN right after.
+    var pinAfter by remember { mutableStateOf<Pair<ProfileRow, String>?>(null) }
     // Rows added here leave the roster flow; keep them listed as "Added"
     // (not focusable) so the list does not jump under the D-pad.
     val added = remember { androidx.compose.runtime.mutableStateListOf<ProfileRow>() }
@@ -120,17 +123,21 @@ internal fun RosterSuggestions(
 
     if (rows.isEmpty() && added.isEmpty()) return
 
+    fun finishAdd(r: ProfileRow, id: String) {
+        if (vm.needsPinAfterAdd(playlistId, id)) pinAfter = r to id else { onAddedProfile(id); onAdded() }
+    }
+
     fun add(row: ProfileRow) {
         if (busy != null || !enabled) return
         val r = row.copy(role = roleFor(row).wire)
         error = null
-        if (r.role == ProfileRole.Child.wire && !vm.adminHasPin(playlistId)) { childGate = r; return }
+        if (r.role == ProfileRole.Child.wire && !vm.childGateClear(playlistId)) { childGate = r; return }
         val listed = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
         if (listed?.apiKey.isNullOrBlank()) { credFor = r; return }
         busy = r.username
         scope.launch {
             vm.addFromRoster(playlistId, r, listed!!, null, null).fold(
-                { busy = null; addedIds[r.username.lowercase()] = it.id; if (keepAdded) added += r; onAddedProfile(it.id); onAdded() },
+                { busy = null; addedIds[r.username.lowercase()] = it.id; if (keepAdded) added += r; finishAdd(r, it.id) },
                 { busy = null; error = it.message ?: "Could not add profile" },
             )
         }
@@ -252,11 +259,20 @@ internal fun RosterSuggestions(
                 val user = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }
                     ?: DispatcharrUserSummary(id = r.userId, username = r.username)
                 vm.addFromRoster(playlistId, r, user, pw, key).fold(
-                    { credFor = null; addedIds[r.username.lowercase()] = it.id; if (keepAdded) added += r; onAddedProfile(it.id); onAdded(); null },
+                    { credFor = null; addedIds[r.username.lowercase()] = it.id; if (keepAdded) added += r; finishAdd(r, it.id); null },
                     { it.message ?: "Could not add profile" },
                 )
             },
         )
+    }
+    pinAfter?.let { (r, id) ->
+        PinAfterAdd(playlistId, vm) { ok ->
+            pinAfter = null
+            if (ok) { onAddedProfile(id); onAdded() } else {
+                addedIds.remove(r.username.lowercase())
+                added.removeAll { it.username.equals(r.username, ignoreCase = true) }
+            }
+        }
     }
     childGate?.let { r ->
         ChildNeedsAdminPin(playlistId, vm, onDone = { ok -> childGate = null; if (ok) add(r) })
@@ -338,30 +354,75 @@ private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSub
     )
 }
 
-/** Same rule as the Role picker: a Child needs an Admin PIN on this device first. */
+/**
+ * Assumption A, add flow: an Admin or Standard profile added while a Child
+ * exists sets its PIN right after the add (same sheets). Cancelling undoes
+ * the add. onDone(true) = kept.
+ */
 @Composable
-internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, onDone: (Boolean) -> Unit) {
-    var explained by remember { mutableStateOf(false) }
-    val admin = vm.activeProfile(playlistId)
-    if (admin == null || admin.let { vm.roleOf(it.id) } != ProfileRole.Admin) {
+internal fun PinAfterAdd(playlistId: String, vm: ProfilesViewModel, onDone: (Boolean) -> Unit) {
+    val scope = rememberCoroutineScope()
+    ChildNeedsAdminPin(playlistId, vm) { ok ->
+        if (ok) onDone(true) else scope.launch { vm.discardPendingAdds(playlistId); onDone(false) }
+    }
+}
+
+/**
+ * Assumption A (owner rule 2026-10-29): while a Child exists every Admin and
+ * Standard profile holds a PIN. Walks the acting profile through each
+ * missing PIN, its own first, then one prompt per other profile (a temporary
+ * PIN that profile can change later or have reset). [becomingChild] is the
+ * profile about to turn Child (not asked). onDone(true) once none is missing;
+ * cancelling any step is onDone(false).
+ */
+@Composable
+internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, becomingChild: String? = null, onDone: (Boolean) -> Unit) {
+    var round by remember { mutableStateOf(0) }
+    var explained by remember { mutableStateOf<String?>(null) }
+    val actor = vm.activeProfile(playlistId)
+    val missing = remember(round) { vm.pinsMissingForChild(playlistId, becomingChild) }
+    val next = missing.firstOrNull()
+    if (next == null) {
+        if (vm.adminHasPin(playlistId)) {
+            androidx.compose.runtime.LaunchedEffect(round) { onDone(true) }
+        } else {
+            com.aeriotv.android.ui.settings.SettingsAlertDialog(
+                onDismissRequest = { onDone(false) },
+                title = { Text("PIN Required") },
+                text = { Text("A Child profile needs a PIN from an Admin or Standard profile to leave it. Set a PIN on an Admin or Standard profile first.") },
+                confirmButton = { SettingsDialogTextButton(label = "OK", onClick = { onDone(false) }) },
+            )
+        }
+        return
+    }
+    val own = next.id == actor?.id
+    // Only an Admin or Standard profile sets another profile's PIN.
+    if (!own && !vm.isRoleAdmin(playlistId) && !vm.isPendingPinAdd(next.id)) {
         com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onDone(false) },
-            title = { Text("Admin PIN Required") },
-            text = { Text("A Child profile needs an Admin PIN to leave it. Set an Admin PIN first.") },
+            title = { Text("PIN Required") },
+            text = { Text("${RoleRules.KEEP_PIN_REASON} Set a PIN for ${next.displayName} first.") },
             confirmButton = { SettingsDialogTextButton(label = "OK", onClick = { onDone(false) }) },
         )
         return
     }
-    if (!explained) {
+    if (explained != next.id) {
         com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onDone(false) },
-            title = { Text("Admin PIN Required") },
-            text = { Text("A Child profile needs an Admin PIN to leave it. Set a PIN for ${admin.displayName} first.") },
-            confirmButton = { SettingsDialogTextButton(label = "Set PIN", onClick = { explained = true }) },
+            title = { Text("PIN Required") },
+            text = {
+                Text(
+                    if (own) "${RoleRules.KEEP_PIN_REASON} Set a PIN for ${next.displayName} first."
+                    else "${RoleRules.KEEP_PIN_REASON} Set a temporary PIN for ${next.displayName}. It can be changed later, or reset from the profile's menu."
+                )
+            },
+            confirmButton = { SettingsDialogTextButton(label = "Set PIN", onClick = { explained = next.id }) },
             dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = { onDone(false) }) },
         )
     } else {
-        SetPinFlow(playlistId, admin, vm) { _ -> onDone(vm.adminHasPin(playlistId)) }
+        SetPinFlow(playlistId, next, vm) { _ ->
+            if (!vm.hasPin(next.id)) onDone(false) else round++
+        }
     }
 }
 

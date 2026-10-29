@@ -40,15 +40,38 @@ enum class ProfileRole(val label: String, val wire: String) {
 
 fun DispatcharrProfile.effectiveRole(): ProfileRole = role ?: ProfileRole.defaultFor(userLevel, isBase = isDefault)
 
-/** Pure role and PIN gating decisions, unit tested (no Android types). */
+/**
+ * Pure role and PIN gating decisions, unit tested (no Android types).
+ *
+ * Owner rule 2026-10-29: inside AerioTV, Admin and Standard are treated
+ * identically ("full access"). The labels only reflect the user's
+ * Dispatcharr access (server admin vs standard user) and grant no different
+ * in-app powers. Only gates that call Dispatcharr admin endpoints (Channel
+ * Profiles, API keys) look at the server admin flag, never at the label.
+ * Both Admin and Standard profiles have authority over Child profiles.
+ *
+ * Assumptions recorded with the rule:
+ * A. "Require PIN or pattern when a Child exists" means every non-Child
+ *    profile on the playlist must hold a PIN or Directions pattern while any
+ *    Child profile exists. It is enforced when a role changes to Child (the
+ *    missing PINs are set first), when an Admin or Standard profile is added
+ *    while a Child exists (its PIN is set right after the add), and when a
+ *    PIN would be removed (denied while a Child exists).
+ * B. (superseded the same day) Wherever a PIN guards a Child, any Admin or
+ *    Standard profile's PIN is accepted, and every management action is open
+ *    to any non-Child profile.
+ */
 object RoleRules {
+    /** Admin and Standard: full access in AerioTV. */
+    fun isFullAccess(role: ProfileRole?): Boolean = role != null && role != ProfileRole.Child
+
     /** The header switcher and the Profiles list (a Child never sees other names). */
     fun canSeeSwitcher(active: ProfileRole?): Boolean = active != ProfileRole.Child
 
-    /** Add, remove, role, and other profiles' PINs. */
-    fun canManageProfiles(active: ProfileRole?): Boolean = active == null || active == ProfileRole.Admin
+    /** Add, remove, role, and other profiles' PINs (null = no profiles: full access). */
+    fun canManageProfiles(active: ProfileRole?): Boolean = active != ProfileRole.Child
 
-    fun canChangeRoles(active: ProfileRole?): Boolean = active == ProfileRole.Admin
+    fun canChangeRoles(active: ProfileRole?): Boolean = isFullAccess(active)
 
     /** How Add Profile picks a user: the server's list (admin key) or a typed username. */
     enum class AddPath { ServerList, Manual }
@@ -60,16 +83,16 @@ object RoleRules {
     fun addPath(baseIsServerAdmin: Boolean, usersListForbidden: Boolean): AddPath =
         if (baseIsServerAdmin && !usersListForbidden) AddPath.ServerList else AddPath.Manual
 
-    /** Channel Profiles are assigned on the server: server admin only. */
+    /** Channel Profiles are assigned on the server: server admin rights, never a Child. */
     fun canAssignChannelProfiles(baseIsServerAdmin: Boolean, activeIsServerAdmin: Boolean, active: ProfileRole?): Boolean =
-        baseIsServerAdmin && activeIsServerAdmin && active == ProfileRole.Admin
+        baseIsServerAdmin && activeIsServerAdmin && isFullAccess(active)
 
-    /** Dispatcharr Sync `profiles` key: written by the local Admin, server admin or not. */
-    fun canWriteProfilesKey(active: ProfileRole?): Boolean = active == ProfileRole.Admin
+    /** Dispatcharr Sync `profiles` key: written by any Admin or Standard profile. */
+    fun canWriteProfilesKey(active: ProfileRole?): Boolean = isFullAccess(active)
 
-    /** Row menu "Avatar": an Admin for any profile, a User or Child for its own. */
+    /** Row menu "Avatar": Admin or Standard for any profile, a Child for its own. */
     fun canEditAvatar(actor: ProfileRole?, isOwn: Boolean): Boolean =
-        actor == null || actor == ProfileRole.Admin || isOwn
+        actor != ProfileRole.Child || isOwn
 
     /** Server-editing actions (Mark/Unmark as Radio Channel, Switch Stream, Manage Groups). */
     fun canEditServer(active: ProfileRole?): Boolean = active != ProfileRole.Child
@@ -89,16 +112,32 @@ object RoleRules {
     fun deepLinkAllowed(active: ProfileRole?, page: String): Boolean =
         active != ProfileRole.Child || page.trim().lowercase() in CHILD_DEEP_LINK_PAGES
 
+    /** One profile's PIN state for [pinsMissingForChild]. */
+    data class PinHolder(val id: String, val role: ProfileRole, val hasPin: Boolean, val isActor: Boolean = false)
+
     /**
-     * Role change from [from] to [to] when [childExists] (after the change is
-     * NOT counted) and [adminHasPin] says whether any Admin profile has a PIN.
+     * Assumption A: ids of the Admin and Standard profiles that still need a
+     * PIN before (or while) a Child exists, the acting profile first.
+     * [becomingChild] is the profile about to turn Child (not counted).
+     */
+    fun pinsMissingForChild(profiles: List<PinHolder>, becomingChild: String? = null): List<String> =
+        profiles.filter { it.id != becomingChild && isFullAccess(it.role) && !it.hasPin }
+            .sortedBy { if (it.isActor) 0 else 1 }
+            .map { it.id }
+
+    /**
+     * Role change from [from] to [to]. [missingPins] counts the Admin and
+     * Standard profiles (other than the target) without a PIN;
+     * [anyPinExists] says whether any full-access PIN (or the Device Admin
+     * PIN) exists; [targetIsLastFullAccess] says the target is the only
+     * Admin or Standard profile.
      */
     sealed interface RoleChange {
         data object Allowed : RoleChange
-        /** No Admin has a PIN yet: the acting Admin must create one first. */
-        data object NeedsAdminPinCreated : RoleChange
-        /** Leaving Child: an Admin PIN must be entered. */
-        data object NeedsAdminPinEntry : RoleChange
+        /** Some Admin or Standard profile has no PIN: set the missing PINs first. */
+        data object NeedsPinsCreated : RoleChange
+        /** Leaving Child: a PIN from an Admin or Standard profile must be entered. */
+        data object NeedsPinEntry : RoleChange
         data class Denied(val reason: String) : RoleChange
     }
 
@@ -106,29 +145,40 @@ object RoleRules {
         actor: ProfileRole?,
         from: ProfileRole,
         to: ProfileRole,
-        adminHasPin: Boolean,
-        targetIsLastAdmin: Boolean,
+        missingPins: Int,
+        anyPinExists: Boolean,
+        targetIsLastFullAccess: Boolean,
     ): RoleChange = when {
-        actor != ProfileRole.Admin -> RoleChange.Denied("Only an Admin profile can change roles.")
+        !isFullAccess(actor) -> RoleChange.Denied("Only an Admin or Standard profile can change roles.")
         from == to -> RoleChange.Allowed
-        from == ProfileRole.Admin && targetIsLastAdmin ->
-            RoleChange.Denied("At least one profile must stay Admin.")
-        to == ProfileRole.Child && !adminHasPin -> RoleChange.NeedsAdminPinCreated
-        from == ProfileRole.Child -> RoleChange.NeedsAdminPinEntry
+        to == ProfileRole.Child && targetIsLastFullAccess ->
+            RoleChange.Denied("At least one profile must stay Admin or Standard.")
+        to == ProfileRole.Child && (missingPins > 0 || !anyPinExists) -> RoleChange.NeedsPinsCreated
+        from == ProfileRole.Child -> RoleChange.NeedsPinEntry
         else -> RoleChange.Allowed
     }
 
-    /** Removing a Child profile needs an Admin PIN. */
-    fun removeNeedsAdminPin(target: ProfileRole): Boolean = target == ProfileRole.Child
-
-    /** While any Child exists, the last Admin PIN stays. */
-    fun canRemoveAdminPin(targetRole: ProfileRole, childExists: Boolean, otherAdminPins: Int): Boolean =
-        targetRole != ProfileRole.Admin || !childExists || otherAdminPins > 0
+    /** Removing a Child profile needs a PIN from an Admin or Standard profile. */
+    fun removeNeedsPin(target: ProfileRole): Boolean = target == ProfileRole.Child
 
     /**
-     * Admin reset of another profile's (forgotten) PIN: the Admin enters its
-     * own PIN; with no Admin PIN it is a confirm only, unless a Child exists
-     * (then an Admin PIN is mandatory and already exists by the rules above).
+     * Assumption A: while any Child exists, Admin and Standard profiles keep
+     * a PIN (this includes the earlier "last Admin PIN stays" rule).
+     */
+    fun canRemovePin(targetRole: ProfileRole, childExists: Boolean): Boolean =
+        targetRole == ProfileRole.Child || !childExists
+
+    /** The Device Admin PIN stays while a Child exists and no other full-access PIN does. */
+    fun canRemoveDevicePin(childExists: Boolean, otherPins: Int): Boolean = !childExists || otherPins > 0
+
+    const val KEEP_PIN_REASON = "While a Child profile exists, Admin and Standard profiles keep a PIN."
+
+    /**
+     * Reset of another profile's (forgotten) PIN by an Admin or Standard
+     * profile: the actor enters its own PIN; with no PIN it is a confirm
+     * only, unless a Child exists (then the actor's PIN is mandatory and
+     * already exists by the rules above). While a Child exists a full-access
+     * target gets a temporary PIN instead of none.
      */
     sealed interface ResetGate {
         data object EnterOwnPin : ResetGate
@@ -137,10 +187,10 @@ object RoleRules {
     }
 
     fun resetGate(actor: ProfileRole?, actorHasPin: Boolean, childExists: Boolean): ResetGate = when {
-        actor != ProfileRole.Admin -> ResetGate.Denied("Only an Admin profile can reset a PIN.")
+        !isFullAccess(actor) -> ResetGate.Denied("Only an Admin or Standard profile can reset a PIN.")
         actorHasPin -> ResetGate.EnterOwnPin
         !childExists -> ResetGate.ConfirmOnly
-        else -> ResetGate.Denied("Set a PIN on this Admin profile first.")
+        else -> ResetGate.Denied("Set a PIN on this profile first.")
     }
 
     /**
