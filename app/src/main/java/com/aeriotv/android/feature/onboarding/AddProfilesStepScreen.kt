@@ -2,6 +2,9 @@ package com.aeriotv.android.feature.onboarding
 
 import com.aeriotv.android.feature.settings.isServerAdmin
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import android.util.Log
@@ -662,31 +665,26 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
                 focusUsername = focusRoster,
                 onFocusConsumed = { focusRoster = null },
             )
-            // The question card.
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("Add another profile?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = { wantsMore = true; focusTarget = 1 },
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                    ) { Text("Yes", style = MaterialTheme.typography.titleSmall) }
-                    OutlinedButton(
-                        onClick = { wantsMore = false; scanOpen = false; detailsOpen = false; focusTarget = 2 },
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50)),
-                    ) { Text("Not now", style = MaterialTheme.typography.titleSmall) }
-                }
-            }
+            // One expandable card instead of a Yes / Not now question: Continue
+            // already covers "not now" (Logan, 2026-10-29).
+            val expanded = wantsMore == true
+            com.aeriotv.android.feature.onboarding.components.OnboardingCard(
+                icon = Icons.Outlined.PersonAdd,
+                title = "Add another profile",
+                subtitle = "Scan a QR code or sign in as another Dispatcharr user.",
+                onClick = {
+                    if (expanded) { wantsMore = false; scanOpen = false; detailsOpen = false; focusTarget = 2 }
+                    else { wantsMore = true; focusTarget = 1 }
+                },
+                highlighted = expanded,
+                trailing = {
+                    Icon(
+                        if (expanded) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                },
+            )
             if (wantsMore == true) {
                 com.aeriotv.android.feature.onboarding.components.OnboardingSectionLabel("Add a profile")
                 // TVs have no camera and QrScanActions draws nothing there.
