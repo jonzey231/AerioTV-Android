@@ -484,7 +484,7 @@ Row: `[userId:int, username:string, displayName:string(max 40 B), pinType:"none"
 - Non-admin devices never read this key (they cannot reach it through `me`). A profile signed in
   alone has no picker and no PIN prompt for itself on that device.
 - Device Admin PIN (device-local, never synced, not in this key): when onboarding signs in as a
-  Standard Dispatcharr user, "Who is this profile for?" offers User (default) or Child. Child sets a
+  Standard Dispatcharr user, "Who is this profile for?" offers Standard (default; wire value `user`) or Child. Child sets a
   Device Admin PIN (Numbers or Directions) tied to no profile, and the profile becomes a Child: a
   kid-only device. Every "Enter an Admin PIN" gate (leaving a Child, Manage Profiles, Add Profile,
   role changes, removing a Child) accepts the Device Admin PIN as well as any Admin profile's PIN,

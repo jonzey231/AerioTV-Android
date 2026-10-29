@@ -809,7 +809,7 @@ fun AdminPinDialog(playlistId: String, vm: ProfilesViewModel, title: String, onD
 }
 
 /**
- * Row menu "Role" (Admin only): Admin, User, Child. Setting Child with no
+ * Row menu "Role" (Admin only): Admin, Standard, Child. Setting Child with no
  * Admin PIN asks the acting Admin to create one first (cancel = no change);
  * leaving Child asks for an Admin PIN.
  */
@@ -828,7 +828,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
     when {
         to == null -> com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { onClose(null) },
-            title = { Text("Role") },
+            title = { Text("Role", modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center) },
             text = {
                 Column {
                     Text(p.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -984,9 +984,9 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     val serverExpanded = serverOpen || suggested.isEmpty()
     var query by remember { mutableStateOf("") }
     val listed = rest?.let { r -> query.trim().let { q -> if (q.isEmpty()) r else r.filter { it.username.contains(q, ignoreCase = true) } } }
-    // Role per row (owner review 2026-10-27), default User.
+    // Role per row (owner review 2026-10-27), default Standard; Dispatcharr admins locked to Admin.
     val rowRoles = remember { androidx.compose.runtime.mutableStateMapOf<Int, com.aeriotv.android.core.profiles.ProfileRole>() }
-    fun roleOf(u: DispatcharrUserSummary) = rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
+    fun roleOf(u: DispatcharrUserSummary) = if (u.isServerAdmin()) com.aeriotv.android.core.profiles.ProfileRole.Admin else rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
     var childGateFor by remember { mutableStateOf<DispatcharrUserSummary?>(null) }
     // Enable API access (server admin only): keys minted here, by user id.
     var canManageKeys by remember { mutableStateOf(false) }
@@ -1055,7 +1055,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                                         ServerUserCaption(user)
                                     }
                                 }
-                                RoleChip(roleOf(user), enabled = !busy) { rowRoles[user.id] = it }
+                                RoleChip(roleOf(user), enabled = !busy, locked = user.isServerAdmin()) { rowRoles[user.id] = it }
                                 }
                                 if (canManageKeys && (user.apiKey.isNullOrBlank() || minted[user.id] == true)) {
                                     EnableApiAccessRow(
@@ -1122,7 +1122,7 @@ internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): 
 }
 
 /**
- * Add Profile "Role" choice (Admin, User, Child; default User). Picking Child
+ * Add Profile "Role" choice (Admin, Standard, Child; default Standard). Picking Child
  * with no Admin PIN asks the acting Admin to set one first, same copy as the
  * row menu Role; cancelling keeps the previous choice.
  */
@@ -1170,8 +1170,6 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
             roleDescription(selected),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 4.dp, top = 2.dp),
         )
     }

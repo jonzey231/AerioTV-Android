@@ -11,14 +11,15 @@ import kotlinx.coroutines.flow.asStateFlow
  * still enforces; the role only shapes what the app shows.
  */
 enum class ProfileRole(val label: String, val wire: String) {
-    Admin("Admin", "admin"), User("User", "user"), Child("Child", "child");
+    Admin("Admin", "admin"), User("Standard", "user"), Child("Child", "child");
 
     companion object {
         /**
          * Default role. The BASE profile (the login that added the playlist)
          * is always Admin, whatever its Dispatcharr level, so two Standard
          * users can share a device without a server admin. Other profiles:
-         * a Dispatcharr Admin level is Admin, every other level User.
+         * a Dispatcharr Admin level is Admin, every other level User
+         * (shown as "Standard"; the wire value stays "user").
          */
         fun defaultFor(userLevel: Int, isBase: Boolean = false): ProfileRole =
             if (isBase || ProfileLevel.of(userLevel) == ProfileLevel.Admin) Admin else User

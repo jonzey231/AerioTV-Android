@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.onboarding
 
+import com.aeriotv.android.feature.settings.isServerAdmin
 import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -139,9 +140,9 @@ fun AddProfilesStepScreen(
     var error by remember { mutableStateOf<String?>(null) }
     // Users whose key was missing: prompt for a password or key, one at a time.
     val needsCredential = remember { mutableStateListOf<DispatcharrUserSummary>() }
-    // Role per checked row (owner review 2026-10-27), default User.
+    // Role per checked row (owner review 2026-10-27), default Standard; Dispatcharr admins locked to Admin.
     val rowRoles = remember { androidx.compose.runtime.mutableStateMapOf<Int, com.aeriotv.android.core.profiles.ProfileRole>() }
-    fun roleOf(u: DispatcharrUserSummary) = rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
+    fun roleOf(u: DispatcharrUserSummary) = if (u.isServerAdmin()) com.aeriotv.android.core.profiles.ProfileRole.Admin else rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
     var childGate by remember { mutableStateOf(false) }
     // Plain holder (not state): the Add action to run after the Child PIN gate.
     val pendingAdd = remember { arrayOfNulls<() -> Unit>(1) }
@@ -307,7 +308,7 @@ fun AddProfilesStepScreen(
                                 com.aeriotv.android.feature.settings.ServerUserCaption(user)
                             }
                         }
-                        if (checked) com.aeriotv.android.feature.settings.RoleChip(roleOf(user), enabled = !busy) { rowRoles[user.id] = it }
+                        if (checked) com.aeriotv.android.feature.settings.RoleChip(roleOf(user), enabled = !busy, locked = user.isServerAdmin()) { rowRoles[user.id] = it }
                         }
                         if (canManageKeys && (user.apiKey.isNullOrBlank() || minted[user.id] == true)) {
                             com.aeriotv.android.feature.settings.EnableApiAccessRow(

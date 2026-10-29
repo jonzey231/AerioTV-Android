@@ -113,7 +113,10 @@ internal fun RosterSuggestions(
     }
     // Per-row role before Add, prefilled from the roster role.
     val roles = remember { androidx.compose.runtime.mutableStateMapOf<String, ProfileRole>() }
-    fun roleFor(r: ProfileRow) = roles[r.username.lowercase()] ?: ProfileRole.fromWire(r.role) ?: ProfileRole.User
+    fun rosterRoleFor(r: ProfileRow) = roles[r.username.lowercase()] ?: ProfileRole.fromWire(r.role) ?: ProfileRole.User
+    // Dispatcharr admins are always Admin (owner 2026-10-29): locked chip.
+    fun rosterAdmin(r: ProfileRow) = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }?.isServerAdmin() == true
+    fun roleFor(r: ProfileRow) = if (rosterAdmin(r)) ProfileRole.Admin else rosterRoleFor(r)
 
     if (rows.isEmpty() && added.isEmpty()) return
 
@@ -176,7 +179,7 @@ internal fun RosterSuggestions(
                 }
                 // Roster role (Admin, User, or Child), not the server level.
                 if (isAdded) RoleBadge(roleFor(r))
-                else if (!isTv) RoleChip(roleFor(r), enabled = canAdd) { roles[r.username.lowercase()] = it }
+                else if (!isTv) RoleChip(roleFor(r), enabled = canAdd, locked = rosterAdmin(r)) { roles[r.username.lowercase()] = it }
                 Spacer(Modifier.size(8.dp))
                 when {
                     busy == r.username -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -214,7 +217,7 @@ internal fun RosterSuggestions(
                     else -> TextButton(onClick = { add(r) }, enabled = canAdd) { Text("Add") }
                 }
             }
-            if (isTv && !isAdded) RoleChip(roleFor(r), enabled = canAdd) { roles[r.username.lowercase()] = it }
+            if (isTv && !isAdded) RoleChip(roleFor(r), enabled = canAdd, locked = rosterAdmin(r)) { roles[r.username.lowercase()] = it }
             if (isTv && isAdded && addedIds.containsKey(r.username.lowercase())) {
                 // TV undo: its own focus stop, styled like the Add pill.
                 var pillFocused by remember { mutableStateOf(false) }
@@ -492,7 +495,9 @@ internal fun DeviceAdminPinRow(playlistId: String, vm: ProfilesViewModel) {
  * here only records it; the Admin PIN prompt runs at Add time.
  */
 @Composable
-internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, onChange: (ProfileRole) -> Unit) {
+internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolean = false, onChange: (ProfileRole) -> Unit) {
+    // Dispatcharr admins: a plain Admin chip, no picker and no focus stop.
+    if (locked) { RoleBadge(ProfileRole.Admin); return }
     var open by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(50)
     Row(
@@ -516,7 +521,7 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, onChange: (Pro
     if (open) {
         com.aeriotv.android.ui.settings.SettingsAlertDialog(
             onDismissRequest = { open = false },
-            title = { Text("Role") },
+            title = { Text("Role", modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center) },
             text = {
                 Column {
                     ProfileRole.entries.forEach { r ->
@@ -525,8 +530,6 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, onChange: (Pro
                             roleDescription(r),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(start = 12.dp, bottom = 6.dp),
                         )
                     }
@@ -544,7 +547,7 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, onChange: (Pro
  */
 @Composable
 internal fun ServerUserCaption(user: DispatcharrUserSummary) {
-    val level = com.aeriotv.android.core.profiles.ProfileLevel.of(if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0)
+    val level = com.aeriotv.android.core.profiles.ProfileLevel.of(serverLevel(user))
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(level.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         if (user.apiKey.isNullOrBlank()) {
@@ -697,3 +700,11 @@ internal fun EnableApiAccessRow(
         )
     }
 }
+
+/** The Dispatcharr level the server row caption shows (superuser or staff counts as Admin). */
+internal fun serverLevel(user: DispatcharrUserSummary): Int = if (user.isSuperuser || user.isStaff) 10 else user.userLevel ?: 0
+
+/** Same flag as the row caption "Admin": such users are always AerioTV Admin. */
+internal fun DispatcharrUserSummary.isServerAdmin(): Boolean =
+    com.aeriotv.android.core.profiles.ProfileLevel.of(serverLevel(this)) == com.aeriotv.android.core.profiles.ProfileLevel.Admin
+
