@@ -32,8 +32,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.layout.ContentScale
 import com.aeriotv.android.R
-import androidx.compose.foundation.layout.size
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.Image
 import androidx.compose.ui.Modifier
@@ -182,12 +183,17 @@ private fun WelcomeTv(c: WelcomeContent) {
 @Composable
 private fun WelcomeBrand(headline: String) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        // Centered app logo (Logan, 2026-10-29): the launcher tile from the
-        // splash, no wordmark and no body paragraph.
+        // Centered logo with the name (Logan, 2026-10-29): the TV banner's
+        // wordmark keyed onto a transparent background (drawable-nodpi), no
+        // text wordmark and no body paragraph.
         Image(
-            painter = painterResource(id = R.drawable.aerio_logo),
-            contentDescription = null,
-            modifier = Modifier.size(112.dp).align(Alignment.CenterHorizontally),
+            painter = painterResource(id = R.drawable.aerio_wordmark),
+            contentDescription = "AerioTV",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth(0.8f)
+                .heightIn(max = 64.dp)
+                .align(Alignment.CenterHorizontally),
         )
         Text(
             headline,
