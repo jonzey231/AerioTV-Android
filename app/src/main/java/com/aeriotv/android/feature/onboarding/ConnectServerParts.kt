@@ -137,12 +137,7 @@ private fun YouWillNeed(isTv: Boolean) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val body = MaterialTheme.typography.bodySmall.subtext()
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(
-            "You will need",
-            style = body,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
+        Text("You will need", style = body, fontWeight = FontWeight.SemiBold, color = muted)
         Bullet("A server address", body, muted)
         Bullet("A username and password (with API key access on), or an API key", body, muted)
         if (isTv) {
@@ -151,8 +146,8 @@ private fun YouWillNeed(isTv: Boolean) {
                 style = body, color = muted, modifier = Modifier.padding(top = 2.dp),
             )
         } else {
-            Text("or", style = body, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-            Bullet("The QR code from the Users page in Dispatcharr", body, muted)
+            Text("or", style = body, fontWeight = FontWeight.SemiBold, color = muted)
+            Bullet("A QR code from your Dispatcharr administrator", body, muted)
         }
     }
 }
