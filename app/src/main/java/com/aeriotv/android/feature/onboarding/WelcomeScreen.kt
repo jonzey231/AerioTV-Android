@@ -32,19 +32,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import com.aeriotv.android.R
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.Image
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.feature.onboarding.components.OnboardingCard
 import com.aeriotv.android.feature.onboarding.components.OnboardingSectionLabel
 import com.aeriotv.android.feature.onboarding.components.SkipPill
 import com.aeriotv.android.feature.onboarding.components.TvBackHint
 import com.aeriotv.android.ui.scale.subtext
-import com.aeriotv.android.ui.theme.textAccent
 
 /**
  * Cold-start welcome (onboarding redesign 2026-10-29): wordmark, headline,
@@ -117,7 +119,7 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
                 .padding(horizontal = 20.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            WelcomeBrand(headline = "Welcome. Let's connect your content.", body = PHONE_BODY)
+            WelcomeBrand(headline = "Welcome.\nLet's set up your content.")
             Spacer(Modifier.height(8.dp))
             StartHereSection(c)
             Spacer(Modifier.height(6.dp))
@@ -138,7 +140,7 @@ private fun WelcomeTwoColumn(c: WelcomeContent) {
             modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
         ) {
-            WelcomeBrand(headline = "Welcome. Let's get connected.", body = PHONE_BODY)
+            WelcomeBrand(headline = "Welcome.\nLet's get connected.")
         }
         Column(
             modifier = Modifier.weight(1f).widthIn(max = 540.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
@@ -161,11 +163,7 @@ private fun WelcomeTv(c: WelcomeContent) {
         horizontalArrangement = Arrangement.spacedBy(40.dp),
     ) {
         Column(Modifier.weight(0.42f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            WelcomeBrand(
-                headline = "Welcome. Let's get your TV connected.",
-                body = "Live TV with a full guide, movies, series, and DVR from your playlist or server. " +
-                    "Nothing is bundled, so the first step is telling AerioTV where your content comes from.",
-            )
+            WelcomeBrand(headline = "Welcome.\nLet's get your TV connected.")
             Spacer(Modifier.height(6.dp))
             TvBackHint("Back returns to the previous step at any time")
         }
@@ -182,25 +180,20 @@ private fun WelcomeTv(c: WelcomeContent) {
 }
 
 @Composable
-private fun WelcomeBrand(headline: String, body: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            "AerioTV",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.textAccent,
+private fun WelcomeBrand(headline: String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // Centered app logo (Logan, 2026-10-29): the launcher tile from the
+        // splash, no wordmark and no body paragraph.
+        Image(
+            painter = painterResource(id = R.drawable.aerio_logo),
+            contentDescription = null,
+            modifier = Modifier.size(112.dp).align(Alignment.CenterHorizontally),
         )
         Text(
             headline,
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
-        )
-        Text(
-            body,
-            style = MaterialTheme.typography.bodyMedium.subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Start,
         )
     }
 }
@@ -295,6 +288,4 @@ private fun SyncSection(c: WelcomeContent, sideBySide: Boolean) {
     }
 }
 
-private const val PHONE_BODY =
-    "Live TV with a guide, movies, series, and DVR from your playlist or server. First, tell AerioTV where your content comes from."
 private const val PHONE_SKIP = "You can connect a server any time from Settings."
