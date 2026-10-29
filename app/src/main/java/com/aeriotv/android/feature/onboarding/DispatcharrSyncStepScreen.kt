@@ -62,6 +62,7 @@ class DispatcharrSyncStepViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val dsync: DispatcharrSyncManager,
     private val client: com.aeriotv.android.core.network.DispatcharrClient,
+    private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
 ) : ViewModel() {
 
     /**
@@ -87,6 +88,8 @@ class DispatcharrSyncStepViewModel @Inject constructor(
         Log.i(TAG, if (fromCard) "[DSYNC] enabled from $where (sync card)" else "[DSYNC] enabled from $where")
         val ok = dsync.awaitFirstPull()
         Log.i(TAG, "[DSYNC] $where first pull ${if (ok) "done" else "not finished; continuing"}")
+        // Onboarding first pull for the base user: evaluate the providers offer once in Main.
+        if (where == "onboarding" && com.aeriotv.android.core.profiles.ProfileScope.token.value.isEmpty()) providersStore.arm()
     }
 
     private companion object { const val TAG = "AerioDsync" }

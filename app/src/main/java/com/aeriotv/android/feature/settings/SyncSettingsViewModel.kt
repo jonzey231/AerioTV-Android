@@ -33,7 +33,13 @@ class SyncSettingsViewModel @Inject constructor(
     private val sync: DriveSyncManager,
     private val dsync: com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager,
     playlistDao: com.aeriotv.android.core.data.db.dao.PlaylistDao,
+    private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
 ) : ViewModel() {
+
+    /** Onboarding Drive restore (base profile only): evaluate the providers offer once in Main. */
+    fun armProvidersOffer() {
+        if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isEmpty()) providersStore.arm()
+    }
 
     /** Settings > Sync > Sync with: "off", "drive", or "dispatcharr". */
     val syncProvider: Flow<String> = prefs.syncProvider

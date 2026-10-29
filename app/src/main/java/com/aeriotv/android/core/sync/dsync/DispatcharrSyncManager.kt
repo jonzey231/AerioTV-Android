@@ -90,6 +90,7 @@ class DispatcharrSyncManager @Inject constructor(
     private val pinStore: ProfilePinStore,
     private val profileManager: Provider<ProfileManager>,
     private val vodIds: VodIdResolver,
+    private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = context.getSharedPreferences("aerio_dsync", Context.MODE_PRIVATE)
@@ -874,6 +875,7 @@ class DispatcharrSyncManager @Inject constructor(
             is Fetched.Got -> {
                 listed?.let { s.fetchedBytes[b.wire] = it }
                 saveBucketRaw(s, b, f.bucket.raw)
+                foldProviders(s, f.bucket)
                 keys.forEach { key ->
                     when (val d = DsyncV2.category(f.bucket, key)) {
                         null -> { s.present -= key; s.read += key }
@@ -1219,6 +1221,7 @@ class DispatcharrSyncManager @Inject constructor(
         val sub = DsyncV2.encodeCategory(raw, deviceId, now, data)
         // No byte guard before the PUT: send the full value; trim only on a 413.
         var value = DsyncV2.encodeBucket(bucketRaw(s, b), deviceId, BuildConfig.VERSION_NAME, now, mapOf(key to sub))
+        value = withProviders(s, value)
         var step = 0
         while (true) {
             when (put(s, c, b, key, value, data)) {
@@ -1255,6 +1258,38 @@ class DispatcharrSyncManager @Inject constructor(
         refreshMessage(s)
     }
 
+    // ---- syncProviders record (schema section 10b) ----
+
+    /** The base (signed-in) user only: a sub-profile's key never feeds the owner's record. */
+    private fun isBase(s: Session) = s.token.isEmpty()
+
+    private fun foldProviders(s: Session, b: DsyncV2.Bucket) {
+        if (!isBase(s)) return
+        val rec = com.aeriotv.android.core.sync.SyncProvidersRules.fromJson(
+            b.categories[com.aeriotv.android.core.sync.SyncProvidersRules.DSYNC_CATEGORY]?.get("data"),
+        )
+        providersStore.fold(com.aeriotv.android.core.sync.SyncProvidersStore.dsyncScope(s.playlistId), rec)
+    }
+
+    /** Every PUT by the base user re-emits the union record; other users round-trip theirs untouched. */
+    private suspend fun withProviders(s: Session, value: JsonObject): JsonObject {
+        if (!isBase(s)) return value
+        val rec = providersStore.forPush(
+            com.aeriotv.android.core.sync.SyncProvidersStore.dsyncScope(s.playlistId),
+            isBaseProfile = true,
+            dispatcharrOn = true,
+            driveOn = runCatching { prefs.syncMasterEnabled.first() }.getOrDefault(false),
+            deviceId = deviceId,
+        ) ?: return value
+        val cats = LinkedHashMap(value[DsyncV2.CATEGORIES] as? JsonObject ?: JsonObject(emptyMap()))
+        val name = com.aeriotv.android.core.sync.SyncProvidersRules.DSYNC_CATEGORY
+        cats[name] = DsyncV2.encodeCategory(
+            cats[name] as? JsonObject, rec.deviceId.ifEmpty { deviceId }, rec.updatedAt / 1000,
+            com.aeriotv.android.core.sync.SyncProvidersRules.toJson(rec),
+        )
+        return JsonObject(LinkedHashMap(value).apply { put(DsyncV2.CATEGORIES, JsonObject(cats)) })
+    }
+
     private enum class PutStatus { Ok, TooLarge, Full, Auth, Retry, Rejected }
     private enum class Refresh { Ok, Unreachable, RemoteTook }
 
@@ -1274,6 +1309,7 @@ class DispatcharrSyncManager @Inject constructor(
         }
         saveBucketRaw(s, b, got.bucket.raw)
         s.serverBytes[b.wire] = got.bytes.toLong()
+        foldProviders(s, got.bucket)
         val d = DsyncV2.category(got.bucket, key) as? DsyncDecode.Ok ?: return Refresh.Ok
         val env = d.envelope
         s.present += key

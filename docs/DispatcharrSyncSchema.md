@@ -13,6 +13,10 @@ so `schemaVersion` stays 3: older readers ignore it, and a row without it keeps 
 v3 note (2026-10-27): `settings` gains the full allowlist (section 4.9, every setting iCloud or Drive
 backs up), optional `tv` and `mobile` lanes beside `v`, and per-item scopes chosen in Sync
 Categories. All optional, so `schemaVersion` stays 3: older readers read `v` and round-trip the rest.
+v3 note (2026-10-29): new category `syncProviders` (section 10b): which sync providers the device
+owner runs. A new category inside the key is not breaking (writers re-emit unknown categories, section
+3), so `schemaVersion` stays 3; bumping it would make every older reader skip the whole key (reader
+rule 2).
 
 ## 1. What it is
 
@@ -43,7 +47,7 @@ see the same favorites, progress, and reminders.
 
 ONE App Data key, `app.molinete.aerio`, holds every category as a sub-object (section 3): settings,
 profiles, reminders, watchlist, hiddenTitles, hiddenGroups, groupOrder, collections, remoteMap,
-radioDefault, favorites, recents, and progress. It is written with the profile's own token to
+radioDefault, favorites, recents, progress, and syncProviders (section 10b). It is written with the profile's own token to
 `users/me/app-data/app.molinete.aerio/`.
 
 Categories (the "Key" column below is the v1 key name; in v2 the category name is the part after
@@ -663,6 +667,41 @@ Rule 2, first-pull seeding. An empty or missing server copy never overwrites wha
 
 1. Missing (bucket 404, absent from the list, or category absent inside the bucket): the key is marked read and not present, and the post-pull flush pushes local up. This was already the behavior.
 2. Present with empty data (no ids, rows, names, or lanes; `groupOrder` with mode `default` and no order) on the first read of that key for this user on this device (no server stamp ever consumed here): the envelope is recorded as consumed without applying it, the key is marked dirty, and local is pushed up. Log line: `[DSYNC] pull <key> bytes=<n> empty on server, first pull: seeding from local`. Primitive values (for example `radioDefault.on=false`) are real choices and apply as usual. An empty copy seen after the first read is a real change from another device and applies as usual. `profiles` merges per row and is exempt.
+
+## 10b. Sync providers record (`syncProviders`)
+
+Every backup carries which sync providers the device owner runs, so a new device can offer the same ones.
+
+```json
+{"dispatcharr":true,"googleDrive":true,"icloud":false,"updatedAt":1761700000000,"deviceId":"6F1C...5A11"}
+```
+
+`updatedAt` is Unix milliseconds (the one exception to the seconds rule inside `data`). Where it lives:
+
+1. Dispatcharr Sync: the `data` of category `syncProviders` in the single key (section 3), with the usual sub-object `updatedAt` (ISO, the record's time) and `deviceId`.
+2. Google Drive (Android): `envelope.syncProviders` in every snapshot file (`SyncEnvelope`), optional.
+3. iCloud (Apple): the same object in the iCloud payload; Apple writes `icloud`.
+
+Readers tolerate its absence; missing booleans read false, a record without `updatedAt` is ignored.
+
+Scope (owner rule, 2026-10-29): the record describes the user who set up the device, never another profile.
+1. Dispatcharr copy: written and read only by a session of the BASE (signed-in) profile, under that user's own key. A sub-profile session round-trips the category untouched and never folds it locally. Local copies are kept per playlist, never merged across profiles.
+2. Drive copy: belongs to the Google account that owns the backup; every flag is computed from the base profile's state only. `dispatcharr` there means the owner uses Dispatcharr Sync for their own user.
+
+Union rule (both providers, same pure rule, Android `SyncProvidersRules`):
+1. Pull: keep the newer record whole (`updatedAt`, ties: higher `deviceId`).
+2. Push: stored flags OR this device's own (`dispatcharr` = Dispatcharr Sync on for the base user, `googleDrive` = Drive Sync on, `icloud` = iCloud on; Android never sets `icloud` but preserves it).
+3. A flag goes from true to false only when this device reported it true before and the provider is now off here: it writes `false` with a newer `updatedAt` once, then stops forcing it, so a device that still runs the provider sets it true again on its next push.
+4. `updatedAt` and `deviceId` change only when a flag changes.
+5. Best effort: a device pushing a stale Drive copy can re-raise a flag; the next union settles it.
+
+Prompt rule:
+1. Armed only by onboarding's first Drive restore or first Dispatcharr Sync pull, with the base profile active. Never when a sub-profile is added or switched to.
+2. Offers each provider the owner's records (Drive copy, and the base user's Dispatcharr copy for the active playlist) mark true that is off on this device. Dispatcharr is offered only when the active playlist is Dispatcharr Direct Connect. iCloud is never offered on Android; Apple offers iCloud and Dispatcharr the same way.
+3. One themed dialog, once per playlist (persisted): title "Keep your devices in sync", text "Your other devices also use <Google Drive / Dispatcharr Sync / Google Drive and Dispatcharr Sync>. Turn it on here too?", buttons "Turn on" (focused on TV) and "Not now".
+4. Turn on: Drive runs the Welcome card path (Google sign-in, Drive scope, master on); Dispatcharr turns Dispatcharr Sync on for the active user. Neither turns the other provider off.
+
+No new server paths: the record rides the existing App Data key and Drive files.
 
 ## 11. README rows (both repos, same commit as the code)
 

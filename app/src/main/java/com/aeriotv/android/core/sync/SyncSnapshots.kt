@@ -16,6 +16,8 @@ data class SyncEnvelope(
     val version: Int = 1,
     val lastModified: Long,
     val device: String,
+    /** Owner's sync providers (SyncProviders.kt). Absent in older files; older readers ignore it. */
+    val syncProviders: SyncProvidersRecord? = null,
 )
 
 @Serializable

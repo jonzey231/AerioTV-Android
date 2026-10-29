@@ -19,6 +19,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -52,7 +53,10 @@ class DriveSyncManager @Inject constructor(
     private val playlistRepository: javax.inject.Provider<com.aeriotv.android.core.data.repository.PlaylistRepository>,
     /** Coexistence Rule 1: Dispatcharr Sync owns the shared categories for its playlist's user. */
     private val dispatcharrSync: javax.inject.Provider<com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager>,
+    private val providersStore: SyncProvidersStore,
 ) {
+    /** The record every file of the current push carries (envelope.syncProviders). */
+    @Volatile private var pushProviders: SyncProvidersRecord? = null
 
     private val okHttp: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -212,6 +216,18 @@ class DriveSyncManager @Inject constructor(
     suspend fun pushAll(token: String, enabled: Set<SyncCategory>): Map<SyncCategory, Boolean> {
         Log.i(TAG, "pushAll: categories=${enabled.map { it.name }}")
         val result = mutableMapOf<SyncCategory, Boolean>()
+        // The Drive backup belongs to the base (signed-in) profile: read its state only.
+        pushProviders = runCatching {
+            kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+                providersStore.forPush(
+                    SyncProvidersStore.DRIVE,
+                    isBaseProfile = true,
+                    dispatcharrOn = appPreferences.syncProviderOnce() == com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager.PROVIDER,
+                    driveOn = appPreferences.syncMasterEnabled.first(),
+                    deviceId = dispatcharrSync.get().deviceId,
+                )
+            }
+        }.getOrNull()
         enabled.forEach { category ->
             val ok = runCatching { pushCategory(token, category) }
                 .onFailure { Log.w(TAG, "push ${category.name} failed", it) }
@@ -319,6 +335,7 @@ class DriveSyncManager @Inject constructor(
         }
         val fileId = driveClient.findFileId(token, category.fileName) ?: return PullOutcome.NoRemote
         val body = driveClient.download(token, fileId) ?: return PullOutcome.Failed
+        providersStore.fold(SyncProvidersStore.DRIVE, SyncProvidersRules.fromDriveBody(body))
         return kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { runCatching {
             when (category) {
                 SyncCategory.Playlists -> applyPlaylistsSnapshot(json.decodeFromString(body), replace)
@@ -341,6 +358,7 @@ class DriveSyncManager @Inject constructor(
     private fun envelope() = SyncEnvelope(
         lastModified = System.currentTimeMillis(),
         device = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+        syncProviders = pushProviders,
     )
 
     private suspend fun buildPlaylistsSnapshot(): PlaylistsSnapshot {

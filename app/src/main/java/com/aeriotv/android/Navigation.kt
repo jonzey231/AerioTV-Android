@@ -646,6 +646,7 @@ fun AerioTVNavHost(
                     restoreOverlayVisible = true
                     val pulled = runCatching { syncVm.restoreFromDrive() }
                         .getOrDefault(emptyMap())
+                    syncVm.armProvidersOffer()
                     val playlistsRestored = pulled[com.aeriotv.android.core.sync.SyncCategory.Playlists] == true
                     val activated = if (playlistsRestored) {
                         runCatching { vm.loadActivePlaylistIfAvailable() }.getOrDefault(false)
@@ -1037,6 +1038,10 @@ fun AerioTVNavHost(
                 }
                 val vm: PlaylistViewModel = hiltViewModel(parent)
                 val state by vm.state.collectAsStateWithLifecycle()
+                // One-time "Keep your devices in sync" offer after onboarding's first restore or pull.
+                com.aeriotv.android.feature.onboarding.SyncProvidersOfferHost(
+                    syncVm = hiltViewModel(parent),
+                )
                 // Capability gates read the LIVE active row: the UiState snapshot
                 // predates the probe that writes the permissions (2026-10-05).
                 val livePlaylist by vm.activePlaylistLive.collectAsStateWithLifecycle(initialValue = null)
