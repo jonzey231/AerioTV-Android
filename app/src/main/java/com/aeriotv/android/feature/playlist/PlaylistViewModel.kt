@@ -1413,6 +1413,9 @@ class PlaylistViewModel @Inject constructor(
             // trim, before an identity purge).
             catalogIsQuick = preloadedRows != null
         }
+        if (!unchanged) {
+            com.aeriotv.android.core.data.EpgPhaseLog.republish(reason, catalog, preloadedRows != null)
+        }
         Log.i(
             TAG,
             "guide catalog rebuilt ($reason): ${rows.size} rows -> ${catalog.size} channels " +
@@ -1539,6 +1542,9 @@ class PlaylistViewModel @Inject constructor(
             repository.loadCachedEpgTimed(playlist.id, quickFromMs, quickToMs)
         }.getOrNull()
         val cachedRaw = cachedRead?.programmes ?: emptyList()
+        // The quick read is the paint projection: description is NOT read
+        // (loadCachedEpgTimed), so emptyDesc equals programmes by design.
+        if (cachedRead != null) com.aeriotv.android.core.data.EpgPhaseLog.phase("cacheQuick", cachedRaw)
         val readMs = android.os.SystemClock.elapsedRealtime() - readStartedAt
         // Off-main, same reason as the network path below: on a 30-day Guide
         // Days setting this is effectively the entire cache, which catch-up
@@ -1787,6 +1793,7 @@ class PlaylistViewModel @Inject constructor(
                         .filter { it.endMillis - it.startMillis >= 30_000L }
                 }
                 Log.i(TAG, "EPG loaded: ${programmes.size} programmes")
+                com.aeriotv.android.core.data.EpgPhaseLog.phase("fetch", programmes, "force=$forceRefresh hadCache=$hasCache")
                 // Item 1: a fetch that returned exactly what the last saved
                 // fetch did (same rows, same channels) is a no-op. Streamer
                 // 2026-10-27 14:25:43 -> :53: it re-saved 7152 rows (wiping
@@ -1922,7 +1929,21 @@ class PlaylistViewModel @Inject constructor(
                         val byKey = enrichedAdds.associateBy { "${it.channelId}|${it.startMillis}" }
                         delta.added.map { byKey["${it.channelId}|${it.startMillis}"] ?: it }
                     }
-                    if (!applyDeltaToCatalog(adds, delta.removedKeys)) rebuildGuideCatalog(playlist, "fetch delta")
+                    com.aeriotv.android.core.data.EpgPhaseLog.phase("delta", adds, "quickOnScreen=$catalogIsQuick")
+                    // The on-screen catalog may still be the quick launch
+                    // paint, built from the paint projection that carries NO
+                    // description. Patching the delta into it in place left
+                    // every row without its description line (and the quick
+                    // window's end-of-window progress bars) until a manual
+                    // refresh, because this branch returned without the
+                    // full-window widen the no-op and failed exits run
+                    // (Nothing Phone 2026-10-28 and 10-29). Widen from Room
+                    // instead: it already holds the delta rows just saved.
+                    if (catalogIsQuick) {
+                        widenQuickCatalog(playlist)
+                    } else if (!applyDeltaToCatalog(adds, delta.removedKeys)) {
+                        rebuildGuideCatalog(playlist, "fetch delta")
+                    }
                     _state.update { it.copy(isEpgLoading = false) }
                     return@fold Result.success(programmes.size)
                 }
@@ -2027,6 +2048,7 @@ class PlaylistViewModel @Inject constructor(
             published = true
         }
         if (!published) return false
+        com.aeriotv.android.core.data.EpgPhaseLog.republish("delta-in-place", patched, catalogIsQuick)
         Log.i(TAG, "guide delta applied in place: ${added.size} rows, ${removedKeys.size} removed, no rebuild (${android.os.SystemClock.elapsedRealtime() - t0}ms)")
         return true
     }
