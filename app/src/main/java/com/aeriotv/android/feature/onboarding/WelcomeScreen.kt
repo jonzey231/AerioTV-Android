@@ -255,8 +255,8 @@ private fun StartHereSection(c: WelcomeContent) {
     OnboardingCard(
         icon = Icons.Outlined.Dns,
         title = "Connect a Server",
-        subtitle = if (c.isTv) "Enter the details yourself. Dispatcharr, Xtream Codes, or an M3U playlist with an EPG."
-        else "Dispatcharr, Xtream Codes, or an M3U playlist with an EPG.",
+        subtitle = if (c.isTv) "Enter the details yourself. Dispatcharr, Xtream Codes, or an M3U playlist with an optional EPG."
+        else "Dispatcharr, Xtream Codes, or an M3U playlist with an optional EPG.",
         onClick = c.onConnectServer,
         highlighted = fastest == null,
         compact = c.isTv,
