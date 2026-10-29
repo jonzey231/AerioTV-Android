@@ -253,12 +253,18 @@ fun AddProfilesStepScreen(
         ProfilesStepHeader(device)
     }
     val listScroll = rememberScrollState()
+    // Keyboard up (user search): the list shows only the search field and
+    // its results, so a result is never below the fold (Logan, 2026-10-29,
+    // screen recording: results sat under the pinned Continue button).
+    val imeVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+    val searchOnly = imeVisible && serverExpanded && !isTv
+    LaunchedEffect(searchOnly) { if (searchOnly) listScroll.scrollTo(0) }
     val userList: @Composable (Modifier) -> Unit = { listModifier ->
                 Column(
                     modifier = listModifier.fillMaxWidth().verticalScroll(listScroll),
                     verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 0.dp),
                 ) {
-                    OnThisDeviceSection(
+                    if (!searchOnly) OnThisDeviceSection(
                         device, localProfiles,
                         undoable = undoable,
                         removeEnabled = !busy && !undoBusy,
@@ -274,8 +280,8 @@ fun AddProfilesStepScreen(
                         focusRemoveFor = focusRemove,
                         onFocusConsumed = { focusRemove = null },
                     )
-                    Spacer(Modifier.height(10.dp))
-                    com.aeriotv.android.feature.settings.RosterSuggestions(
+                    if (!searchOnly) Spacer(Modifier.height(10.dp))
+                    if (!searchOnly) com.aeriotv.android.feature.settings.RosterSuggestions(
                         playlistId, profilesVm, list, enabled = !busy,
                         title = "FROM YOUR OTHER DEVICES",
                         footnote = ROSTER_FOOTNOTE,
@@ -284,7 +290,7 @@ fun AddProfilesStepScreen(
                         focusUsername = focusRoster,
                         onFocusConsumed = { focusRoster = null },
                     )
-                    if (rest.isNotEmpty()) {
+                    if (rest.isNotEmpty() && !searchOnly) {
                         Spacer(Modifier.height(10.dp))
                         AddFromDispatcharrRow(
                             enabled = !busy,
@@ -354,7 +360,6 @@ fun AddProfilesStepScreen(
                 }
 
     }
-    val imeVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
     val controlsTail: @Composable () -> Unit = {
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 val addSelected: () -> Unit = {
