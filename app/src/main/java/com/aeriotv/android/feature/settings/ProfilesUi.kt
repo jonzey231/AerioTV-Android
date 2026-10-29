@@ -109,6 +109,8 @@ class ProfilesViewModel @Inject constructor(
         activePlaylistId.flatMapLatest { id -> if (id == null) flowOf(emptyList()) else manager.profiles(id) }
 
     fun profiles(playlistId: String) = manager.profiles(playlistId)
+    /** A picker surface opened: prompt profiles pull from Dispatcharr Sync (bounded, non-blocking). */
+    fun notePickerOpened(playlistId: String, reason: String) = manager.notePickerOpened(playlistId, reason)
     fun activeProfileId(playlistId: String) = manager.activeProfileId(playlistId)
     /** App-local Admin role: add and remove profiles (server level not needed). */
     /** Set up a TV sender gate (docs/DeviceSetupHandoff.md). */
@@ -286,6 +288,7 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
     }
 
     if (open) {
+        LaunchedEffect(pid) { vm.notePickerOpened(pid, "switch") }
         com.aeriotv.android.ui.FormFactorModal(onDismiss = { open = false }, traceName = "switch-profile") {
             Column(Modifier.padding(bottom = 12.dp)) {
                 Text(
@@ -930,6 +933,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     var manual by remember { mutableStateOf(false) }
     var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
     LaunchedEffect(playlistId) {
+        vm.notePickerOpened(playlistId, "addProfile")
         vm.addCandidates(playlistId).fold(
             { c ->
                 when (c) {

@@ -833,6 +833,20 @@ class ProfileManager @Inject constructor(
      */
     @Volatile var onProfilesMutated: ((playlistId: String, username: String, what: String, stampAt: Long) -> Unit)? = null
 
+    /**
+     * Dispatcharr Sync hook: a profile picker surface opened ("Who is
+     * watching?" at launch or on return to the foreground, Switch Profile,
+     * Add Profile). Sync pulls the `profiles` key right away (bounded) so a
+     * removal or add made on another device shows without waiting for the
+     * 15 minute periodic pull. Set by DispatcharrSyncManager.
+     */
+    @Volatile var onPickerOpened: ((playlistId: String, reason: String) -> Unit)? = null
+
+    /** [reason] is launch, switch, addProfile, or foreground. Never blocks. */
+    fun notePickerOpened(playlistId: String, reason: String) {
+        runCatching { onPickerOpened?.invoke(playlistId, reason) }
+    }
+
     /** [stampAt] > 0 stamps the row with that time (a roster add); 0 = now. */
     private fun mutated(profileId: String, what: String, stampAt: Long = 0L) {
         val p = store.byId(profileId) ?: return

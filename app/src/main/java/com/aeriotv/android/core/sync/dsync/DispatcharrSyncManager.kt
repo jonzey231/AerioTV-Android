@@ -183,6 +183,7 @@ class DispatcharrSyncManager @Inject constructor(
             })
         }
         profileManager.get().onProfilesMutated = { pid, user, what, at -> onProfilesMutated(pid, user, what, at) }
+        profileManager.get().onPickerOpened = { pid, reason -> onPickerOpened(pid, reason) }
         registerNetworkCallback()
         watchBetweenSessions()
         scope.launch {
@@ -316,6 +317,87 @@ class DispatcharrSyncManager @Inject constructor(
             setDirty(s, DsyncKey.Profiles, true)
             schedule(s, DsyncKey.Profiles, DEBOUNCE_MS)
         }
+    }
+
+    // ---- picker-open profiles pull (2026-10-29) ----
+
+    /** Playlist id -> elapsedRealtime of the last picker-open pull. */
+    private val pickerPullAt = HashMap<String, Long>()
+
+    /** Serializes picker-open pulls made while no session runs (picker hold). */
+    private val profilesPeekMutex = Mutex()
+
+    /**
+     * A profile picker surface opened: pull the `profiles` key only (never
+     * the other lanes), then send a pending local profile change when a live
+     * session can. At most one per [PICKER_PULL_MIN_MS] per playlist. The UI
+     * already painted from local state; the merge updates it in place.
+     */
+    private fun onPickerOpened(playlistId: String, reason: String) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val allowed = synchronized(pickerPullAt) {
+            val last = pickerPullAt[playlistId]
+            if (last != null && now - last < PICKER_PULL_MIN_MS) false else { pickerPullAt[playlistId] = now; true }
+        }
+        if (!allowed) {
+            Log.i(TAG, "[DSYNC] profiles: picker-open pull skipped (reason=$reason, last under ${PICKER_PULL_MIN_MS / 1000}s ago)")
+            return
+        }
+        Log.i(TAG, "[DSYNC] profiles: picker-open pull (reason=$reason)")
+        scope.launch { runCatching { pickerPull(playlistId, reason) }.onFailure { Log.w(TAG, "[DSYNC] profiles: picker-open pull failed (reason=$reason): ${it.javaClass.simpleName}") } }
+    }
+
+    private suspend fun pickerPull(playlistId: String, reason: String) {
+        if (prefs.syncProvider.first() != PROVIDER) return
+        // Never fight the hold: a PIN pad pauses everything, and a switch in
+        // flight is about to start its own session pull. The picker itself
+        // (pickerHold) is the stage this pull is for, so it runs under it.
+        if (com.aeriotv.android.core.app.LaunchWorkHold.pinPadOpen.value || profileManager.get().switching.value) {
+            Log.i(TAG, "[DSYNC] profiles: picker-open pull waiting (reason=$reason, pin pad or switch in flight)")
+            com.aeriotv.android.core.app.LaunchWorkHold.pinPadOpen.first { !it }
+            profileManager.get().switching.first { !it }
+        }
+        val token = ProfileScope.token.value
+        val live = session?.takeIf { it.playlistId == playlistId && it.token == token }
+        if (live != null) {
+            live.mutex.withLock { if (session === live) pullProfilesOnly(live, reason, "live") }
+            // Push a pending local change now instead of at the next debounce.
+            if (isDirty(live, DsyncKey.Profiles) || state.getBoolean(profilesPendingKey(playlistId), false)) {
+                if (isAdmin(live)) {
+                    setDirty(live, DsyncKey.Profiles, true)
+                    Log.i(TAG, "[DSYNC] profiles: picker-open push of pending local change (reason=$reason)")
+                    schedule(live, DsyncKey.Profiles, 0L)
+                }
+            }
+            return
+        }
+        // No session (the picker hold ends it): a read-only peek under this
+        // playlist and profile's own keys. Writes stay with the next session
+        // (its start re-sends the pending mark), one sync writer at a time.
+        val profileKey = currentProfileId(playlistId) ?: token.ifEmpty { "default" }
+        val peek = Session(playlistId, profileKey, token)
+        profilesPeekMutex.withLock { pullProfilesOnly(peek, reason, "none") }
+        if (state.getBoolean(profilesPendingKey(playlistId), false)) {
+            Log.i(TAG, "[DSYNC] profiles: pending local change kept for the next session (reason=$reason)")
+        }
+    }
+
+    /** One GET of the main key, then the `profiles` category only, through the normal merge. */
+    private suspend fun pullProfilesOnly(s: Session, reason: String, sessionKind: String) {
+        val c = freshConn(s) ?: return
+        if (!enabled(DsyncKey.Profiles, s)) {
+            Log.i(TAG, "[DSYNC] profiles: picker-open pull not applied (reason=$reason, profile cannot write profiles)")
+            return
+        }
+        when (val f = fetchBucket(c, DsyncBucket.of(DsyncKey.Profiles))) {
+            is Fetched.Got -> when (val d = DsyncV2.category(f.bucket, DsyncKey.Profiles)) {
+                is DsyncDecode.Ok -> processCategory(s, DsyncKey.Profiles, d.envelope, f.bytes)
+                null -> Unit
+                else -> Log.w(TAG, "[DSYNC] malformed profiles category")
+            }
+            else -> Unit
+        }
+        Log.i(TAG, "[DSYNC] profiles: picker-open pull done (reason=$reason, session=$sessionKind)")
     }
 
     /** The local removed stamps (`pgone|`), a cache of this device's
@@ -1721,6 +1803,8 @@ class DispatcharrSyncManager @Inject constructor(
         const val DEBOUNCE_MS = 5_000L
         const val FOREGROUND_PULL_MS = 5L * 60 * 1000
         const val PERIODIC_PULL_MS = 15L * 60 * 1000
+        /** Picker-open profiles pull: at most one per playlist in this window. */
+        const val PICKER_PULL_MIN_MS = 30_000L
         private const val SUPPRESS_MS = 3_000L
         private val HEAL_KEYS = setOf(DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.HiddenGroups, DsyncKey.GroupOrder)
         val BACKOFF_MS = longArrayOf(30_000L, 120_000L, 600_000L)

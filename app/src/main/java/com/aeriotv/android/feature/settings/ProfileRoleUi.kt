@@ -237,6 +237,20 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
     val adder = rememberPickerAdder(pk.playlistId, pickerVm, profiles)
     val launchRole by com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle()
     var moveFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    // Prompt profiles pull: the first start is the launch, a later one is a
+    // return to the foreground onto the picker.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner, pk.playlistId) {
+        var first = true
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_START) {
+                manager.notePickerOpened(pk.playlistId, if (first) "launch" else "foreground")
+                first = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
 
     fun choose(p: DispatcharrProfile) {
         busy = true; error = null
@@ -433,6 +447,7 @@ fun TvProfilePickerDialog(onDismiss: () -> Unit) {
     val adder = rememberPickerAdder(pid, vm, profiles)
     var moveFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     val moveScope = rememberCoroutineScope()
+    androidx.compose.runtime.LaunchedEffect(pid) { vm.notePickerOpened(pid, "switch") }
 
     fun doSwitch(p: DispatcharrProfile) {
         busy = true; error = null
