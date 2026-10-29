@@ -256,13 +256,6 @@ fun AddProfilesStepScreen(
                     if (serverExpanded && rest.isNotEmpty()) {
                         com.aeriotv.android.feature.settings.ExpandableSearch(query, { query = it }, enabled = !busy)
                     }
-                    if (serverExpanded && rest.isNotEmpty()) {
-                        androidx.compose.material3.TextButton(
-                            onClick = { toggleServer() },
-                            enabled = !busy,
-                            modifier = Modifier.dpadFocusRing(RoundedCornerShape(50)),
-                        ) { Text("Hide") }
-                    }
                     if (serverExpanded) shown.forEachIndexed { index, user ->
                         val checked = user.id in selected
                         // TV: the row and the role chip are two focus stops.
