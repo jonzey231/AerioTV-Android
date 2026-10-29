@@ -128,7 +128,7 @@ fun ChooseSourceTypeScreen(
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    "AerioTV is built around Dispatcharr. Other playlist types work too, with fewer features.",
+                    "AerioTV is built around Dispatcharr. Other playlist types work too, but with fewer features.",
                     style = MaterialTheme.typography.bodyMedium.subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
