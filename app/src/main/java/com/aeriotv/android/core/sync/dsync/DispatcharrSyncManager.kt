@@ -127,8 +127,10 @@ class DispatcharrSyncManager @Inject constructor(
      * the API key captured at its start. Nothing it queued may ever go out
      * under another profile (2026-10-18 cross-profile write on switch).
      */
-    private inner class Session(val playlistId: String, val profileKey: String, val token: String) {
+    private inner class Session(val playlistId: String, val profileKey: String, val token: String, val peek: Boolean = false) {
         val mutex = Mutex()
+        /** The live session, or a picker peek while no session runs (one writer at a time). */
+        fun live(): Boolean = session === this || (peek && session == null)
         @Volatile var bound: Conn? = null
         /** No key is written before this session's first complete pull. */
         @Volatile var firstPullDone = false
@@ -316,7 +318,7 @@ class DispatcharrSyncManager @Inject constructor(
         scope.launch {
             val s = session?.takeIf { it.playlistId == playlistId }
             Log.i(TAG, "[DSYNC] profiles dirty ($what ${username})${if (s == null) "; no session" else ""}")
-            if (s == null) return@launch
+            if (s == null) { schedulePeekPush(playlistId, what); return@launch }
             if (!isAdmin(s)) return@launch
             setDirty(s, DsyncKey.Profiles, true)
             schedule(s, DsyncKey.Profiles, DEBOUNCE_MS)
@@ -365,6 +367,11 @@ class DispatcharrSyncManager @Inject constructor(
         val live = session?.takeIf { it.playlistId == playlistId && it.token == token }
         if (live != null) {
             live.mutex.withLock { if (session === live) pullProfilesOnly(live, reason, "live") }
+            scope.launch {
+                // Read once more 3 s later (see the no-session path below).
+                delay(PICKER_REPULL_MS)
+                live.mutex.withLock { if (session === live) pullProfilesOnly(live, "$reason-repull", "live") }
+            }
             // Push a pending local change now instead of at the next debounce.
             if (isDirty(live, DsyncKey.Profiles) || state.getBoolean(profilesPendingKey(playlistId), false)) {
                 if (isAdmin(live)) {
@@ -381,27 +388,111 @@ class DispatcharrSyncManager @Inject constructor(
         val profileKey = currentProfileId(playlistId) ?: token.ifEmpty { "default" }
         val peek = Session(playlistId, profileKey, token)
         profilesPeekMutex.withLock { pullProfilesOnly(peek, reason, "none") }
+        // A write from another device a moment before can still read back old
+        // (2026-10-29 00:43:18 to 00:43:19): read once more, 3 s later.
+        delay(PICKER_REPULL_MS)
+        val live2 = session?.takeIf { it.playlistId == playlistId && it.token == ProfileScope.token.value }
+        if (live2 != null) live2.mutex.withLock { if (session === live2) pullProfilesOnly(live2, "$reason-repull", "live") }
+        else profilesPeekMutex.withLock { pullProfilesOnly(Session(playlistId, profileKey, ProfileScope.token.value), "$reason-repull", "none") }
         if (state.getBoolean(profilesPendingKey(playlistId), false)) {
             Log.i(TAG, "[DSYNC] profiles: pending local change kept for the next session (reason=$reason)")
         }
     }
 
-    /** One GET of the main key, then the `profiles` category only, through the normal merge. */
-    private suspend fun pullProfilesOnly(s: Session, reason: String, sessionKind: String) {
-        val c = freshConn(s) ?: return
+    /**
+     * One GET of the main key (always on the wire: no list-bytes shortcut, no
+     * cached copy, no conditional request), then the `profiles` category
+     * only, through the normal merge. True when the key was read.
+     */
+    private suspend fun pullProfilesOnly(s: Session, reason: String, sessionKind: String): Boolean {
+        val c = freshConn(s) ?: return false
         if (!enabled(DsyncKey.Profiles, s)) {
             Log.i(TAG, "[DSYNC] profiles: picker-open pull not applied (reason=$reason, profile cannot write profiles)")
-            return
+            return false
         }
+        var ok = false
         when (val f = fetchBucket(c, DsyncBucket.of(DsyncKey.Profiles))) {
             is Fetched.Got -> when (val d = DsyncV2.category(f.bucket, DsyncKey.Profiles)) {
-                is DsyncDecode.Ok -> processCategory(s, DsyncKey.Profiles, d.envelope, f.bytes)
-                null -> Unit
+                is DsyncDecode.Ok -> {
+                    val env = d.envelope
+                    // What the server answered, so a stale read is provable from the log.
+                    Log.i(
+                        TAG,
+                        "[DSYNC] profiles: server copy (reason=$reason) bytes=${f.bytes} updatedAt=${env.updatedAt} " +
+                            "device=${env.deviceId.take(8)} rows=${DsyncPayloads.decodeProfiles(env.data)?.size ?: -1} " +
+                            "removed=${DsyncPayloads.decodeProfileTombstones(env.data).joinToString { "${it.username}@${it.removedAt}" }.ifEmpty { "none" }}",
+                    )
+                    s.present += DsyncKey.Profiles
+                    processCategory(s, DsyncKey.Profiles, env, f.bytes)
+                    ok = true
+                }
+                null -> { s.read += DsyncKey.Profiles; ok = true }
                 else -> Log.w(TAG, "[DSYNC] malformed profiles category")
             }
+            Fetched.Absent -> { s.read += DsyncKey.Profiles; ok = true }
             else -> Unit
         }
         Log.i(TAG, "[DSYNC] profiles: picker-open pull done (reason=$reason, session=$sessionKind)")
+        return ok
+    }
+
+    /** Playlist id -> the debounced no-session push. */
+    private val peekPushJobs = HashMap<String, Job>()
+
+    /**
+     * A profile add or remove made with no live session (at the launch
+     * picker): push `profiles` within about a second under the playlist's
+     * last-active profile, when that profile may write profiles. A burst of
+     * edits is one put. Serialized with the picker peek; a session start
+     * waits for it, so there is one writer at a time.
+     */
+    private fun schedulePeekPush(playlistId: String, what: String) {
+        synchronized(peekPushJobs) {
+            peekPushJobs.remove(playlistId)?.cancel()
+            peekPushJobs[playlistId] = scope.launch {
+                delay(PEEK_PUSH_DEBOUNCE_MS)
+                synchronized(peekPushJobs) { peekPushJobs.remove(playlistId) }
+                runCatching { peekPush(playlistId, what) }
+                    .onFailure { Log.w(TAG, "[DSYNC] profiles: no-session push failed ($what): ${it.javaClass.simpleName}") }
+            }
+        }
+    }
+
+    private suspend fun peekPush(playlistId: String, what: String) {
+        if (prefs.syncProvider.first() != PROVIDER) return
+        val active = playlistDao.observeActive().first().firstOrNull()?.takeIf { it.isDispatcharrDirectConnect() }?.id
+        if (active != playlistId) return
+        if (com.aeriotv.android.core.app.LaunchWorkHold.pinPadOpen.value) {
+            com.aeriotv.android.core.app.LaunchWorkHold.pinPadOpen.first { !it }
+        }
+        if (profileManager.get().switching.value || session != null) {
+            Log.i(TAG, "[DSYNC] profiles: no-session push left to the session ($what)")
+            return
+        }
+        val token = ProfileScope.token.value
+        val profileKey = currentProfileId(playlistId) ?: token.ifEmpty { "default" }
+        profilesPeekMutex.withLock {
+            if (session != null) {
+                Log.i(TAG, "[DSYNC] profiles: no-session push left to the session ($what)")
+                return@withLock
+            }
+            val peek = Session(playlistId, profileKey, token, peek = true)
+            if (!isAdmin(peek)) {
+                Log.i(TAG, "[DSYNC] profiles: no-session push skipped ($what): last-active profile cannot write profiles; kept for the next session")
+                return@withLock
+            }
+            Log.i(TAG, "[DSYNC] profiles: no-session push ($what) under the last-active profile")
+            if (!pullProfilesOnly(peek, "push-$what", "none")) {
+                Log.i(TAG, "[DSYNC] profiles: no-session push deferred ($what): server not read; kept for the next session")
+                return@withLock
+            }
+            peek.firstPullDone = true
+            setDirty(peek, DsyncKey.Profiles, true)
+            writeLocked(peek, DsyncKey.Profiles, retry413 = true)
+            if (state.getBoolean(profilesPendingKey(playlistId), false)) {
+                Log.i(TAG, "[DSYNC] profiles: no-session push not confirmed ($what); kept for the next session")
+            }
+        }
     }
 
     /** The local removed stamps (`pgone|`), a cache of this device's
@@ -480,6 +571,8 @@ class DispatcharrSyncManager @Inject constructor(
                 !com.aeriotv.android.core.profiles.ProfileRoster.isStripped(displayName, username, avatar))
 
     private suspend fun runSession(t: Target, trigger: String) {
+        // A picker peek write in flight finishes first: one writer at a time.
+        profilesPeekMutex.withLock { }
         val profileKey = currentProfileId(t.playlistId) ?: t.profileToken.ifEmpty { "default" }
         val s = Session(t.playlistId, profileKey, t.profileToken)
         session = s
@@ -1009,6 +1102,8 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     private fun schedule(s: Session, key: DsyncKey, delayMs: Long) {
+        // A peek writes only from peekPush, under profilesPeekMutex.
+        if (s.peek) return
         synchronized(s.pending) {
             s.pending.remove(key)?.cancel()
             s.pending[key] = scope.launch {
@@ -1042,7 +1137,7 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     private suspend fun writeLocked(s: Session, key: DsyncKey, retry413: Boolean) {
-        if (session !== s || s.paused) return
+        if (!s.live() || s.paused) return
         if (!DsyncGate.mayWrite(s.token, ProfileScope.token.value, s.firstPullDone, key in s.read)) {
             // Section 7.2 and the switch rule: the dirty flag stays set for this profile's next session.
             if (ProfileScope.token.value != s.token) Log.i(TAG, "[DSYNC] drop ${key.suffix}: profile changed before send")
@@ -1066,7 +1161,7 @@ class DispatcharrSyncManager @Inject constructor(
         val data = runCatching { build(s, key, base, now) }
             .onFailure { Log.w(TAG, "[DSYNC] build ${key.suffix} failed: ${it.javaClass.simpleName}") }
             .getOrNull() ?: return
-        if (session !== s || ProfileScope.token.value != s.token) return
+        if (!s.live() || ProfileScope.token.value != s.token) return
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
             setDirty(s, key, false)
             if (key == DsyncKey.Profiles) {
@@ -1826,6 +1921,10 @@ class DispatcharrSyncManager @Inject constructor(
         const val PERIODIC_PULL_MS = 15L * 60 * 1000
         /** Picker-open profiles pull: at most one per playlist in this window. */
         const val PICKER_PULL_MIN_MS = 30_000L
+        /** The one follow-up read after a picker-open pull. */
+        const val PICKER_REPULL_MS = 3_000L
+        /** A burst of no-session profile edits becomes one put. */
+        const val PEEK_PUSH_DEBOUNCE_MS = 1_000L
         private const val SUPPRESS_MS = 3_000L
         private val HEAL_KEYS = setOf(DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.HiddenGroups, DsyncKey.GroupOrder)
         val BACKOFF_MS = longArrayOf(30_000L, 120_000L, 600_000L)
