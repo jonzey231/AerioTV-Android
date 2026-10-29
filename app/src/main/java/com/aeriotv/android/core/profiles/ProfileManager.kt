@@ -1192,6 +1192,19 @@ class ProfileManager @Inject constructor(
 
     /** Ids [undoAdd] accepts right now (onboarding shows Remove on these rows). */
     val undoableRosterAdds: kotlinx.coroutines.flow.StateFlow<Set<String>> get() = rosterUndoable
+
+    /** Of [rosterUndoable], the ids created fresh on this device (onboarding manual add), not from the roster. */
+    private val freshUndoable = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Onboarding manual add: the profile just created here may be removed
+     * with the red minus. Unlike a roster undo, its server row exists only
+     * because this device pushed it, so its undo writes the tombstone.
+     */
+    fun markFreshAddUndoable(profileId: String) {
+        freshUndoable += profileId
+        rosterUndoable.update { it + profileId }
+    }
     fun canUndoAdd(profileId: String): Boolean = profileId in rosterUndoable.value
 
     /**
@@ -1212,7 +1225,8 @@ class ProfileManager @Inject constructor(
         check(profileId in rosterUndoable.value) { "Only a profile just added here can be undone." }
         val p = store.byId(profileId) ?: run { rosterUndoable.update { it - profileId }; return@runCatching }
         check(!p.isDefault) { "The default profile cannot be removed." }
-        deleteLocal(p, fromSync = false, tombstone = false)
+        val fresh = freshUndoable.remove(profileId)
+        deleteLocal(p, fromSync = false, tombstone = fresh)
         rosterUndoable.update { it - profileId }
         refreshActiveRole()
         Log.i(TAG, "[PROFILES] undo add ${p.username}")

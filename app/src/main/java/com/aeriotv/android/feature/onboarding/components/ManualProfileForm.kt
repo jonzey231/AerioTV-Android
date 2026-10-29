@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.feature.onboarding.DispatcharrAuthMode
 import com.aeriotv.android.feature.onboarding.SegmentedAuthControl
@@ -43,6 +44,15 @@ import kotlinx.coroutines.launch
 fun ManualProfileForm(
     onAdd: suspend (username: String, password: String?, apiKey: String?) -> String?,
     modifier: Modifier = Modifier,
+    /** Scan / Photos / Import file buttons above the fields (Settings); onboarding has its own card. */
+    showQr: Boolean = true,
+    /** Onboarding: a small "Use an API key instead" link in place of the segmented control. */
+    modeAsLink: Boolean = false,
+    /** Drawn between the fields and the Add button (onboarding Role choice). */
+    beforeSubmit: @Composable () -> Unit = {},
+    submitLabel: String = "Add Profile",
+    /** Focus target for the first field (TV hand-off when the form opens). */
+    firstFieldModifier: Modifier = Modifier,
 ) {
     var username by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(DispatcharrAuthMode.UsernamePassword) }
@@ -54,10 +64,11 @@ fun ManualProfileForm(
     var scannedUser by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SegmentedAuthControl(selected = mode, onSelect = { mode = it; username = ""; secret = ""; error = null; scannedUser = null }, enabled = !busy)
+        val selectMode: (DispatcharrAuthMode) -> Unit = { mode = it; username = ""; secret = ""; error = null; scannedUser = null }
+        if (!modeAsLink) SegmentedAuthControl(selected = mode, onSelect = selectMode, enabled = !busy)
         // Dispatcharr user QR (phones and tablets): the key signs in the same
         // way as a pasted key. The username in the code is display only.
-        com.aeriotv.android.feature.qrscan.QrScanActions(
+        if (showQr) com.aeriotv.android.feature.qrscan.QrScanActions(
             enabled = !busy,
             onResult = { r ->
                 when (r) {
@@ -80,14 +91,14 @@ fun ManualProfileForm(
             },
         )
         scannedUser?.let { Text("Signed in as $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
-        Text(
+        if (!modeAsLink) Text(
             if (isPassword) "Sign in as that Dispatcharr user once." else "The API key identifies the Dispatcharr user.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         // Same fields as the Dispatcharr connect form (label above, leading
         // icon, placeholder, reveal eye).
-        if (isPassword) {
+        if (isPassword) androidx.compose.foundation.layout.Box(firstFieldModifier.then(Modifier.focusGroup())) {
             LabeledField(label = "Username") {
                 IconTextField(
                     value = username,
@@ -97,6 +108,8 @@ fun ManualProfileForm(
                     enabled = !busy,
                 )
             }
+        }
+        if (isPassword) {
             PasswordField(
                 label = "Password",
                 value = secret,
@@ -105,6 +118,7 @@ fun ManualProfileForm(
                 enabled = !busy,
             )
         } else {
+            androidx.compose.foundation.layout.Box(firstFieldModifier.then(Modifier.focusGroup())) {
             LabeledField(label = "API Key") {
                 val reveal = rememberSecretRevealState()
                 IconTextField(
@@ -118,7 +132,16 @@ fun ManualProfileForm(
                     enabled = !busy,
                 )
             }
+            }
         }
+        if (modeAsLink) {
+            androidx.compose.material3.TextButton(
+                onClick = { selectMode(if (isPassword) DispatcharrAuthMode.ApiKey else DispatcharrAuthMode.UsernamePassword) },
+                enabled = !busy,
+                modifier = Modifier.heightIn(min = 40.dp).dpadFocusRing(RoundedCornerShape(50)),
+            ) { Text(if (isPassword) "Use an API key instead" else "Use a username and password instead", style = MaterialTheme.typography.bodyMedium) }
+        }
+        beforeSubmit()
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         // Never disabled mid-flow (TV focus); taps are ignored while busy.
         Button(
@@ -134,7 +157,7 @@ fun ManualProfileForm(
             modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-            else Text("Add Profile")
+            else Text(submitLabel)
         }
     }
 }

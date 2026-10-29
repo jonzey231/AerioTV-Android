@@ -1,6 +1,9 @@
 package com.aeriotv.android.feature.onboarding
 
 import com.aeriotv.android.feature.settings.isServerAdmin
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -114,8 +117,9 @@ class AddProfilesStepViewModel @Inject constructor(
     }
 
     suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
-        if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
-        else manager.addProfileManual(playlistId, username, password, null, role)
+        (if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
+        else manager.addProfileManual(playlistId, username, password, null, role))
+            .onSuccess { manager.markFreshAddUndoable(it.id) }
 
     suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
         manager.addProfile(playlistId, user, password, apiKey, role)
@@ -188,7 +192,7 @@ fun AddProfilesStepScreen(
         }
     }
     if (manual) {
-        ManualAddProfilesStep(playlistId, vm, onDone, onSetUpTv)
+        ManualAddProfilesStep(playlistId, vm, onDone, onSetUpTv, onboarding)
         return
     }
 
@@ -557,13 +561,65 @@ private fun CredentialDialog(
     )
 }
 
-/** Non-admin base: type each user's name and sign in as them once. */
+/**
+ * Non-admin base (the server user list is not readable): the same layout as
+ * the admin branch. ON THIS PHONE, then roster suggestions, then one
+ * question, "Add another profile?". Yes reveals Scan a QR code and Enter
+ * details in place; Not now leaves the screen as it is and Continue moves on.
+ * After a successful add the new profile shows under ON THIS PHONE with the
+ * red minus and the question returns to unanswered.
+ */
 @Composable
-private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewModel, onDone: () -> Unit, onSetUpTv: (() -> Unit)?) {
-    val added = remember { mutableStateListOf<String>() }
+private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewModel, onDone: () -> Unit, onSetUpTv: (() -> Unit)?, onboarding: Boolean) {
     var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
     val profilesVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val device = rememberDeviceNoun()
+    val scope = rememberCoroutineScope()
+    val localFlow = remember(playlistId) { profilesVm.profiles(playlistId) }
+    val localProfiles = localFlow.collectAsStateWithLifecycle(initialValue = emptyList()).value
+    val undoable by profilesVm.undoableRosterAdds.collectAsStateWithLifecycle()
+    var undoBusy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var focusRemove by remember { mutableStateOf<String?>(null) }
+    var focusRoster by remember { mutableStateOf<String?>(null) }
+    // null = unanswered, true = Yes (ADD A PROFILE open), false = Not now.
+    var wantsMore by remember { mutableStateOf<Boolean?>(null) }
+    var scanOpen by remember { mutableStateOf(false) }
+    var detailsOpen by remember { mutableStateOf(false) }
+    val firstCardFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val firstFieldFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val continueFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    // Focus hand-offs: 1 = first ADD A PROFILE card, 2 = Continue, 3 = first field.
+    var focusTarget by remember { mutableStateOf(0) }
+    LaunchedEffect(focusTarget) {
+        val t = focusTarget
+        if (t == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(60)
+        runCatching {
+            when (t) {
+                1 -> firstCardFocus.requestFocus()
+                2 -> continueFocus.requestFocus()
+                3 -> firstFieldFocus.requestFocus()
+            }
+        }
+        focusTarget = 0
+    }
+    fun collapseAfterAdd() {
+        wantsMore = null; scanOpen = false; detailsOpen = false
+        role = com.aeriotv.android.core.profiles.ProfileRole.User
+        focusTarget = 2
+    }
+    // A Child add goes through the same Child-PIN gate as the role rows.
+    suspend fun addWith(username: String, password: String?, apiKey: String?): String? =
+        vm.addManual(playlistId, username, password, apiKey, role).fold(
+            { collapseAfterAdd(); null },
+            { it.message ?: "Could not add profile" },
+        )
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var scanStatus by remember { mutableStateOf<String?>(null) }
+    var scanBusy by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -579,40 +635,140 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ProfilesStepHeader(rememberDeviceNoun())
+            if (onboarding) com.aeriotv.android.feature.onboarding.components.StepCaption(2, 3)
+            ProfilesStepHeader(device)
+            OnThisDeviceSection(
+                device, localProfiles,
+                undoable = undoable,
+                removeEnabled = !undoBusy,
+                onRemove = { p ->
+                    undoBusy = true
+                    scope.launch {
+                        profilesVm.undoAdd(p.id).fold(
+                            { undoBusy = false; if (isTv) focusRoster = p.username; if (isTv) focusTarget = 2 },
+                            { undoBusy = false; error = it.message ?: "Could not remove profile" },
+                        )
+                    }
+                },
+                focusRemoveFor = focusRemove,
+                onFocusConsumed = { focusRemove = null },
+            )
             com.aeriotv.android.feature.settings.RosterSuggestions(
                 playlistId, profilesVm, users = null,
                 title = "FROM YOUR OTHER DEVICES",
                 footnote = ROSTER_FOOTNOTE,
+                keepAdded = false,
+                onAddedProfile = { id -> if (isTv) focusRemove = id },
+                focusUsername = focusRoster,
+                onFocusConsumed = { focusRoster = null },
             )
-            added.forEach { name ->
-                Text("Added $name", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
+            // The question card.
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Add another profile?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = { wantsMore = true; focusTarget = 1 },
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                    ) { Text("Yes", style = MaterialTheme.typography.titleSmall) }
+                    OutlinedButton(
+                        onClick = { wantsMore = false; scanOpen = false; detailsOpen = false; focusTarget = 2 },
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50)),
+                    ) { Text("Not now", style = MaterialTheme.typography.titleSmall) }
+                }
             }
-            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role) { role = it }
-            com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
-                onAdd = { u, pw, key ->
-                    vm.addManual(playlistId, u, pw, key, role).fold(
-                        { added += it.username; null },
-                        { it.message ?: "Could not add profile" },
+            if (wantsMore == true) {
+                com.aeriotv.android.feature.onboarding.components.OnboardingSectionLabel("Add a profile")
+                // TVs have no camera and QrScanActions draws nothing there.
+                if (!isTv) {
+                    com.aeriotv.android.feature.onboarding.components.OnboardingCard(
+                        icon = Icons.Outlined.QrCodeScanner,
+                        title = "Scan a QR code",
+                        subtitle = "Use the QR code from your Dispatcharr administrator, or import it from Photos.",
+                        onClick = { scanOpen = !scanOpen; if (scanOpen) detailsOpen = false },
+                        highlighted = scanOpen,
+                        modifier = Modifier.focusRequester(firstCardFocus),
                     )
-                },
-            )
-            OutlinedButton(
+                    if (scanOpen) {
+                        com.aeriotv.android.feature.qrscan.QrScanActions(
+                            enabled = !scanBusy,
+                            onResult = { r ->
+                                when (r) {
+                                    is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> if (!scanBusy) {
+                                        scanBusy = true; scanStatus = null
+                                        scope.launch {
+                                            scanStatus = addWith("", null, r.apiKey)
+                                            scanBusy = false
+                                        }
+                                    }
+                                    is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
+                                        com.aeriotv.android.feature.qrscan.openSetupLink(context, r.link)
+                                    com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> Unit
+                                }
+                            },
+                        )
+                        if (scanBusy) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        scanStatus?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth()) }
+                    }
+                }
+                com.aeriotv.android.feature.onboarding.components.OnboardingCard(
+                    icon = Icons.Outlined.Edit,
+                    title = "Enter details",
+                    subtitle = "Sign in as that Dispatcharr user once.",
+                    onClick = {
+                        detailsOpen = !detailsOpen
+                        if (detailsOpen) { scanOpen = false; if (isTv) focusTarget = 3 }
+                    },
+                    highlighted = detailsOpen,
+                    modifier = if (isTv) Modifier.focusRequester(firstCardFocus) else Modifier,
+                )
+                if (detailsOpen) {
+                    com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
+                        onAdd = { u, pw, key -> addWith(u, pw, key) },
+                        showQr = false,
+                        modeAsLink = true,
+                        submitLabel = "Add profile",
+                        firstFieldModifier = Modifier.focusRequester(firstFieldFocus),
+                        beforeSubmit = {
+                            // Picking Child runs the existing Child-PIN gate inside RolePicker.
+                            com.aeriotv.android.feature.settings.RolePicker(playlistId, profilesVm, role, vertical = true) { role = it }
+                        },
+                    )
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth()) }
+            Spacer(Modifier.height(4.dp))
+            // onDone is the caller's wrapper: adding next to a Child walks the PIN step first.
+            Button(
                 onClick = onDone,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
-            ) { Text(if (added.isEmpty()) "Skip" else "Done", style = MaterialTheme.typography.titleMedium) }
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 54.dp)
+                    .focusRequester(continueFocus)
+                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) { Text("Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+            ProfileCountLine(device, localProfiles)
             if (onSetUpTv != null) {
                 androidx.compose.material3.TextButton(
                     onClick = onSetUpTv,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50)),
                 ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
             }
-            Text(
-                "You can add or remove profiles later in Settings > Playlists.",
-                style = MaterialTheme.typography.bodySmall.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
