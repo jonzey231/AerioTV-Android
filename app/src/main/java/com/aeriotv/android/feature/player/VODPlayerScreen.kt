@@ -2655,18 +2655,7 @@ private fun BottomChrome(
             // this block's own 16 dp inset). Plain Text: never focusable.
             if (formatBadge != null && isTvForm) {
                 Spacer(Modifier.width(10.dp))
-                Text(
-                    text = formatBadge,
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
+                StableFormatBadge(text = formatBadge)
             }
             }
             }

@@ -91,6 +91,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.filled.FiberSmartRecord
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -587,7 +588,7 @@ fun PlayerChromeOverlay(
                     )
                 }
                 if (formatBadge != null) {
-                    PlayerFormatBadge(
+                    StableFormatBadge(
                         text = formatBadge,
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
@@ -1057,6 +1058,24 @@ private fun CenterAnchoredPillRow(
 /** Horizontal inset of the TV timeline track; the format badge lines its right
  *  edge up with it. */
 private val TV_TIMELINE_INSET = 56.dp
+
+/** The VOD transport row's format badge with a STABLE width: an invisible
+ *  widest-plausible label reserves the slot and the real pill right-aligns
+ *  inside it, so a text change (50 to 59.94 fps, 1080p to 2160p) never
+ *  shifts the buttons to its left (Streamer 2026-10-29). */
+@Composable
+internal fun StableFormatBadge(text: String, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Box(
+        modifier = modifier,
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        PlayerFormatBadge(
+            text = "2160p · 59.94 fps",
+            modifier = Modifier.alpha(0f),
+        )
+        PlayerFormatBadge(text = text)
+    }
+}
 
 /** Frosted capsule carrying the video format readout ("1080p · 59.94 fps").
  *  [fontSize] defaults to the TV size; the touch chrome passes its own

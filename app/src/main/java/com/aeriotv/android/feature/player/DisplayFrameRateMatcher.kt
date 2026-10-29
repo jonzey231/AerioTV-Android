@@ -4,6 +4,8 @@ import android.os.Build
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceView
+import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.video.VideoFrameMetadataListener
@@ -86,6 +88,11 @@ object DisplayFrameRateMatcher {
      *  when no live playback needs it. */
     @Volatile var onVodDetached: (() -> Unit)? = null
 
+    /** Speed mirrors per attachment handle, so [detach] can remove the
+     *  Player.Listener that feeds each one. */
+    private val speedListeners =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, Player.Listener>())
+
     /**
      * Start measuring [player]'s frame rate and request a refresh-rate match on
      * [surfaceView]'s Surface (framework arbitrates via the user's OS Match
@@ -110,7 +117,35 @@ object DisplayFrameRateMatcher {
         var lastPtsUs = -1L
         var lastAppliedFps = 0f
         var lastLoggedClass = Float.NaN
+        // Playback speed, mirrored from the application thread by a
+        // Player.Listener (reading player.playbackParameters here on the
+        // playback thread would trip the wrong-thread check). At a non-1.0
+        // speed the renderer drops frames, the measured rate slides (57.62
+        // down to 45.63 within 1 s at 1.5x on the Streamer, 2026-10-29), and
+        // each slide re-requested setFrameRate: repeated HDMI mode switches,
+        // a black flash. Off 1.0x we freeze the last measurement and request
+        // nothing; on return to 1.0x the sample window starts fresh.
+        val speed = java.util.concurrent.atomic.AtomicReference(
+            runCatching { player.playbackParameters.speed }.getOrDefault(1f),
+        )
+        val resetWindow = java.util.concurrent.atomic.AtomicBoolean(false)
+        var paused = false
         val listener = VideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
+            val sp = speed.get()
+            if (sp != 1.0f) {
+                if (!paused) {
+                    paused = true
+                    Log.i(TAG, "[AerioFpsMatch] paused: speed=${"%.2f".format(sp)}")
+                }
+                lastPtsUs = -1L
+                return@VideoFrameMetadataListener
+            }
+            if (resetWindow.getAndSet(false) || paused) {
+                if (paused) Log.i(TAG, "[AerioFpsMatch] resumed")
+                paused = false
+                deltasUs.clear()
+                lastPtsUs = -1L
+            }
             if (lastPtsUs >= 0L) {
                 val d = presentationTimeUs - lastPtsUs
                 if (d < 0L || d > 1_000_000L) {
@@ -190,6 +225,14 @@ object DisplayFrameRateMatcher {
                 }
             }
         }
+        val speedListener = object : Player.Listener {
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                val old = speed.getAndSet(playbackParameters.speed)
+                if (old != 1.0f && playbackParameters.speed == 1.0f) resetWindow.set(true)
+            }
+        }
+        runCatching { player.addListener(speedListener) }
+        speedListeners[listener] = speedListener
         player.setVideoFrameMetadataListener(listener)
         latestHandle = listener
         attachedPlayer = player
@@ -219,6 +262,7 @@ object DisplayFrameRateMatcher {
         contentFps.value = 0f
         (handle as? VideoFrameMetadataListener)?.let { l ->
             runCatching { player?.clearVideoFrameMetadataListener(l) }
+            speedListeners.remove(l)?.let { sl -> runCatching { player?.removeListener(sl) } }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val surface = surfaceView?.holder?.surface
