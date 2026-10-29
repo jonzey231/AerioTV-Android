@@ -303,10 +303,16 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
 
     if (open) {
         LaunchedEffect(pid) { vm.notePickerOpened(pid, "switch") }
-        // No drag: the sheet shows everything at its resting height, so a drag
-        // only snapped back and felt broken (Logan, 2026-10-29). The scrim
-        // still dismisses.
-        com.aeriotv.android.ui.FormFactorModal(onDismiss = { open = false }, traceName = "switch-profile", sheetGesturesEnabled = false) {
+        // Few profiles: no drag, the resting height shows everything and a
+        // drag only snapped back (Logan, 2026-10-29). Many profiles: the sheet
+        // expands on drag and the list scrolls. The scrim always dismisses.
+        val longList = profiles.size > SWITCH_SHEET_FIXED_MAX
+        com.aeriotv.android.ui.FormFactorModal(
+            onDismiss = { open = false },
+            traceName = "switch-profile",
+            sheetGesturesEnabled = longList,
+            sheetExpandable = longList,
+        ) {
             Column(Modifier.padding(bottom = 12.dp)) {
                 Text(
                     "Switch Profile",
@@ -314,6 +320,10 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
                 val firstFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+                Column(
+                    if (longList) Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                    else Modifier,
+                ) {
                 profiles.forEach { p ->
                     ProfileRow(
                         profile = p,
@@ -326,6 +336,7 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
                             else if (vm.isPlaying()) confirm = p else doSwitch(p)
                         },
                     )
+                }
                 }
                 LaunchedEffect(Unit) {
                     repeat(10) {
@@ -408,6 +419,9 @@ internal fun StopPlaybackDialog(name: String, onDismiss: () -> Unit, onConfirm: 
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+/** Switch Profile sheet: up to this many rows sit at the resting height without a drag. */
+private const val SWITCH_SHEET_FIXED_MAX = 4
+
 @Composable
 internal fun ProfileRow(
     profile: DispatcharrProfile,
