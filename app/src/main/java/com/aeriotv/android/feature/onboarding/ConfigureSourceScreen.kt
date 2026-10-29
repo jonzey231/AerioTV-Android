@@ -129,6 +129,10 @@ fun ConfigureSourceScreen(
     // fill the server URL and API key, switch to API Key, then run the same
     // Test Connection path as typing. The username is advisory, display only.
     var scannedUser by remember(sourceType) { mutableStateOf<String?>(null) }
+    // After a scan, show the compact Playlist details step (name, guide days,
+    // recordings) instead of auto-submitting; "Edit all details" falls back
+    // to the full form with the scanned values filled.
+    var showScanDetails by remember(sourceType) { mutableStateOf(false) }
     val applyUserKey: (com.aeriotv.android.core.qr.ScannedCode.Result.UserKey) -> Unit = { k ->
         dispatcharrAuthMode = DispatcharrAuthMode.ApiKey
         viewModel.onSourceTypeChange(SourceType.DispatcharrApiKey)
@@ -142,7 +146,11 @@ fun ConfigureSourceScreen(
                 username = k.username,
             ),
         )
-        viewModel.loadPlaylist()
+        if (viewModel.state.value.name.isBlank()) {
+            val host = scannedHost(viewModel.state.value.url)
+            viewModel.onNameChange(host ?: "Dispatcharr")
+        }
+        showScanDetails = true
     }
 
     val cardIcon: ImageVector
@@ -224,6 +232,30 @@ fun ConfigureSourceScreen(
                 Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            if (showScanDetails && !isTv) {
+                ScannedPlaylistDetails(
+                    username = scannedUser,
+                    host = scannedHost(state.url),
+                    name = state.name,
+                    onNameChange = viewModel::onNameChange,
+                    isLoading = state.isLoading,
+                    error = state.error,
+                    guideRow = {
+                        GuideHistoryRow(
+                            selectedDays = state.epgRetentionDays,
+                            onSelect = viewModel::onEpgRetentionDaysChange,
+                        )
+                    },
+                    dvrRow = {
+                        DvrDestinationRow(
+                            server = state.dvrDestinationServer,
+                            onSelect = viewModel::onDvrDestinationChange,
+                        )
+                    },
+                    onConnect = { viewModel.loadPlaylist() },
+                    onEditAll = { showScanDetails = false },
+                )
+            } else {
             SourceTypeCard(icon = cardIcon, title = cardTitle, subtitle = cardSubtitle)
 
             when (sourceType) {
@@ -354,11 +386,20 @@ fun ConfigureSourceScreen(
             }
 
             Spacer(Modifier.height(24.dp))
+            }
         }
         }
         }
     }
     }
+}
+
+/** Host of a server URL for display, or null when it cannot be parsed. */
+internal fun scannedHost(url: String): String? {
+    val u = url.trim()
+    if (u.isEmpty()) return null
+    val withScheme = if (u.contains("://")) u else "http://$u"
+    return runCatching { android.net.Uri.parse(withScheme).host }.getOrNull()?.takeIf { it.isNotBlank() }
 }
 
 /** Shown under the Username & Password fields on onboarding and Edit Playlist. */
@@ -935,7 +976,7 @@ private fun VodEnabledRow(
  * focus wash so the choice is navigable on TV.
  */
 @Composable
-private fun DvrDestinationRow(
+internal fun DvrDestinationRow(
     server: Boolean,
     onSelect: (Boolean) -> Unit,
 ) {
@@ -979,7 +1020,7 @@ private fun DvrDestinationRow(
 }
 
 @Composable
-private fun GuideHistoryRow(
+internal fun GuideHistoryRow(
     selectedDays: Int,
     onSelect: (Int) -> Unit,
 ) {

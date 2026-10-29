@@ -143,7 +143,7 @@ private fun FeatureTile(text: String, modifier: Modifier) {
 }
 
 /**
- * "Other source types": an outlined pill with a hint that expands in place to
+ * "Other source types": an outlined pill that expands in place to
  * the Xtream Codes and M3U cards plus Hide. On TV the expanded cards are
  * focusable and Hide is reachable (it sits on the header row above them).
  */
@@ -156,18 +156,11 @@ internal fun OtherSourceTypes(
     firstCardFocus: FocusRequester,
 ) {
     if (!expanded) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             OutlinedButton(
                 onClick = { onExpandedChange(true) },
                 modifier = Modifier.heightIn(min = 44.dp).dpadFocusRing(RoundedCornerShape(50)),
             ) { Text("Other source types", style = MaterialTheme.typography.titleSmall) }
-            Text(
-                if (isTv) "Xtream Codes login, or an M3U playlist with an XMLTV guide"
-                else "Xtream Codes, or an M3U playlist with a guide",
-                style = MaterialTheme.typography.bodySmall.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
         }
         return
     }
