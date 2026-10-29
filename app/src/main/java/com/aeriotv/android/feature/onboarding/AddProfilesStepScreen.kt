@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -353,6 +354,7 @@ fun AddProfilesStepScreen(
                 }
 
     }
+    val imeVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
     val controlsTail: @Composable () -> Unit = {
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 val addSelected: () -> Unit = {
@@ -396,13 +398,17 @@ fun AddProfilesStepScreen(
                     if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                     else Text(if (selected.isNotEmpty()) "Add selected" else "Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
-                ProfileCountLine(device, localProfiles)
-                if (onSetUpTv != null) {
-                    androidx.compose.material3.TextButton(
-                        onClick = onSetUpTv,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
+                // Keyboard up (user search): the footer keeps only the button
+                // so the result list gets the height (Logan, 2026-10-29).
+                if (!imeVisible) {
+                    ProfileCountLine(device, localProfiles)
+                    if (onSetUpTv != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = onSetUpTv,
+                            enabled = !busy,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
+                    }
                 }
     }
     val controls: @Composable () -> Unit = {
@@ -473,7 +479,7 @@ fun AddProfilesStepScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                header()
+                if (!imeVisible) header()
                 userList(Modifier.weight(1f))
                 controls()
             }
