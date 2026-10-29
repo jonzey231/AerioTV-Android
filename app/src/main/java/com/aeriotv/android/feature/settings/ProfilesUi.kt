@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -302,7 +303,10 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
 
     if (open) {
         LaunchedEffect(pid) { vm.notePickerOpened(pid, "switch") }
-        com.aeriotv.android.ui.FormFactorModal(onDismiss = { open = false }, traceName = "switch-profile") {
+        // No drag: the sheet shows everything at its resting height, so a drag
+        // only snapped back and felt broken (Logan, 2026-10-29). The scrim
+        // still dismisses.
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = { open = false }, traceName = "switch-profile", sheetGesturesEnabled = false) {
             Column(Modifier.padding(bottom = 12.dp)) {
                 Text(
                     "Switch Profile",
@@ -342,7 +346,9 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
                     )
                 }
-                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                // The last profile row already draws its hairline; a second
+                // divider here doubled it (Logan, 2026-10-29).
+                Spacer(Modifier.height(6.dp))
                 var mFocused by remember { mutableStateOf(false) }
                 Row(
                     modifier = Modifier
