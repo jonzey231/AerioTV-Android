@@ -15,7 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.QrCodeScanner
@@ -81,8 +81,8 @@ internal fun DispatcharrHeroCard(
             Modifier.size(if (isTv) 36.dp else 44.dp).clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Filled.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
-        Text("Dispatcharr", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+        ) { Icon(Icons.Outlined.Dns, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+        Text("Dispatcharr Direct Connect", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
         Text(
             "Your own server, and everything AerioTV can do.",
             style = MaterialTheme.typography.bodyMedium.subtext(),
@@ -99,12 +99,12 @@ internal fun DispatcharrHeroCard(
         }
         Text(
             buildAnnotatedString {
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)) { append("You will need ") }
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)) { append("You will need: ") }
                 append(
-                    if (isTv) "server address, plus a username and password (with API key access on) or an API key. " +
+                    if (isTv) "a server address, plus a username and password (with API key access on) or an API key. " +
                         "Have the QR code from the Users page? Scan it with AerioTV on your phone and set up from there."
-                    else "server address, plus a username and password (with API key access on), an API key, " +
-                        "or the QR code from the Users page in Dispatcharr",
+                    else "a server address, plus a username and password (with API key access on), an API key, " +
+                        "or the QR code from the Users page in Dispatcharr.",
                 )
             },
             style = MaterialTheme.typography.bodySmall.subtext(),
