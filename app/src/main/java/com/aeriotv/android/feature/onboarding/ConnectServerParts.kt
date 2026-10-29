@@ -3,6 +3,9 @@ package com.aeriotv.android.feature.onboarding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -92,8 +95,11 @@ internal fun DispatcharrHeroCard(
         val perRow = if (isTv) 3 else 2
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             DISPATCHARR_FEATURES.chunked(perRow).forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    row.forEach { FeatureTile(it, Modifier.weight(1f)) }
+                Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    row.forEach { FeatureTile(it, Modifier.weight(1f).fillMaxHeight()) }
                 }
             }
         }
