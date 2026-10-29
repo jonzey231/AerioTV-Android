@@ -360,6 +360,7 @@ class ProfileManager @Inject constructor(
     fun makeBaseChild(playlistId: String): Result<Unit> = runCatching {
         check(hasDeviceAdminPin(playlistId)) { "Set a Device Admin PIN first." }
         val base = store.forPlaylist(playlistId).firstOrNull { it.isDefault } ?: error("Profile not found")
+        check(!ProfileRole.isServerAdmin(base.userLevel)) { RoleRules.SERVER_ADMIN_STAYS }
         store.update(base.id) { it.copy(role = ProfileRole.Child) }
         refreshActiveRole(playlistId)
         Log.i(TAG, "[PROFILE] onboarding: ${base.username} is a Child; device admin pin holds Admin")
@@ -435,6 +436,7 @@ class ProfileManager @Inject constructor(
             missingPins = pinsMissingForChild(playlistId, becomingChild = profileId).size,
             anyPinExists = adminPinIds(playlistId).any { it != profileId },
             targetIsLastFullAccess = RoleRules.isFullAccess(target.effectiveRole()) && full <= 1,
+            targetIsServerAdmin = ProfileRole.isServerAdmin(target.userLevel),
         )
     }
 
@@ -643,7 +645,15 @@ class ProfileManager @Inject constructor(
         if (started) return
         started = true
         scope.launch {
-            runCatching { playlistDao.rawAll().forEach { ensureDefaultProfile(it); promoteBaseProfile(it.id) } }
+            runCatching {
+                playlistDao.rawAll().forEach { row ->
+                    ensureDefaultProfile(row)
+                    // The admin probe updates the row's level; the base profile follows it.
+                    store.forPlaylist(row.id).firstOrNull { it.isDefault }?.let { base ->
+                        followServerRole(base.id, if (row.dispatcharrIsSuperuser || row.dispatcharrIsStaff) 10 else row.dispatcharrUserLevel)
+                    }
+                }
+            }
                 .onFailure { Log.w(TAG, "[PROFILE] migration pass failed", it) }
             // Per-profile settings (2026-10-27): seed existing profiles once from the global values.
             runCatching { appPreferences.seedExistingProfilesOnce(store.profiles.value.filterNot { it.isDefault }.map { it.id }) }
@@ -669,24 +679,6 @@ class ProfileManager @Inject constructor(
         refreshActiveRole(pid)
     }
 
-    /**
-     * One-time: an existing base profile (the login that added the playlist)
-     * becomes local Admin whatever its Dispatcharr level. A Child base stays.
-     */
-    private fun promoteBaseProfile(playlistId: String) {
-        if (store.basePromoted(playlistId)) return
-        val base = store.forPlaylist(playlistId).firstOrNull { it.isDefault } ?: return
-        ProfileRole.basePromotion(base.role)?.let { to ->
-            val wasAdmin = base.role == null && ProfileLevel.of(base.userLevel) == ProfileLevel.Admin
-            store.update(base.id) { it.copy(role = to) }
-            if (!wasAdmin) {
-                Log.i(TAG, "[PROFILE] base profile promoted to local Admin (${base.username}, level ${ProfileLevel.of(base.userLevel).label})")
-                mutated(base.id, "role")
-            }
-        }
-        store.markBasePromoted(playlistId)
-    }
-
     /** Every Dispatcharr playlist has exactly one default profile. Its state
      *  is the legacy (unscoped) state, so creating it moves no data. */
     private suspend fun ensureDefaultProfile(row: PlaylistEntity) {
@@ -709,8 +701,8 @@ class ProfileManager @Inject constructor(
                 username = username,
                 isDefault = true,
                 userLevel = row.dispatcharrUserLevel,
-                // The base login is always the local Admin.
-                role = ProfileRole.Admin,
+                // The role follows the Dispatcharr access (owner 2026-10-29).
+                role = ProfileRole.defaultFor(row.dispatcharrUserLevel),
                 createdAt = 0L,
             ),
         )
@@ -879,7 +871,7 @@ class ProfileManager @Inject constructor(
             displayName = user.username,
             username = me.username,
             password = password?.takeIf { it.isNotBlank() },
-        ).applyMe(me, key).let { if (role != null) it.copy(role = role) else it }
+        ).applyMe(me, key).let { it.copy(role = ProfileRole.resolve(it.userLevel, role)) }
             // A roster add: name, role, avatar, order, and user id land in the
             // FIRST store write, so the row never exists (or syncs) half built.
             .let { if (seed != null) ProfileRoster.applyRow(it, seed) else it }
@@ -992,7 +984,7 @@ class ProfileManager @Inject constructor(
             if (r.displayName.isNotBlank() && r.displayName != local.displayName) {
                 store.update(id) { it.copy(displayName = r.displayName) }
             }
-            ProfileRole.fromWire(r.role)?.let { role ->
+            ProfileRole.fromWire(r.role)?.let { ProfileRole.resolve(local.userLevel, it) }?.let { role ->
                 if (role != local.effectiveRole() || local.role == null) {
                     store.update(id) { it.copy(role = role) }
                     Log.i(TAG, "[DSYNC] profiles: role ${role.label} for ${local.username}")
@@ -1381,6 +1373,7 @@ class ProfileManager @Inject constructor(
                 tMe = System.currentTimeMillis()
                 val updated = target.applyMe(me, key)
                 store.upsert(updated)
+                followServerRole(updated.id, updated.userLevel)
                 ProfileScope.activate(updated.toOverlay())
                 store.setActiveProfileId(playlistId, updated.id)
             }
@@ -1452,6 +1445,7 @@ class ProfileManager @Inject constructor(
                     if (gen != switchGen.get()) return
                     val updated = target.applyMe(me, a.key)
                     store.upsert(updated)
+                    followServerRole(updated.id, updated.userLevel)
                     if (ProfileScope.current() == target.id) ProfileScope.activate(updated.toOverlay())
                     val o1 = target.toOverlay()
                     val o2 = updated.toOverlay()
@@ -1608,6 +1602,29 @@ class ProfileManager @Inject constructor(
             }
         }
         store.update(profileId) { it.copy(userId = me.id) }
+        playlistDao.rawById(playlistId)?.let { row ->
+            val level = if (row.dispatcharrIsSuperuser || row.dispatcharrIsStaff) 10 else row.dispatcharrUserLevel
+            followServerRole(profileId, level)
+        }
+    }
+
+    /**
+     * Owner rule 2026-10-29: the AerioTV role follows the Dispatcharr access.
+     * Called wherever /me/ refreshes a profile's level (launch, Settings, and
+     * switch paths). The Child PIN rules are computed live from the roles, so
+     * a changed non-Child set is caught by the existing PIN gates at next use.
+     * The role change rides the normal profiles-key role sync.
+     */
+    private fun followServerRole(profileId: String, newLevel: Int) {
+        val p = store.byId(profileId) ?: return
+        val next = RoleRules.serverRoleChange(p.role, newLevel)
+        if (next == null && p.userLevel == newLevel) return
+        store.update(profileId) { it.copy(userLevel = newLevel, role = next ?: it.role) }
+        if (next != null) {
+            Log.i(TAG, "[PROFILES] server role changed for ${p.username}: ${p.role?.label ?: "none"} -> ${next.label}")
+            mutated(profileId, "role")
+            refreshActiveRole(p.playlistId)
+        }
     }
 
     private suspend fun PlaylistDao.rawById(id: String): PlaylistEntity? =

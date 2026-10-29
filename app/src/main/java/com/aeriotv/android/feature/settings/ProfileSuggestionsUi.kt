@@ -116,7 +116,7 @@ internal fun RosterSuggestions(
     }
     // Per-row role before Add, prefilled from the roster role.
     val roles = remember { androidx.compose.runtime.mutableStateMapOf<String, ProfileRole>() }
-    fun rosterRoleFor(r: ProfileRow) = roles[r.username.lowercase()] ?: ProfileRole.fromWire(r.role) ?: ProfileRole.User
+    fun rosterRoleFor(r: ProfileRow) = (roles[r.username.lowercase()] ?: ProfileRole.fromWire(r.role))?.takeIf { it != ProfileRole.Admin } ?: ProfileRole.User
     // Dispatcharr admins are always Admin (owner 2026-10-29): locked chip.
     fun rosterAdmin(r: ProfileRow) = users?.firstOrNull { it.username.equals(r.username, ignoreCase = true) }?.isServerAdmin() == true
     fun roleFor(r: ProfileRow) = if (rosterAdmin(r)) ProfileRole.Admin else rosterRoleFor(r)
@@ -585,7 +585,8 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolea
             title = { Text("Role", modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center) },
             text = {
                 Column {
-                    ProfileRole.entries.forEach { r ->
+                    // Not a Dispatcharr admin (or unknown): Standard and Child only.
+                    ProfileRole.optionsFor(serverAdmin = false).forEach { r ->
                         ChoiceRow(label = r.label, checked = r == role, radio = true, onClick = { open = false; onChange(r) })
                         Text(
                             roleDescription(r),

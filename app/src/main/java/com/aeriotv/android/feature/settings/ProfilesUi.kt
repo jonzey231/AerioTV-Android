@@ -671,7 +671,10 @@ fun ProfilesSection(playlistId: String) {
                     Spacer(Modifier.size(8.dp))
                     ChoiceRow(label = "Rename", onClick = { actionsFor = null; renaming = p })
                     if (vm.isRoleAdmin(playlistId)) {
-                        ChoiceRow(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
+                        // Dispatcharr admins are always Admin: no Role picker.
+                        if (!com.aeriotv.android.core.profiles.ProfileRole.isServerAdmin(p.userLevel)) {
+                            ChoiceRow(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
+                        }
                         val at = profiles.indexOfFirst { it.id == p.id }
                         fun moveRow(how: com.aeriotv.android.core.profiles.ProfileManager.Move) {
                             actionsFor = null
@@ -817,7 +820,8 @@ fun AdminPinDialog(playlistId: String, vm: ProfilesViewModel, title: String, onD
 }
 
 /**
- * Row menu "Role" (Admin or Standard): Admin, Standard, Child. Setting Child
+ * Row menu "Role" (Admin or Standard acting, target not a Dispatcharr
+ * admin): Standard and Child. Setting Child
  * walks the acting profile through every missing Admin or Standard PIN first
  * (cancel = no change); leaving Child asks for a PIN from an Admin or
  * Standard profile.
@@ -842,7 +846,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
                 Column {
                     Text(p.displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.size(8.dp))
-                    com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r ->
+                    com.aeriotv.android.core.profiles.ProfileRole.optionsFor(p.userLevel).forEach { r ->
                         ChoiceRow(label = r.label, checked = r == current, radio = true, modifier = if (r == current) Modifier.focusRequester(currentFocus) else Modifier, onClick = {
                             when (val g = vm.roleChangeGate(playlistId, p.id, r)) {
                                 is com.aeriotv.android.core.profiles.RoleRules.RoleChange.Denied -> onClose(g.reason)
@@ -1128,19 +1132,20 @@ internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): 
 }
 
 /**
- * Add Profile "Role" choice (Admin, Standard, Child; default Standard). Picking Child
+ * Add Profile "Role" choice for a typed username (level not known yet):
+ * Standard or Child, default Standard. A Dispatcharr admin is stored as Admin. Picking Child
  * with no Admin PIN asks the acting Admin to set one first, same copy as the
  * row menu Role; cancelling keeps the previous choice.
  */
 @Composable
 internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com.aeriotv.android.core.profiles.ProfileRole, vertical: Boolean = false, onSelect: (com.aeriotv.android.core.profiles.ProfileRole) -> Unit) {
     var gate by remember { mutableStateOf(false) }
-    // Compact by design: one row of three radio choices plus a single
+    // Compact by design: one row of radio choices (Standard, Child) plus a single
     // helper line for the selected role, so the user list above it keeps
     // the height (owner 2026-10-27: three stacked rows squeezed the list).
     Column {
         Text("Role", style = MaterialTheme.typography.titleSmall)
-        // TV onboarding card stacks the three choices; elsewhere one row.
+        // TV onboarding card stacks the choices; elsewhere one row.
         val choice: @Composable (com.aeriotv.android.core.profiles.ProfileRole, Modifier) -> Unit = { r, m ->
                 var focused by remember { mutableStateOf(false) }
                 Row(
@@ -1164,11 +1169,11 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
         }
         if (vertical) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r -> choice(r, Modifier.fillMaxWidth()) }
+                com.aeriotv.android.core.profiles.ProfileRole.optionsFor(serverAdmin = null).forEach { r -> choice(r, Modifier.fillMaxWidth()) }
             }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                com.aeriotv.android.core.profiles.ProfileRole.entries.forEach { r -> choice(r, Modifier.weight(1f)) }
+                com.aeriotv.android.core.profiles.ProfileRole.optionsFor(serverAdmin = null).forEach { r -> choice(r, Modifier.weight(1f)) }
             }
         }
         Text(

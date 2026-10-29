@@ -69,7 +69,7 @@ internal fun ProfilesStepHeader(device: String) {
 }
 
 private fun DispatcharrProfile.roleLabel(): String =
-    (role ?: if (isDefault || userLevel >= 10) ProfileRole.Admin else ProfileRole.User).label
+    ProfileRole.resolve(userLevel, role).label
 
 /** ON THIS PHONE/TABLET/TV: the profiles already here, each with an "Added" chip. */
 @Composable

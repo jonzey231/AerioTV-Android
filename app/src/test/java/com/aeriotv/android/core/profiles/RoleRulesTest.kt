@@ -20,21 +20,41 @@ class RoleRulesTest {
         assertEquals(null, ProfileRole.fromWire("boss"))
     }
 
-    @Test fun baseProfileIsAlwaysAdmin() {
-        assertEquals(A, ProfileRole.defaultFor(1, isBase = true))
-        assertEquals(A, ProfileRole.defaultFor(0, isBase = true))
-        assertEquals(A, ProfileRole.defaultFor(10, isBase = true))
-        assertEquals(U, ProfileRole.defaultFor(1, isBase = false))
-        assertEquals(A, DispatcharrProfile("b", "p", "Base", "base", isDefault = true, userLevel = 1).effectiveRole())
-        assertEquals(U, DispatcharrProfile("o", "p", "Other", "other", isDefault = false, userLevel = 1).effectiveRole())
-        assertEquals(C, DispatcharrProfile("b", "p", "Base", "base", isDefault = true, userLevel = 1, role = C).effectiveRole())
+    @Test fun roleFollowsDispatcharrAccess() {
+        // Base or not, the label mirrors the server: admin = Admin, others Standard or Child.
+        assertEquals(U, DispatcharrProfile("b", "p", "Base", "base", isDefault = true, userLevel = 1).effectiveRole())
+        assertEquals(A, DispatcharrProfile("b", "p", "Base", "base", isDefault = true, userLevel = 10).effectiveRole())
+        assertEquals(U, DispatcharrProfile("o", "p", "Other", "other", userLevel = 1, role = A).effectiveRole())
+        assertEquals(C, DispatcharrProfile("o", "p", "Other", "other", userLevel = 1, role = C).effectiveRole())
+        assertEquals(A, DispatcharrProfile("o", "p", "Other", "other", userLevel = 10, role = C).effectiveRole())
+        assertEquals(listOf(A), ProfileRole.optionsFor(10))
+        assertEquals(listOf(U, C), ProfileRole.optionsFor(1))
+        assertEquals(listOf(U, C), ProfileRole.optionsFor(0))
+        assertEquals(listOf(U, C), ProfileRole.optionsFor(serverAdmin = null))
+        assertEquals(A, ProfileRole.resolve(10, U))
+        assertEquals(U, ProfileRole.resolve(1, A))
+        assertEquals(C, ProfileRole.resolve(1, C))
+        assertEquals(U, ProfileRole.resolve(1, null))
     }
 
-    @Test fun basePromotionKeepsAdminAndChild() {
-        assertEquals(A, ProfileRole.basePromotion(null))
-        assertEquals(A, ProfileRole.basePromotion(U))
-        assertEquals(null, ProfileRole.basePromotion(A))
-        assertEquals(null, ProfileRole.basePromotion(C))
+    @Test fun roleFollowsServerLevelChanges() {
+        assertEquals(U, RoleRules.serverRoleChange(A, 1))   // demoted on the server
+        assertEquals(A, RoleRules.serverRoleChange(U, 10))  // promoted
+        assertEquals(A, RoleRules.serverRoleChange(C, 10))  // admins cannot be Child
+        assertEquals(null, RoleRules.serverRoleChange(C, 1))
+        assertEquals(null, RoleRules.serverRoleChange(U, 1))
+        assertEquals(null, RoleRules.serverRoleChange(A, 10))
+        assertEquals(U, RoleRules.serverRoleChange(null, 1))
+    }
+
+    @Test fun roleChangeFollowsServerAccess() {
+        listOf(A, U).forEach { actor ->
+            assertEquals(RoleChange.Denied(RoleRules.ADMIN_IS_SERVER_SET), RoleRules.roleChange(actor, U, A, 0, true, false, targetIsServerAdmin = false))
+            assertEquals(RoleChange.Denied(RoleRules.ADMIN_IS_SERVER_SET), RoleRules.roleChange(actor, C, A, 0, true, false, targetIsServerAdmin = false))
+            assertEquals(RoleChange.Denied(RoleRules.SERVER_ADMIN_STAYS), RoleRules.roleChange(actor, A, U, 0, true, false, targetIsServerAdmin = true))
+            assertEquals(RoleChange.Denied(RoleRules.SERVER_ADMIN_STAYS), RoleRules.roleChange(actor, A, C, 0, true, false, targetIsServerAdmin = true))
+            assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, A, A, 0, true, false, targetIsServerAdmin = true))
+        }
     }
 
     @Test fun addPathSelection() {
@@ -92,11 +112,8 @@ class RoleRulesTest {
             assertEquals(RoleChange.NeedsPinsCreated, RoleRules.roleChange(actor, U, C, missingPins = 0, anyPinExists = false, targetIsLastFullAccess = false))
             assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, U, C, missingPins = 0, anyPinExists = true, targetIsLastFullAccess = false))
             assertEquals(RoleChange.NeedsPinEntry, RoleRules.roleChange(actor, C, U, 0, true, false))
-            assertEquals(RoleChange.NeedsPinEntry, RoleRules.roleChange(actor, C, A, 0, true, false))
-            assertTrue(RoleRules.roleChange(actor, A, C, 0, true, targetIsLastFullAccess = true) is RoleChange.Denied)
             assertTrue(RoleRules.roleChange(actor, U, C, 0, true, targetIsLastFullAccess = true) is RoleChange.Denied)
-            // Admin to Standard is free: both are full access.
-            assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, A, U, 0, false, targetIsLastFullAccess = true))
+            assertTrue(RoleRules.roleChange(actor, U, C, 0, true, targetIsLastFullAccess = true) is RoleChange.Denied)
             assertEquals(RoleChange.Allowed, RoleRules.roleChange(actor, U, U, 0, false, false))
         }
     }

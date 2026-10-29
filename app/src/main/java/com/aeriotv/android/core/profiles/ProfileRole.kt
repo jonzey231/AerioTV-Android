@@ -7,38 +7,39 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * App-local role of a profile (Profiles phase 2b, 2026-10-17). Set by an
  * Admin profile on the device and synced in the Dispatcharr Sync `profiles`
- * key (`role`). Independent of the Dispatcharr user level, which the server
- * still enforces; the role only shapes what the app shows.
+ * key (`role`). The label follows the Dispatcharr access (owner rule
+ * 2026-10-29): a server admin is Admin, any other user Standard or Child.
  */
 enum class ProfileRole(val label: String, val wire: String) {
     Admin("Admin", "admin"), User("Standard", "user"), Child("Child", "child");
 
     companion object {
-        /**
-         * Default role. The BASE profile (the login that added the playlist)
-         * is always Admin, whatever its Dispatcharr level, so two Standard
-         * users can share a device without a server admin. Other profiles:
-         * a Dispatcharr Admin level is Admin, every other level User
-         * (shown as "Standard"; the wire value stays "user").
-         */
-        fun defaultFor(userLevel: Int, isBase: Boolean = false): ProfileRole =
-            if (isBase || ProfileLevel.of(userLevel) == ProfileLevel.Admin) Admin else User
+        /** Dispatcharr admin: superuser, staff, or user_level 10 (the stored level already folds staff and superuser in). */
+        fun isServerAdmin(userLevel: Int): Boolean = ProfileLevel.of(userLevel) == ProfileLevel.Admin
 
         /**
-         * One-time promotion of an existing base profile: its stored role
-         * moves to Admin unless it is already Admin or deliberately Child.
-         * Returns the role to store, or null when nothing changes.
+         * Owner rule 2026-10-29: the role follows the Dispatcharr access. A
+         * Dispatcharr admin is Admin; every other user is Standard (wire
+         * "user") unless chosen as Child.
          */
-        fun basePromotion(stored: ProfileRole?): ProfileRole? = when (stored) {
-            Admin, Child -> null
-            null, User -> Admin
-        }
+        fun defaultFor(userLevel: Int): ProfileRole = if (isServerAdmin(userLevel)) Admin else User
+
+        /** The roles a profile at [userLevel] may carry: Admin alone, or Standard and Child. */
+        fun optionsFor(userLevel: Int): List<ProfileRole> = optionsFor(isServerAdmin(userLevel))
+
+        /** [serverAdmin] null = level unknown: Standard and Child, never Admin. */
+        fun optionsFor(serverAdmin: Boolean?): List<ProfileRole> =
+            if (serverAdmin == true) listOf(Admin) else listOf(User, Child)
+
+        /** The role to store for [userLevel] given a [picked] one (null = default). */
+        fun resolve(userLevel: Int, picked: ProfileRole?): ProfileRole =
+            picked?.takeIf { it in optionsFor(userLevel) } ?: defaultFor(userLevel)
 
         fun fromWire(s: String?): ProfileRole? = entries.firstOrNull { it.wire == s }
     }
 }
 
-fun DispatcharrProfile.effectiveRole(): ProfileRole = role ?: ProfileRole.defaultFor(userLevel, isBase = isDefault)
+fun DispatcharrProfile.effectiveRole(): ProfileRole = ProfileRole.resolve(userLevel, role)
 
 /**
  * Pure role and PIN gating decisions, unit tested (no Android types).
@@ -141,6 +142,18 @@ object RoleRules {
         data class Denied(val reason: String) : RoleChange
     }
 
+    const val ADMIN_IS_SERVER_SET = "Admin is set by the Dispatcharr server."
+    const val SERVER_ADMIN_STAYS = "Dispatcharr admins are always Admin in AerioTV."
+
+    /**
+     * The role to store after the server reports [newLevel] for a profile
+     * whose stored role is [stored] (owner rule 2026-10-29): promotion to
+     * Dispatcharr admin makes it Admin (a Child too), demotion turns Admin
+     * into Standard, a Standard or Child user keeps its choice. Null = no change.
+     */
+    fun serverRoleChange(stored: ProfileRole?, newLevel: Int): ProfileRole? =
+        ProfileRole.resolve(newLevel, stored).takeIf { it != stored }
+
     fun roleChange(
         actor: ProfileRole?,
         from: ProfileRole,
@@ -148,8 +161,11 @@ object RoleRules {
         missingPins: Int,
         anyPinExists: Boolean,
         targetIsLastFullAccess: Boolean,
+        targetIsServerAdmin: Boolean = false,
     ): RoleChange = when {
         !isFullAccess(actor) -> RoleChange.Denied("Only an Admin or Standard profile can change roles.")
+        targetIsServerAdmin && to != ProfileRole.Admin -> RoleChange.Denied(SERVER_ADMIN_STAYS)
+        !targetIsServerAdmin && to == ProfileRole.Admin -> RoleChange.Denied(ADMIN_IS_SERVER_SET)
         from == to -> RoleChange.Allowed
         to == ProfileRole.Child && targetIsLastFullAccess ->
             RoleChange.Denied("At least one profile must stay Admin or Standard.")
