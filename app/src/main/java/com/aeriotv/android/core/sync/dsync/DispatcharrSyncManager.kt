@@ -321,7 +321,7 @@ class DispatcharrSyncManager @Inject constructor(
             if (s == null) { schedulePeekPush(playlistId, what); return@launch }
             if (!isAdmin(s)) return@launch
             setDirty(s, DsyncKey.Profiles, true)
-            schedule(s, DsyncKey.Profiles, DEBOUNCE_MS)
+            schedule(s, DsyncKey.Profiles, PEEK_PUSH_DEBOUNCE_MS)
         }
     }
 
@@ -368,7 +368,7 @@ class DispatcharrSyncManager @Inject constructor(
         if (live != null) {
             live.mutex.withLock { if (session === live) pullProfilesOnly(live, reason, "live") }
             scope.launch {
-                // Read once more 3 s later (see the no-session path below).
+                // Read once more 2 s later (see the no-session path below).
                 delay(PICKER_REPULL_MS)
                 live.mutex.withLock { if (session === live) pullProfilesOnly(live, "$reason-repull", "live") }
             }
@@ -389,7 +389,7 @@ class DispatcharrSyncManager @Inject constructor(
         val peek = Session(playlistId, profileKey, token)
         profilesPeekMutex.withLock { pullProfilesOnly(peek, reason, "none") }
         // A write from another device a moment before can still read back old
-        // (2026-10-29 00:43:18 to 00:43:19): read once more, 3 s later.
+        // (2026-10-29 00:43:18 to 00:43:19): read once more, 2 s later.
         delay(PICKER_REPULL_MS)
         val live2 = session?.takeIf { it.playlistId == playlistId && it.token == ProfileScope.token.value }
         if (live2 != null) live2.mutex.withLock { if (session === live2) pullProfilesOnly(live2, "$reason-repull", "live") }
@@ -1098,7 +1098,9 @@ class DispatcharrSyncManager @Inject constructor(
         if ((s.suppressUntil[key] ?: 0L) > System.currentTimeMillis()) return
         s.tooLarge -= key
         setDirty(s, key, true)
-        schedule(s, key, DEBOUNCE_MS)
+        // The profiles lane goes out fast so other devices' pickers see it;
+        // a later emission must not stretch it back to the general debounce.
+        schedule(s, key, if (key == DsyncKey.Profiles) PEEK_PUSH_DEBOUNCE_MS else DEBOUNCE_MS)
     }
 
     private fun schedule(s: Session, key: DsyncKey, delayMs: Long) {
@@ -1841,7 +1843,7 @@ class DispatcharrSyncManager @Inject constructor(
                 if (unsent.isNotEmpty() && !isDirty(s, DsyncKey.Profiles)) {
                     Log.i(TAG, "[DSYNC] profiles: tombstones ${unsent.joinToString { it.username }} not on the server yet; re-sending")
                     setDirty(s, DsyncKey.Profiles, true)
-                    schedule(s, DsyncKey.Profiles, DEBOUNCE_MS)
+                    schedule(s, DsyncKey.Profiles, PEEK_PUSH_DEBOUNCE_MS)
                 }
                 profileManager.get().mergeSyncedProfiles(
                     s.playlistId, resolved.rows, adminUsers(s),
@@ -1922,8 +1924,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** Picker-open profiles pull: at most one per playlist in this window. */
         const val PICKER_PULL_MIN_MS = 30_000L
         /** The one follow-up read after a picker-open pull. */
-        const val PICKER_REPULL_MS = 3_000L
-        /** A burst of no-session profile edits becomes one put. */
+        const val PICKER_REPULL_MS = 2_000L
+        /** Profiles-lane push debounce (live session or none): a burst of edits becomes one put. */
         const val PEEK_PUSH_DEBOUNCE_MS = 1_000L
         private const val SUPPRESS_MS = 3_000L
         private val HEAL_KEYS = setOf(DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.HiddenGroups, DsyncKey.GroupOrder)
