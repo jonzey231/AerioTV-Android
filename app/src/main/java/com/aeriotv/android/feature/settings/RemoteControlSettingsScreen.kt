@@ -333,8 +333,8 @@ fun RemoteControlSettingsScreen(
                     // TV only: the Exit AerioTV? confirm is a D-pad prompt.
                     if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
                         SettingsToggleRow(
-                            title = "Default to Exit",
-                            subtitle = "Focus Exit instead of Cancel in the Exit AerioTV? prompt",
+                            title = "Exit Prompt Starts on Exit",
+                            subtitle = "When you press Back to leave AerioTV, Exit is highlighted instead of Cancel.",
                             checked = exitFocusExit,
                             onCheckedChange = { viewModel.setExitDialogFocusExit(it) },
                         )

@@ -81,7 +81,7 @@ fun TvActionMenuDialog(
     // action (the Exit AerioTV? confirm: a stray OK must not close the app).
     focusCancel: Boolean = false,
     // Opens with D-pad focus explicitly on the first action (Exit AerioTV?
-    // with Default to Exit on). Safe: the OK latch below still ignores the
+    // with Exit Prompt Starts on Exit on). Safe: the OK latch below still ignores the
     // bare KeyUp of the press that opened the dialog.
     focusFirstAction: Boolean = false,
 ) {
