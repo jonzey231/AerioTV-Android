@@ -163,8 +163,8 @@ private fun WelcomeTv(c: WelcomeContent) {
         Column(Modifier.weight(0.42f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             WelcomeBrand(
                 headline = "Welcome. Let's get your TV connected.",
-                body = "Live TV with a full guide, movies, series, and DVR from your own server. " +
-                    "Nothing is bundled, so the first step is telling AerioTV where your content lives.",
+                body = "Live TV with a full guide, movies, series, and DVR from your playlist or server. " +
+                    "Nothing is bundled, so the first step is telling AerioTV where your content comes from.",
             )
             Spacer(Modifier.height(6.dp))
             TvBackHint("Back returns to the previous step at any time")
@@ -296,5 +296,5 @@ private fun SyncSection(c: WelcomeContent, sideBySide: Boolean) {
 }
 
 private const val PHONE_BODY =
-    "Live TV with a guide, movies, series, and DVR from your own server. First, tell AerioTV where it lives."
+    "Live TV with a guide, movies, series, and DVR from your playlist or server. First, tell AerioTV where your content comes from."
 private const val PHONE_SKIP = "You can connect a server any time from Settings."
