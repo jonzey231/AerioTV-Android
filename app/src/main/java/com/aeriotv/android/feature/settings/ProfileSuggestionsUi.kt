@@ -65,6 +65,10 @@ internal fun RosterSuggestions(
     users: List<DispatcharrUserSummary>?,
     enabled: Boolean = true,
     onAdded: () -> Unit = {},
+    /** Section header; onboarding passes its uppercase label. */
+    title: String = "From your other devices",
+    /** Onboarding: explains what adding copies, under the rows. */
+    footnote: String? = null,
 ) {
     val flow = remember(playlistId) { vm.rosterSuggestions(playlistId) }
     val rows by flow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -101,7 +105,7 @@ internal fun RosterSuggestions(
 
     val listedRows = rows + added.filter { a -> rows.none { it.username.equals(a.username, ignoreCase = true) } }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("From your other devices", style = MaterialTheme.typography.titleSmall)
+        Text(title, style = MaterialTheme.typography.titleSmall)
         listedRows.forEach { r ->
             var focused by remember { mutableStateOf(false) }
             val isAdded = added.any { it.username.equals(r.username, ignoreCase = true) }
@@ -170,6 +174,9 @@ internal fun RosterSuggestions(
             }
             if (isTv && !isAdded) RoleChip(roleFor(r), enabled = canAdd) { roles[r.username.lowercase()] = it }
             }
+        }
+        footnote?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }

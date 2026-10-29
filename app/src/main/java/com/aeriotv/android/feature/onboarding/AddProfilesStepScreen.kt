@@ -129,6 +129,8 @@ fun AddProfilesStepScreen(
     onDone: () -> Unit,
     /** Phone and tablet only: "Set up a TV with this playlist" (docs/DeviceSetupHandoff.md). */
     onSetUpTv: (() -> Unit)? = null,
+    /** Onboarding: "Step 2 of 3" caption. */
+    onboarding: Boolean = false,
     vm: AddProfilesStepViewModel = hiltViewModel(),
 ) {
     var users by remember { mutableStateOf<List<DispatcharrUserSummary>?>(null) }
@@ -188,7 +190,7 @@ fun AddProfilesStepScreen(
     // Suggestions are the headline; the server list sits behind "Show other
     // users on this server" unless there are no suggestions.
     var serverOpen by remember { mutableStateOf(false) }
-    val serverExpanded = serverOpen || suggested.isEmpty()
+    val serverExpanded = serverOpen
     // Server users not suggested and not already a profile on this device.
     val rest = remember(list, suggested, localProfiles) {
         list.filter { u ->
@@ -206,20 +208,10 @@ fun AddProfilesStepScreen(
     // 2026-10-27: one row was left ~85 px and overlapped by Role). Phones
     // stack it: list, compact Role, buttons pinned at the bottom.
     val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val device = rememberDeviceNoun()
     val header: @Composable () -> Unit = {
-                Text(
-                    "Add profiles for other users?",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    "Pick the Dispatcharr users who also watch on this device.",
-                    style = MaterialTheme.typography.bodyMedium.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+        if (onboarding) com.aeriotv.android.feature.onboarding.components.StepCaption(2, 3)
+        ProfilesStepHeader(device)
     }
     val listScroll = rememberScrollState()
     val userList: @Composable (Modifier) -> Unit = { listModifier ->
@@ -227,12 +219,16 @@ fun AddProfilesStepScreen(
                     modifier = listModifier.fillMaxWidth().verticalScroll(listScroll),
                     verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 0.dp),
                 ) {
-                    com.aeriotv.android.feature.settings.RosterSuggestions(playlistId, profilesVm, list, enabled = !busy)
-                    if (suggested.isNotEmpty() && rest.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        com.aeriotv.android.feature.settings.ExpandRow(
-                            "Show other users on this server", serverOpen, enabled = !busy,
-                        ) { serverOpen = !serverOpen; if (!serverOpen) query = "" }
+                    OnThisDeviceSection(device, localProfiles)
+                    Spacer(Modifier.height(10.dp))
+                    com.aeriotv.android.feature.settings.RosterSuggestions(
+                        playlistId, profilesVm, list, enabled = !busy,
+                        title = "FROM YOUR OTHER DEVICES",
+                        footnote = ROSTER_FOOTNOTE,
+                    )
+                    if (rest.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        AddFromDispatcharrRow(enabled = !busy) { serverOpen = !serverOpen; if (!serverOpen) query = "" }
                     }
                     if (serverExpanded && rest.isNotEmpty()) {
                         com.aeriotv.android.feature.settings.ExpandableSearch(query, { query = it }, enabled = !busy)
@@ -322,11 +318,7 @@ fun AddProfilesStepScreen(
                     if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                     else Text(if (selected.isNotEmpty()) "Add selected" else "Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
-                OutlinedButton(
-                    onClick = onDone,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
-                ) { Text(if (localCount > 1) "Done" else "Skip", style = MaterialTheme.typography.titleMedium) }
+                ProfileCountLine(device, localProfiles)
                 if (onSetUpTv != null) {
                     androidx.compose.material3.TextButton(
                         onClick = onSetUpTv,
@@ -334,13 +326,6 @@ fun AddProfilesStepScreen(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
                 }
-                Text(
-                    "You can add or remove profiles later in Settings > Playlists.",
-                    style = MaterialTheme.typography.bodySmall.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-
     }
     val controls: @Composable () -> Unit = {
                 controlsTail()
@@ -505,20 +490,12 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                "Add profiles for other users?",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
-                textAlign = TextAlign.Center,
+            ProfilesStepHeader(rememberDeviceNoun())
+            com.aeriotv.android.feature.settings.RosterSuggestions(
+                playlistId, profilesVm, users = null,
+                title = "FROM YOUR OTHER DEVICES",
+                footnote = ROSTER_FOOTNOTE,
             )
-            Text(
-                "Add the Dispatcharr users who also watch on this device.",
-                style = MaterialTheme.typography.bodyMedium.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            com.aeriotv.android.feature.settings.RosterSuggestions(playlistId, profilesVm, users = null)
             added.forEach { name ->
                 Text("Added $name", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
             }

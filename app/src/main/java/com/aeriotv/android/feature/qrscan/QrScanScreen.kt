@@ -114,6 +114,10 @@ fun QrScanActions(
     var error by remember { mutableStateOf<String?>(null) }
     val currentAccept by rememberUpdatedState(accept)
     val currentOnResult by rememberUpdatedState(onResult)
+    // Onboarding "Scan a QR code" / "Scan QR code": open the camera on arrival.
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (com.aeriotv.android.feature.onboarding.components.QrAutoScan.consume()) scanning = true
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true; error = null

@@ -44,13 +44,17 @@ fun SourceTypeCard(
     trailing: @Composable (() -> Unit)? = null,
     /** TV welcome grid: smaller icon tile, tighter padding, one-line subtitle. */
     compact: Boolean = false,
+    /** Onboarding "Start here" lead card: accent outline instead of the quiet border. */
+    highlighted: Boolean = false,
+    /** Overrides the compact one-line subtitle cap (onboarding cards wrap to a few lines). */
+    subtitleMaxLines: Int? = null,
 ) {
-    val cardBorder = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
+    val cardBorder = MaterialTheme.colorScheme.primary.copy(alpha = if (highlighted) 1f else 0.20f)
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
+            .border(if (highlighted) 1.5.dp else 1.dp, cardBorder, RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.40f))
             .padding(horizontal = if (compact) 12.dp else 14.dp, vertical = if (compact) 9.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -87,7 +91,7 @@ fun SourceTypeCard(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall.subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = if (compact) 1 else Int.MAX_VALUE,
+                    maxLines = subtitleMaxLines ?: if (compact) 1 else Int.MAX_VALUE,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

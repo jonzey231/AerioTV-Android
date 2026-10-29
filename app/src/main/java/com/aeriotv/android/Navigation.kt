@@ -663,8 +663,8 @@ fun AerioTVNavHost(
                     }
                     val message = when {
                         activated -> "Signed in as ${signedInEmail.orEmpty()}. Restoring your data..."
-                        signedInEmail != null -> "Signed in as $signedInEmail. No playlists in Drive yet -- set one up below."
-                        else -> "Signed in. No playlists in Drive yet."
+                        signedInEmail != null -> "Signed in as $signedInEmail. Drive sync is on. No backup yet, so connect a server below."
+                        else -> "Signed in. Drive sync is on. No backup yet."
                     }
                     android.widget.Toast.makeText(
                         context,
@@ -810,6 +810,14 @@ fun AerioTVNavHost(
                         navController.navigate(Routes.CHOOSE_TYPE)
                     },
                     onSetUpFromPhone = { navController.navigate(Routes.TV_SETUP) },
+                    onScanQr = {
+                        // Same path as Connect a Server > Dispatcharr, with the
+                        // scanner opened on arrival.
+                        vm.enableDispatcharrSyncAfterConnect = false
+                        vm.startNewSource(SourceType.DispatcharrUserPass)
+                        com.aeriotv.android.feature.onboarding.components.QrAutoScan.request()
+                        navController.navigate(Routes.configure(SourceType.DispatcharrUserPass))
+                    },
                     onSyncViaDispatcharr = {
                         vm.enableDispatcharrSyncAfterConnect = true
                         vm.startNewSource(SourceType.DispatcharrUserPass)
@@ -909,7 +917,10 @@ fun AerioTVNavHost(
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
                 val vm: PlaylistViewModel = hiltViewModel(parent)
+                val chooseIsTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
                 ChooseSourceTypeScreen(
+                    onboarding = true,
+                    onSetUpFromPhone = if (chooseIsTv) ({ navController.navigate(Routes.TV_SETUP) }) else null,
                     onBack = { navController.popBackStack() },
                     onChoose = { type ->
                         vm.enableDispatcharrSyncAfterConnect = false
@@ -993,6 +1004,7 @@ fun AerioTVNavHost(
                             toMain()
                         },
                         onSetUpTv = if (onboardingIsTv) null else ({ setUpTvOpen = true }),
+                        onboarding = true,
                     )
                     if (setUpTvOpen) {
                         com.aeriotv.android.feature.devicesetup.SetUpTvDialog(
