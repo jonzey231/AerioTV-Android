@@ -110,7 +110,9 @@ private class WelcomeContent(
 
 @Composable
 private fun WelcomeSingleColumn(c: WelcomeContent) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+    // Centered vertically when the content is shorter than the screen (Logan,
+    // 2026-10-29); the scroll still kicks in on short screens.
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             modifier = Modifier
                 .widthIn(max = 560.dp)
@@ -121,7 +123,7 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             WelcomeBrand(headline = "Welcome.\nLet's set up your content.")
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             StartHereSection(c)
             Spacer(Modifier.height(6.dp))
             SyncSection(c, sideBySide = false)
@@ -182,7 +184,7 @@ private fun WelcomeTv(c: WelcomeContent) {
 
 @Composable
 private fun WelcomeBrand(headline: String) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         // Centered logo with the name (Logan, 2026-10-29): the TV banner's
         // wordmark keyed onto a transparent background (drawable-nodpi), no
         // text wordmark and no body paragraph.
