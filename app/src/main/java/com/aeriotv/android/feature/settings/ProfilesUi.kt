@@ -858,7 +858,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
                     }
                     Spacer(Modifier.size(6.dp))
                     Text(
-                        "A Child profile sees only its own content and basic settings. Leaving it needs a PIN from an Admin or Standard profile.",
+                        "A Child profile sees only its own content and basic settings. Switching from a Child profile to a non-Child profile requires PIN entry.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1128,7 +1128,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
 internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): String = when (r) {
     com.aeriotv.android.core.profiles.ProfileRole.Admin -> "Full access in AerioTV. Has admin rights on the Dispatcharr server."
     com.aeriotv.android.core.profiles.ProfileRole.User -> "Full access in AerioTV. A standard user on the Dispatcharr server."
-    com.aeriotv.android.core.profiles.ProfileRole.Child -> "Sees only its own content and basic settings. Leaving it needs a PIN from an Admin or Standard profile."
+    com.aeriotv.android.core.profiles.ProfileRole.Child -> "Sees only its own content and basic settings. Switching from a Child profile to a non-Child profile requires PIN entry."
 }
 
 /**
