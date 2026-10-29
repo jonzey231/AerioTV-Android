@@ -3,6 +3,9 @@ package com.aeriotv.android.feature.onboarding
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -111,6 +114,7 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
                 .widthIn(max = 560.dp)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
+                .windowInsetsPadding(WindowInsets.systemBars)
                 .padding(horizontal = 20.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -127,7 +131,7 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
 @Composable
 private fun WelcomeTwoColumn(c: WelcomeContent) {
     Row(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 24.dp),
+        modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).padding(horizontal = 48.dp, vertical = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(40.dp),
     ) {
