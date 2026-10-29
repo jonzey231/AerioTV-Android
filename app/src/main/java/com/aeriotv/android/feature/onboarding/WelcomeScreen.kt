@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.layout.ContentScale
 import com.aeriotv.android.R
@@ -68,7 +69,7 @@ fun WelcomeScreen(
     googleSignInInProgress: Boolean = false,
     /** Signed-in Google account, shown on the sync row. */
     googleSignedInEmail: String? = null,
-    /** "Sign in with Dispatcharr": opens the Direct Connect form, sync turns on after the connect. */
+    /** "Sync with Dispatcharr": opens the Direct Connect form, sync turns on after the connect. */
     onSyncViaDispatcharr: (() -> Unit)? = null,
     /** TV only: "Set up from your phone" (docs/DeviceSetupHandoff.md). Null hides it. */
     onSetUpFromPhone: (() -> Unit)? = null,
@@ -110,24 +111,35 @@ private class WelcomeContent(
 
 @Composable
 private fun WelcomeSingleColumn(c: WelcomeContent) {
-    // Centered vertically when the content is shorter than the screen (Logan,
-    // 2026-10-29); the scroll still kicks in on short screens.
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // Logan, 2026-10-29: the logo floats centered between the status bar and
+    // the headline; the headline, cards, and Skip sit in the lower part of
+    // the screen. Weights only apply when there is room; on a short screen
+    // the band collapses to a fixed gap and the column scrolls.
+    BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+        val tall = maxHeight >= 640.dp
         Column(
             modifier = Modifier
                 .widthIn(max = 560.dp)
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .windowInsetsPadding(WindowInsets.systemBars)
+                .align(Alignment.TopCenter)
+                .then(if (tall) Modifier.fillMaxHeight() else Modifier.verticalScroll(rememberScrollState()))
                 .padding(horizontal = 20.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            WelcomeBrand(headline = "Welcome.\nLet's set up your content.")
+            if (tall) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { WelcomeLogo() }
+            } else {
+                Spacer(Modifier.height(24.dp))
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { WelcomeLogo() }
+                Spacer(Modifier.height(24.dp))
+            }
+            WelcomeHeadline("Welcome.\nLet's set up your content.")
             Spacer(Modifier.height(12.dp))
             StartHereSection(c)
             Spacer(Modifier.height(6.dp))
             SyncSection(c, sideBySide = false)
             SkipPill(line = PHONE_SKIP, onSkip = c.onSkip)
+            if (tall) Spacer(Modifier.weight(0.45f))
         }
     }
 }
@@ -183,26 +195,32 @@ private fun WelcomeTv(c: WelcomeContent) {
 }
 
 @Composable
+private fun WelcomeLogo(modifier: Modifier = Modifier) {
+    // The logo with the name (Logan, 2026-10-29): the TV banner's wordmark
+    // keyed onto a transparent background (drawable-nodpi).
+    Image(
+        painter = painterResource(id = R.drawable.aerio_wordmark),
+        contentDescription = "AerioTV",
+        contentScale = ContentScale.Fit,
+        modifier = modifier.fillMaxWidth(0.8f).heightIn(max = 64.dp),
+    )
+}
+
+@Composable
+private fun WelcomeHeadline(headline: String) {
+    Text(
+        headline,
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onBackground,
+    )
+}
+
+@Composable
 private fun WelcomeBrand(headline: String) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        // Centered logo with the name (Logan, 2026-10-29): the TV banner's
-        // wordmark keyed onto a transparent background (drawable-nodpi), no
-        // text wordmark and no body paragraph.
-        Image(
-            painter = painterResource(id = R.drawable.aerio_wordmark),
-            contentDescription = "AerioTV",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxWidth(0.8f)
-                .heightIn(max = 64.dp)
-                .align(Alignment.CenterHorizontally),
-        )
-        Text(
-            headline,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
+        WelcomeLogo(Modifier.align(Alignment.CenterHorizontally))
+        WelcomeHeadline(headline)
     }
 }
 
@@ -276,7 +294,7 @@ private fun SyncSection(c: WelcomeContent, sideBySide: Boolean) {
     val dispatcharrRow: @Composable (Modifier) -> Unit = { m ->
         if (dispatcharr != null) OnboardingCard(
             icon = Icons.Filled.Key,
-            title = "Sign in with Dispatcharr",
+            title = "Sync with Dispatcharr",
             subtitle = if (c.isTv) "Connects your server and turns on sync for favorites, progress, and settings."
             else "Connects your server and turns on sync.",
             onClick = dispatcharr,
@@ -286,13 +304,14 @@ private fun SyncSection(c: WelcomeContent, sideBySide: Boolean) {
         )
     }
     if (sideBySide) {
+        // Dispatcharr first, Google Drive second (Logan, 2026-10-29).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (google != null) googleRow(Modifier.weight(1f))
             if (dispatcharr != null) dispatcharrRow(Modifier.weight(1f))
+            if (google != null) googleRow(Modifier.weight(1f))
         }
     } else {
-        googleRow(Modifier)
         dispatcharrRow(Modifier)
+        googleRow(Modifier)
     }
 }
 
