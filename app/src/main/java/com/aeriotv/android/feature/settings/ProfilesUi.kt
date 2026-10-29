@@ -151,6 +151,9 @@ class ProfilesViewModel @Inject constructor(
     suspend fun addFromRoster(playlistId: String, row: com.aeriotv.android.core.sync.dsync.ProfileRow, user: DispatcharrUserSummary, password: String?, apiKey: String?) =
         manager.addFromRoster(playlistId, row, user, password, apiKey)
     fun adminHasPin(playlistId: String) = manager.adminHasPin(playlistId)
+    suspend fun canManageUserApiKeys(playlistId: String) = manager.canManageUserApiKeys(playlistId)
+    suspend fun generateUserApiKey(playlistId: String, userId: Int) = manager.generateUserApiKey(playlistId, userId)
+    suspend fun revokeUserApiKey(playlistId: String, userId: Int) = manager.revokeUserApiKey(playlistId, userId)
     fun lastAdminUnlock() = manager.lastAdminUnlock
     fun anyChild(playlistId: String) = manager.anyChild(playlistId)
     fun activeProfile(playlistId: String) = manager.activeProfile(playlistId)
@@ -983,6 +986,11 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     val rowRoles = remember { androidx.compose.runtime.mutableStateMapOf<Int, com.aeriotv.android.core.profiles.ProfileRole>() }
     fun roleOf(u: DispatcharrUserSummary) = rowRoles[u.id] ?: com.aeriotv.android.core.profiles.ProfileRole.User
     var childGateFor by remember { mutableStateOf<DispatcharrUserSummary?>(null) }
+    // Enable API access (server admin only): keys minted here, by user id.
+    var canManageKeys by remember { mutableStateOf(false) }
+    LaunchedEffect(playlistId) { canManageKeys = vm.canManageUserApiKeys(playlistId) }
+    val minted = remember { androidx.compose.runtime.mutableStateMapOf<Int, Boolean>() }
+    fun setUserKey(id: Int, key: String?) { users = users?.map { if (it.id == id) it.copy(apiKey = key) else it } }
     fun addUser(user: DispatcharrUserSummary) {
         if (busy) return
         if (roleOf(user) == com.aeriotv.android.core.profiles.ProfileRole.Child && !vm.adminHasPin(playlistId)) { childGateFor = user; return }
@@ -1025,6 +1033,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                         listed != null -> LazyColumn(Modifier.heightIn(max = 220.dp)) {
                             items(listed, key = { it.id }) { user ->
                                 var rowFocused by remember { mutableStateOf(false) }
+                                Column {
                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Row(
                                     Modifier
@@ -1045,6 +1054,20 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                                     }
                                 }
                                 RoleChip(roleOf(user), enabled = !busy) { rowRoles[user.id] = it }
+                                }
+                                if (canManageKeys && (user.apiKey.isNullOrBlank() || minted[user.id] == true)) {
+                                    EnableApiAccessRow(
+                                        playlistId, vm, user,
+                                        enabled = minted[user.id] == true,
+                                        interactive = !busy,
+                                        onEnabled = { key ->
+                                            minted[user.id] = true
+                                            // Row now carries the key: Add takes the keyed path, no prompt.
+                                            setUserKey(user.id, key)
+                                        },
+                                        onRevoked = { minted.remove(user.id); setUserKey(user.id, null) },
+                                    )
+                                }
                                 }
                             }
                         }

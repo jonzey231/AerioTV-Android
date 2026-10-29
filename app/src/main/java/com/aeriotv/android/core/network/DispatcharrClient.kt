@@ -461,6 +461,49 @@ class DispatcharrClient @Inject constructor() {
         }
     }
 
+    /**
+     * Profiles > Enable API access (Admin only): POST
+     * /api/accounts/api-keys/generate/ with `{"user_id": id}` mints a key for
+     * that user (a second call overwrites it). Returns the raw key. The key is
+     * a credential: never log it. Throws [DispatcharrError.Transport] with the
+     * HTTP code and the server's reason on a non-2xx.
+     */
+    suspend fun generateUserApiKey(baseUrl: String, apiKey: String, userId: Int): String {
+        val url = "${baseUrl.trimEnd('/')}/api/accounts/api-keys/generate/"
+        val response: HttpResponse = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(JsonObject(mapOf("user_id" to JsonPrimitive(userId))))
+        }
+        val text = runCatching { response.bodyAsText() }.getOrNull()
+        if (!response.status.isSuccess()) {
+            val reason = dispatcharrErrorReason(text)
+            throw DispatcharrError.Transport("Enable API access: HTTP ${response.status.value}" + (reason?.let { " ($it)" } ?: ""))
+        }
+        val root = runCatching { json.parseToJsonElement(text.orEmpty()) as? JsonObject }.getOrNull()
+        fun str(o: JsonObject?, k: String) = (o?.get(k) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        return str(root, "key") ?: str(root, "api_key") ?: str(root?.get("user") as? JsonObject, "api_key")
+            ?: throw DispatcharrError.Transport("Enable API access: the server sent no key")
+    }
+
+    /**
+     * Profiles > Enable API access off (Admin only): POST
+     * /api/accounts/api-keys/revoke/ with `{"user_id": id}` clears that
+     * user's key. Throws [DispatcharrError.Transport] on a non-2xx.
+     */
+    suspend fun revokeUserApiKey(baseUrl: String, apiKey: String, userId: Int) {
+        val url = "${baseUrl.trimEnd('/')}/api/accounts/api-keys/revoke/"
+        val response: HttpResponse = client.post(url) {
+            applyAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(JsonObject(mapOf("user_id" to JsonPrimitive(userId))))
+        }
+        if (!response.status.isSuccess()) {
+            val reason = dispatcharrErrorReason(runCatching { response.bodyAsText() }.getOrNull())
+            throw DispatcharrError.Transport("Revoke API access: HTTP ${response.status.value}" + (reason?.let { " ($it)" } ?: ""))
+        }
+    }
+
     data class AccountPermissions(
         val dvrAccess: String?,
         val vodMoviesEnabled: Boolean,

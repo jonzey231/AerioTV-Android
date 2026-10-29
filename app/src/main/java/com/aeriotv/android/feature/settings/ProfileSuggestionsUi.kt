@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Check
@@ -545,5 +546,95 @@ internal fun ExpandableSearch(query: String, onQuery: (String) -> Unit, enabled:
             modifier = Modifier.fillMaxWidth().focusRequester(fr),
         )
         androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
+    }
+}
+
+/**
+ * Server user row, admin only: "Enable API access" for a user with no key.
+ * On mints a key (POST /api/accounts/api-keys/generate/) and hands it to
+ * [onEnabled] so the caller adds the profile with it, no password prompt.
+ * Off (only after an on here) confirms, then revokes the key. Errors show
+ * inline and leave the switch where it was. The key is never logged.
+ * [enabled] is the switch state the caller keeps (true after a mint here).
+ */
+@Composable
+internal fun EnableApiAccessRow(
+    playlistId: String,
+    vm: ProfilesViewModel,
+    user: DispatcharrUserSummary,
+    enabled: Boolean,
+    onEnabled: (String) -> Unit,
+    onRevoked: () -> Unit,
+    interactive: Boolean = true,
+) {
+    val scope = rememberCoroutineScope()
+    var busy by remember(user.id) { mutableStateOf(false) }
+    var error by remember(user.id) { mutableStateOf<String?>(null) }
+    var confirmRevoke by remember(user.id) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    fun toggle(on: Boolean) {
+        if (busy || !interactive) return
+        error = null
+        if (on) {
+            busy = true
+            scope.launch {
+                vm.generateUserApiKey(playlistId, user.id).fold(
+                    { key -> busy = false; onEnabled(key) },
+                    { busy = false; error = it.message ?: "Could not enable API access" },
+                )
+            }
+        } else {
+            confirmRevoke = true
+        }
+    }
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 4.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clip(shape)
+                .dpadFocusRing(shape)
+                .toggleable(
+                    value = enabled,
+                    enabled = interactive && !busy,
+                    role = androidx.compose.ui.semantics.Role.Switch,
+                    onValueChange = { toggle(it) },
+                )
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Enable API access", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Lets this user sign in on AerioTV with a key instead of a password",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            else androidx.compose.material3.Switch(checked = enabled, onCheckedChange = null, enabled = interactive)
+        }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    }
+    if (confirmRevoke) {
+        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+            onDismissRequest = { confirmRevoke = false },
+            title = { Text("Revoke API access?") },
+            text = { Text("${user.username} will be signed out on every device that uses this key.") },
+            confirmButton = {
+                SettingsDialogTextButton(label = "Revoke", destructive = true, onClick = {
+                    confirmRevoke = false
+                    busy = true
+                    scope.launch {
+                        vm.revokeUserApiKey(playlistId, user.id).fold(
+                            { busy = false; onRevoked() },
+                            { busy = false; error = it.message ?: "Could not revoke API access" },
+                        )
+                    }
+                })
+            },
+            dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = { confirmRevoke = false }) },
+        )
     }
 }

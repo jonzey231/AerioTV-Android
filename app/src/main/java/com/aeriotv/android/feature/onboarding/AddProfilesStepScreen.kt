@@ -186,6 +186,10 @@ fun AddProfilesStepScreen(
     }
 
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
+    // Enable API access (server admin only): keys minted here, by user id.
+    var canManageKeys by remember { mutableStateOf(false) }
+    LaunchedEffect(playlistId) { canManageKeys = profilesVm.canManageUserApiKeys(playlistId) }
+    val minted = remember { androidx.compose.runtime.mutableStateMapOf<Int, Boolean>() }
     var query by remember { mutableStateOf("") }
     // Suggestions are the headline; the server list sits behind "Show other
     // users on this server" unless there are no suggestions.
@@ -260,6 +264,22 @@ fun AddProfilesStepScreen(
                             }
                         }
                         if (checked) com.aeriotv.android.feature.settings.RoleChip(roleOf(user), enabled = !busy) { rowRoles[user.id] = it }
+                        }
+                        if (canManageKeys && (user.apiKey.isNullOrBlank() || minted[user.id] == true)) {
+                            com.aeriotv.android.feature.settings.EnableApiAccessRow(
+                                playlistId, profilesVm, user,
+                                enabled = minted[user.id] == true,
+                                interactive = !busy,
+                                // The row now carries the key: Add selected takes the keyed path, no prompt.
+                                onEnabled = { key ->
+                                    minted[user.id] = true
+                                    users = users?.map { if (it.id == user.id) it.copy(apiKey = key) else it }
+                                },
+                                onRevoked = {
+                                    minted.remove(user.id)
+                                    users = users?.map { if (it.id == user.id) it.copy(apiKey = null) else it }
+                                },
+                            )
                         }
                     }
                     val noneOnServer = rest.isEmpty()

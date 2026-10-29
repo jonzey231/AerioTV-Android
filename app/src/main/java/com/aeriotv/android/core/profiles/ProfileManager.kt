@@ -764,6 +764,26 @@ class ProfileManager @Inject constructor(
         client.listUsers(base, key).filter { it.username !in taken }.sortedBy { it.username.lowercase() }
     }
 
+    /** Enable API access is offered: the base login is a server admin and the active profile is an Admin. */
+    suspend fun canManageUserApiKeys(playlistId: String): Boolean =
+        baseIsServerAdmin(playlistId) && activeIsAdmin(playlistId)
+
+    /** Mint a key for server user [userId] with the base admin key. Returns the raw key (never logged). */
+    suspend fun generateUserApiKey(playlistId: String, userId: Int): Result<String> = runCatching {
+        val row = playlistDao.byId(playlistId) ?: error("Playlist not found")
+        check(canManageUserApiKeys(playlistId)) { "Only a Dispatcharr admin can enable API access." }
+        val key = row.apiKey?.takeIf { it.isNotBlank() } ?: error("No API key for this playlist")
+        client.generateUserApiKey(repository.effectiveBaseUrl(row), key, userId)
+    }
+
+    /** Clear server user [userId]'s key with the base admin key. */
+    suspend fun revokeUserApiKey(playlistId: String, userId: Int): Result<Unit> = runCatching {
+        val row = playlistDao.byId(playlistId) ?: error("Playlist not found")
+        check(canManageUserApiKeys(playlistId)) { "Only a Dispatcharr admin can revoke API access." }
+        val key = row.apiKey?.takeIf { it.isNotBlank() } ?: error("No API key for this playlist")
+        client.revokeUserApiKey(repository.effectiveBaseUrl(row), key, userId)
+    }
+
     /**
      * Add Profile step 2: validate by signing in as [user] once (password, or
      * API key), then store the credential encrypted. Never changes the server.
