@@ -140,7 +140,7 @@ fun SyncSettingsScreen(
     var pullConfirmOpen by remember { mutableStateOf(false) }
     var clearConfirmOpen by remember { mutableStateOf(false) }
     val configured = remember { SyncConfig.isConfigured() }
-    val provider by viewModel.syncProvider.collectAsStateWithLifecycle(initialValue = "off")
+    val dsyncOn by viewModel.dispatcharrSyncEnabled.collectAsStateWithLifecycle(initialValue = false)
     val dsyncAvailable by viewModel.dispatcharrAvailable.collectAsStateWithLifecycle(initialValue = false)
     val dsyncUi by viewModel.dispatcharrUi.collectAsState()
 
@@ -232,67 +232,6 @@ fun SyncSettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item {
-                // Sync with: Off / Google Drive / Dispatcharr. Dispatcharr is
-                // offered only on a Dispatcharr Direct Connect playlist (or
-                // while it is the current choice, so it can be turned off).
-                val showDsync = dsyncAvailable || provider == "dispatcharr"
-                SettingsSection(
-                    header = "Sync With",
-                    footer = "Changing the sync source keeps your local data. Admins on a Dispatcharr server can view synced data.",
-                ) {
-                    SyncProviderRadioRow(
-                        title = "Off",
-                        subtitle = "Favorites, progress, and settings stay on this device.",
-                        selected = provider == "off",
-                        onClick = { viewModel.setSyncProvider("off") },
-                    )
-                    SyncProviderRadioRow(
-                        title = "Google Drive",
-                        subtitle = "Sync through your Google account. Works with any playlist type.",
-                        selected = provider == "drive",
-                        onClick = { viewModel.setSyncProvider("drive") },
-                    )
-                    if (showDsync) SyncProviderRadioRow(
-                        title = "Dispatcharr",
-                        subtitle = if (dsyncAvailable) "Store sync data on your Dispatcharr server under each profile. Dispatcharr playlists only."
-                        else "Not available for this playlist.",
-                        selected = provider == "dispatcharr",
-                        onClick = { viewModel.setSyncProvider("dispatcharr") },
-                    )
-                }
-            }
-            if (provider == "dispatcharr") {
-                item {
-                    SettingsSection(
-                        header = "Dispatcharr",
-                        footer = if (tvRows) null else "Each profile syncs as its own Dispatcharr user. Playlists and sign-in details never sync here. Admins on your Dispatcharr server can view synced data.",
-                    ) {
-                        SyncTileActionRow(
-                            icon = Icons.Filled.CloudSync,
-                            title = "Dispatcharr Sync",
-                            subtitle = when {
-                                !dsyncAvailable -> "Needs a Dispatcharr playlist"
-                                dsyncUi.message != null -> dsyncUi.message
-                                dsyncUi.running -> "Syncing"
-                                dsyncUi.lastSyncAt > 0L -> "Last synced ${lastSyncedAgo(dsyncUi.lastSyncAt)}"
-                                else -> "Not synced yet"
-                            },
-                            running = dsyncUi.running,
-                            status = SyncSettingsViewModel.ActionStatus.Idle,
-                            onClick = { if (dsyncAvailable && !dsyncUi.running) viewModel.dispatcharrSyncNow() },
-                        )
-                        SyncTileActionRow(
-                            icon = Icons.Filled.Tune,
-                            title = "Sync Categories",
-                            subtitle = "Choose what syncs across your devices",
-                            chevron = !tvRows,
-                            onClick = onOpenSyncCategories,
-                        )
-                    }
-                }
-            }
-            if (provider == "drive") {
             if (!signedIn) {
                 item { SignedOutWelcomeBanner() }
             }
@@ -360,15 +299,6 @@ fun SyncSettingsScreen(
                             },
                         )
                     }
-                    // Reachable even with sync off, as Apple: the Delete
-                    // actions there work for stale-state cleanup.
-                    SyncTileActionRow(
-                        icon = Icons.Filled.Tune,
-                        title = "Sync Categories",
-                        subtitle = "Choose what syncs across your devices",
-                        chevron = !tvRows,
-                        onClick = onOpenSyncCategories,
-                    )
                     // Always offered on Apple, even with sync off. Drive needs
                     // a token to delete anything, so it waits for sign-in.
                     if (signedIn) {
@@ -425,6 +355,59 @@ fun SyncSettingsScreen(
                     }
                 }
             }
+            // Dispatcharr Sync: independent of Drive Sync, both can be on
+            // (owner decision 2026-10-29). Offered on a Dispatcharr Direct
+            // Connect playlist, or while on so it can be turned off.
+            if (dsyncAvailable || dsyncOn) {
+                item {
+                    SettingsSection(
+                        header = "Dispatcharr Sync",
+                        footer = when {
+                            dsyncOn && masterEnabled -> "Dispatcharr Sync takes precedence for shared data on this server. Google Drive keeps a backup."
+                            tvRows -> null
+                            else -> "Each profile syncs as its own Dispatcharr user. Playlists and sign-in details never sync here. Admins on your Dispatcharr server can view synced data."
+                        },
+                    ) {
+                        SyncTileToggleRow(
+                            icon = Icons.Filled.CloudSync,
+                            title = "Dispatcharr Sync",
+                            subtitle = if (dsyncAvailable) "Store sync data on your Dispatcharr server under each profile"
+                            else "Needs a Dispatcharr playlist",
+                            checked = dsyncOn,
+                            onCheckedChange = { viewModel.setDispatcharrSyncEnabled(it) },
+                        )
+                        if (dsyncOn) {
+                            SyncTileActionRow(
+                                icon = Icons.Filled.CloudSync,
+                                title = "Sync Now",
+                                subtitle = when {
+                                    !dsyncAvailable -> "Needs a Dispatcharr playlist"
+                                    dsyncUi.message != null -> dsyncUi.message
+                                    dsyncUi.running -> "Syncing"
+                                    dsyncUi.lastSyncAt > 0L -> "Last synced ${lastSyncedAgo(dsyncUi.lastSyncAt)}"
+                                    else -> "Not synced yet"
+                                },
+                                running = dsyncUi.running,
+                                status = SyncSettingsViewModel.ActionStatus.Idle,
+                                onClick = { if (dsyncAvailable && !dsyncUi.running) viewModel.dispatcharrSyncNow() },
+                            )
+                        }
+                    }
+                }
+            }
+            // One shared Sync Categories list for both Drive and Dispatcharr
+            // Sync. Reachable with sync off, as Apple: the Delete actions
+            // there work for stale-state cleanup.
+            item {
+                SettingsSection(header = "Sync Categories") {
+                    SyncTileActionRow(
+                        icon = Icons.Filled.Tune,
+                        title = "Sync Categories",
+                        subtitle = "Choose what syncs across your devices",
+                        chevron = !tvRows,
+                        onClick = onOpenSyncCategories,
+                    )
+                }
             }
         }
         }
@@ -579,32 +562,6 @@ fun SyncSettingsScreen(
  * config check moved to its own [DeveloperConfigHint] beneath the button,
  * so this card stays user-facing copy regardless of build state.
  */
-/** Sync source choice: radio, title, and subtitle in the standard row card. */
-@Composable
-private fun SyncProviderRadioRow(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
-    SettingsRowContainer(onClick = onClick, traceTitle = title) {
-        androidx.compose.material3.RadioButton(
-            selected = selected,
-            onClick = null,
-            colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = title,
-                style = com.aeriotv.android.ui.settings.settingsRowTitleStyle(),
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
 @Composable
 private fun SignedOutWelcomeBanner() {
     val accent = MaterialTheme.colorScheme.primary
@@ -1001,11 +958,13 @@ fun SyncCategoriesScreen(
 ) {
     val isTv = rememberIsTvDevice()
     val driveEnabled by viewModel.masterEnabled.collectAsStateWithLifecycle(initialValue = false)
-    val provider by viewModel.syncProvider.collectAsStateWithLifecycle(initialValue = "off")
-    // Dispatcharr Sync reuses these toggles; Playlists and Credentials never
-    // sync through Dispatcharr, and the per-category Delete is Drive only.
-    val dsync = provider == "dispatcharr"
-    val masterEnabled = if (dsync) true else driveEnabled
+    val dsyncOn by viewModel.dispatcharrSyncEnabled.collectAsStateWithLifecycle(initialValue = false)
+    // One shared list for both providers. Dispatcharr Sync reuses these
+    // toggles; Playlists and Credentials never sync through Dispatcharr, and
+    // the per-category Delete is Drive only, so Drive-only rows hide only
+    // while Dispatcharr Sync is the sole provider on.
+    val dsync = dsyncOn && !driveEnabled
+    val masterEnabled = driveEnabled || dsyncOn
     val categories = if (dsync) SyncCategory.entries.filter { it != SyncCategory.Playlists && it != SyncCategory.Credentials } else SyncCategory.entries
     val clearStatuses by viewModel.categoryClearStatus.collectAsState()
     val scopes by viewModel.syncScopes.collectAsStateWithLifecycle(initialValue = emptyMap())
@@ -1021,7 +980,7 @@ fun SyncCategoriesScreen(
     // per-device), so those sentences state what Android actually does.
     val footer = if (dsync) {
         "Each choice controls whether this device sends and receives that item through your Dispatcharr server: on all devices, only on devices like this one, or not at all. The choices apply to this device only."
-    } else if (masterEnabled) {
+    } else if (driveEnabled) {
         "Syncing is automatic: AerioTV syncs about every 6 hours while you are on Wi-Fi and the battery is not low. Push to Drive on the previous screen just forces that round trip immediately.\n\n" +
             "Each choice controls whether this device pushes and pulls that item: on all devices, only on devices like this one, or not at all. The choices apply to this device only. Use the Delete buttons to remove a category's cloud copy without affecting local data."
     } else {
@@ -1049,7 +1008,7 @@ fun SyncCategoriesScreen(
                 val choices = SyncScope.choices(viewModel.syncDeviceIsTv)
                 val scopeOptions = choices.map { SettingsPickerOption(it, it.title) }
                 SyncItemCatalog.groups.forEach { group ->
-                    val items = group.items.filter { (!dsync || !it.driveOnly) && (dsync || !it.dsyncOnly) }
+                    val items = group.items.filter { (!dsync || !it.driveOnly) && (dsyncOn || !it.dsyncOnly) }
                     if (items.isEmpty()) return@forEach
                     item(key = "sync-group-${group.id}") {
                         SettingsSection(header = group.title) {

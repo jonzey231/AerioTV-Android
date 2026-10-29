@@ -65,7 +65,7 @@ class SyncProvidersOfferViewModel @Inject constructor(
             SyncProvidersRules.offers(
                 union,
                 driveOnHere = prefs.syncMasterEnabled.first(),
-                dispatcharrOnHere = prefs.syncProviderOnce() == DispatcharrSyncManager.PROVIDER,
+                dispatcharrOnHere = prefs.dispatcharrSyncEnabledOnce(),
                 activeIsDispatcharr = isD,
             )
         }
@@ -78,7 +78,7 @@ class SyncProvidersOfferViewModel @Inject constructor(
 
     /** Dispatcharr: turn it on for the active user, leaving Drive as it is. */
     suspend fun enableDispatcharr() {
-        prefs.setSyncProvider(DispatcharrSyncManager.PROVIDER)
+        prefs.setDispatcharrSyncEnabled(true)
         Log.i(TAG, "[DSYNC] enabled from sync providers offer")
     }
 

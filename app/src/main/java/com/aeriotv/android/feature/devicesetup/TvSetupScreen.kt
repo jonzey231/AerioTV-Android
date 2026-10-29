@@ -207,9 +207,7 @@ class TvSetupViewModel @Inject constructor(
         }
         if (isDispatcharr && p.sync?.enabled == true && p.sync.provider == DispatcharrSyncManager.PROVIDER) {
             _phase.value = Phase.Applying("Syncing")
-            prefs.setSyncProvider(DispatcharrSyncManager.PROVIDER)
-            prefs.setSyncMasterEnabled(false)
-            DriveSyncWorker.cancel(context)
+            prefs.setDispatcharrSyncEnabled(true)
             Log.i(TAG, "[DSYNC] enabled from phone setup")
             dsync.awaitFirstPull()
         }

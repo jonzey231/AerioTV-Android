@@ -222,7 +222,7 @@ class DriveSyncManager @Inject constructor(
                 providersStore.forPush(
                     SyncProvidersStore.DRIVE,
                     isBaseProfile = true,
-                    dispatcharrOn = appPreferences.syncProviderOnce() == com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager.PROVIDER,
+                    dispatcharrOn = appPreferences.dispatcharrSyncEnabledOnce(),
                     driveOn = appPreferences.syncMasterEnabled.first(),
                     deviceId = dispatcharrSync.get().deviceId,
                 )

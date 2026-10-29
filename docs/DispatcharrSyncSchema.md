@@ -78,7 +78,7 @@ Device-local, never synced here (nor through iCloud or Drive), and why:
 - Debug and developer options, update checks: per install.
 - Playlist URLs and credentials: Drive and iCloud Keychain only, never Dispatcharr (section 10).
 - TMDB API key: a secret; Drive stopped carrying it in cleartext on 2026-10-27 (section 10.2).
-- Sync provider, Sync Categories choices (`syncScope.<item>`, `syncItem.<item>`), and the active profile: per device by design.
+- The Drive Sync and Dispatcharr Sync switches, Sync Categories choices (`syncScope.<item>`, `syncItem.<item>`), and the active profile: per device by design.
 - Channel profile selection: server-side state (admin assigns it per user).
 - DVR recordings: server-side (Dispatcharr) or local files.
 - EPG, logos, VOD catalog caches: rebuilt from the server.
@@ -646,6 +646,13 @@ never trimmed. After the last step still fails: "Sync data too large".
 
 Google Drive sync (Android) and iCloud sync (Apple) can be on at the same time as Dispatcharr Sync. Apple applies the same rules with iCloud in place of Drive.
 
+Two independent switches (owner decision 2026-10-29), no single-choice "sync provider":
+1. Drive Sync (iCloud on Apple): one device-local switch, Settings > Sync > Google Drive.
+2. Dispatcharr Sync: one device-local switch per base user (profile-scoped), Settings > Sync > Dispatcharr Sync.
+3. Turning either one on or off never changes the other: not in Settings, the Welcome "Sync with Dispatcharr" path, the onboarding Dispatcharr Sync step, the Drive restore path, or the providers offer (section 10b).
+4. With both on, Settings shows under the Dispatcharr Sync section: "Dispatcharr Sync takes precedence for shared data on this server. Google Drive keeps a backup." Sync Categories is one shared list for both.
+5. Migration from the old single choice (Android key `sync_provider`): `dispatcharr` reads as Dispatcharr Sync on; `drive`, `off`, or unset read as off. Drive Sync keeps its own stored value in every case. The old key is dropped the first time the Dispatcharr switch is written.
+
 Rule 1, precedence. For a Dispatcharr playlist whose active user has Dispatcharr Sync on, Dispatcharr Sync takes precedence for every category both providers carry: favorites, recents, collections, watch progress, reminders, watchlist, hidden titles, hidden groups, group order, radio default, remote map, and settings. Drive (or iCloud) keeps owning playlists and credentials, and every category for non-Dispatcharr playlists. Drive keeps pushing its full snapshot as a backup; a Drive pull does not apply a Dispatcharr-owned category.
 
 Ownership predicate (Android `DispatcharrSyncManager.ownsCategory`, pure rule `DsyncCoexistence.owns`): true when all of these hold:
@@ -690,7 +697,7 @@ Scope (owner rule, 2026-10-29): the record describes the user who set up the dev
 
 Union rule (both providers, same pure rule, Android `SyncProvidersRules`):
 1. Pull: keep the newer record whole (`updatedAt`, ties: higher `deviceId`).
-2. Push: stored flags OR this device's own (`dispatcharr` = Dispatcharr Sync on for the base user, `googleDrive` = Drive Sync on, `icloud` = iCloud on; Android never sets `icloud` but preserves it).
+2. Push: stored flags OR this device's own, each from its own switch (`dispatcharr` = Dispatcharr Sync on for the base user, `googleDrive` = Drive Sync on, `icloud` = iCloud on; Android never sets `icloud` but preserves it).
 3. A flag goes from true to false only when this device reported it true before and the provider is now off here: it writes `false` with a newer `updatedAt` once, then stops forcing it, so a device that still runs the provider sets it true again on its next push.
 4. `updatedAt` and `deviceId` change only when a flag changes.
 5. Best effort: a device pushing a stale Drive copy can re-raise a flag; the next union settles it.

@@ -2201,16 +2201,22 @@ class AppPreferences @Inject constructor(
     // ── Dispatcharr Sync (docs/DispatcharrSyncSchema.md) ───────────────────
 
     /**
-     * Settings > Sync > Sync with: "off", "drive", or "dispatcharr". Unset
-     * follows the Drive master toggle so existing Drive users stay on Drive.
-     * Device-local, never synced.
+     * Dispatcharr Sync on or off for the active base user (profile-scoped
+     * store, like every scoped key). Independent of Drive Sync
+     * ([syncMasterEnabled]): both can be on at once (owner decision
+     * 2026-10-29). Migration: the old single-choice "sync_provider" key, when
+     * present and the boolean is unset, reads as on only for "dispatcharr";
+     * Drive keeps its own toggle untouched. Device-local, never synced.
      */
-    val syncProvider: Flow<String> = scopedData.map { p ->
-        p[KEY_SYNC_PROVIDER] ?: if (p[KEY_SYNC_MASTER] == true) "drive" else "off"
+    val dispatcharrSyncEnabled: Flow<Boolean> = scopedData.map { p ->
+        SyncSwitchMigration.dispatcharrOn(p[KEY_DSYNC_ENABLED], p[KEY_SYNC_PROVIDER_LEGACY])
     }
-    suspend fun syncProviderOnce(): String = syncProvider.first()
-    suspend fun setSyncProvider(value: String) {
-        store.edit { it[KEY_SYNC_PROVIDER] = value }
+    suspend fun dispatcharrSyncEnabledOnce(): Boolean = dispatcharrSyncEnabled.first()
+    suspend fun setDispatcharrSyncEnabled(value: Boolean) {
+        store.edit {
+            it[KEY_DSYNC_ENABLED] = value
+            it.remove(KEY_SYNC_PROVIDER_LEGACY)
+        }
     }
 
     /** Category toggle read for Dispatcharr Sync (same toggles and defaults as Drive). */
@@ -2992,7 +2998,9 @@ class AppPreferences @Inject constructor(
         val KEY_CATEGORY_MASTER_ENABLE = booleanPreferencesKey(CategoryPaletteState.MASTER_ENABLED_KEY)
         val KEY_CATEGORY_CUSTOM_JSON = stringPreferencesKey(CategoryPaletteState.CUSTOM_KEY)
         val KEY_SYNC_MASTER = booleanPreferencesKey("sync_master_enabled")
-        val KEY_SYNC_PROVIDER = stringPreferencesKey("sync_provider")
+        /** Legacy single-choice provider ("off" | "drive" | "dispatcharr"); read once for migration. */
+        val KEY_SYNC_PROVIDER_LEGACY = stringPreferencesKey("sync_provider")
+        val KEY_DSYNC_ENABLED = booleanPreferencesKey("dispatcharr_sync_enabled")
         val KEY_SYNC_ACCOUNT_EMAIL = stringPreferencesKey("sync_account_email")
         val KEY_SYNC_LAST_PUSH = longPreferencesKey("sync_last_push_at")
         val KEY_SYNC_LAST_PULL = longPreferencesKey("sync_last_pull_at")
@@ -3121,4 +3129,11 @@ object GuideProgramInfoButton {
         ALL -> true
         else -> false
     }
+}
+
+/** Pure migration rule from the old "Sync with" choice (unit tested). */
+object SyncSwitchMigration {
+    /** Stored boolean wins; otherwise the legacy provider "dispatcharr" means on, anything else off. */
+    fun dispatcharrOn(stored: Boolean?, legacyProvider: String?): Boolean =
+        stored ?: (legacyProvider == "dispatcharr")
 }

@@ -369,8 +369,9 @@ class SettingsViewModel @Inject constructor(
      *  row value. Writing still belongs to SyncSettingsViewModel. */
     val syncMasterEnabled: kotlinx.coroutines.flow.Flow<Boolean> = prefs.syncMasterEnabled
 
-    /** Settings root / rail Sync subtitle: the provider, Off / Google Drive / Dispatcharr. */
-    val syncProviderLabel: kotlinx.coroutines.flow.Flow<String> = prefs.syncProvider.map { syncProviderLabel(it) }
+    /** Settings root / rail Sync subtitle from the two independent switches. */
+    val syncProviderLabel: kotlinx.coroutines.flow.Flow<String> =
+        kotlinx.coroutines.flow.combine(prefs.syncMasterEnabled, prefs.dispatcharrSyncEnabled) { d, x -> syncProviderLabel(d, x) }
 
     val guideGroupSelector: StateFlow<String> = prefs.guideGroupSelector
         .stateIn(viewModelScope, SharingStarted.Eagerly, "pills")
@@ -785,9 +786,10 @@ class SettingsViewModel @Inject constructor(
 }
 
 
-/** "off" | "drive" | "dispatcharr" -> the Sync row subtitle. */
-fun syncProviderLabel(provider: String): String = when (provider) {
-    "drive" -> "Google Drive"
-    "dispatcharr" -> "Dispatcharr"
+/** Drive Sync and Dispatcharr Sync switches -> the Sync row subtitle. */
+fun syncProviderLabel(driveOn: Boolean, dispatcharrOn: Boolean): String = when {
+    driveOn && dispatcharrOn -> "Google Drive and Dispatcharr"
+    driveOn -> "Google Drive"
+    dispatcharrOn -> "Dispatcharr"
     else -> "Off"
 }

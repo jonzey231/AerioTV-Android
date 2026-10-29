@@ -78,13 +78,11 @@ class DispatcharrSyncStepViewModel @Inject constructor(
         return found
     }
 
-    suspend fun alreadyOn(): Boolean = prefs.syncProviderOnce() == DispatcharrSyncManager.PROVIDER
+    suspend fun alreadyOn(): Boolean = prefs.dispatcharrSyncEnabledOnce()
 
-    /** Same rules as SyncSettingsViewModel.setSyncProvider("dispatcharr"): Drive goes off. */
+    /** Turns Dispatcharr Sync on; Drive Sync is independent and stays as it is. */
     suspend fun turnOn(fromCard: Boolean = false, where: String = "onboarding") {
-        prefs.setSyncProvider(DispatcharrSyncManager.PROVIDER)
-        prefs.setSyncMasterEnabled(false)
-        DriveSyncWorker.cancel(context)
+        prefs.setDispatcharrSyncEnabled(true)
         Log.i(TAG, if (fromCard) "[DSYNC] enabled from $where (sync card)" else "[DSYNC] enabled from $where")
         val ok = dsync.awaitFirstPull()
         Log.i(TAG, "[DSYNC] $where first pull ${if (ok) "done" else "not finished; continuing"}")

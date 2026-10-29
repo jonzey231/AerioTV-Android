@@ -41,29 +41,17 @@ class SyncSettingsViewModel @Inject constructor(
         if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isEmpty()) providersStore.arm()
     }
 
-    /** Settings > Sync > Sync with: "off", "drive", or "dispatcharr". */
-    val syncProvider: Flow<String> = prefs.syncProvider
+    /** Dispatcharr Sync switch for the active base user; independent of Drive Sync. */
+    val dispatcharrSyncEnabled: Flow<Boolean> = prefs.dispatcharrSyncEnabled
 
     /** Dispatcharr is offered only while the active playlist is Dispatcharr Direct Connect. */
     val dispatcharrAvailable: Flow<Boolean> = playlistDao.observeActive().map { rows ->
         rows.firstOrNull()?.isDispatcharrDirectConnect() == true
     }
 
-    /** Picking a provider turns the other one off; Drive keeps its own toggle and worker. */
-    fun setSyncProvider(value: String) {
-        viewModelScope.launch {
-            prefs.setSyncProvider(value)
-            when (value) {
-                "drive" -> {
-                    prefs.setSyncMasterEnabled(true)
-                    DriveSyncWorker.enqueuePeriodic(context)
-                }
-                else -> {
-                    prefs.setSyncMasterEnabled(false)
-                    DriveSyncWorker.cancel(context)
-                }
-            }
-        }
+    /** Turns only Dispatcharr Sync on or off; Drive Sync is untouched. */
+    fun setDispatcharrSyncEnabled(value: Boolean) {
+        viewModelScope.launch { prefs.setDispatcharrSyncEnabled(value) }
     }
 
     val dispatcharrUi: StateFlow<com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager.Ui> = dsync.ui

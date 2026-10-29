@@ -171,7 +171,7 @@ class SetupSender(
                 },
             )
         }
-        val syncOn = runCatching { prefs.syncProviderOnce() == DispatcharrSyncManager.PROVIDER }.getOrDefault(false)
+        val syncOn = runCatching { prefs.dispatcharrSyncEnabledOnce() }.getOrDefault(false)
         return Source(row, isD, choices, syncOn)
     }
 

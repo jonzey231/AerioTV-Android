@@ -191,16 +191,16 @@ class DispatcharrSyncManager @Inject constructor(
         watchBetweenSessions()
         scope.launch {
             combine(
-                prefs.syncProvider,
+                prefs.dispatcharrSyncEnabled,
                 playlistDao.observeActive().map { rows -> rows.firstOrNull()?.takeIf { it.isDispatcharrDirectConnect() }?.id },
                 ProfileScope.token,
                 // The picker reason only: an in-app PIN pad (Set Admin PIN, Add Profile)
                 // used to end the session here, and edits made under the pad had no session.
                 kotlinx.coroutines.flow.combine(profileManager.get().switching, com.aeriotv.android.core.app.LaunchWorkHold.pickerHold) { sw, held -> sw || held },
-            ) { provider, pid, token, switching ->
+            ) { dsyncOn, pid, token, switching ->
                 // A profile switch (or the TV launch picker) is in flight: hold until its sign-in and
                 // permissions are in place (the scrim drops), then start.
-                if (switching) HOLD else if (provider == PROVIDER && pid != null) Target(pid, token) else null
+                if (switching) HOLD else if (dsyncOn && pid != null) Target(pid, token) else null
             }
                 .distinctUntilChanged()
                 .collectLatest { t ->
@@ -363,7 +363,7 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     private suspend fun pickerPull(playlistId: String, reason: String) {
-        if (prefs.syncProvider.first() != PROVIDER) return
+        if (!prefs.dispatcharrSyncEnabledOnce()) return
         // Never fight the hold: a PIN pad pauses everything, and a switch in
         // flight is about to start its own session pull. The picker itself
         // (pickerHold) is the stage this pull is for, so it runs under it.
@@ -468,7 +468,7 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     private suspend fun peekPush(playlistId: String, what: String) {
-        if (prefs.syncProvider.first() != PROVIDER) return
+        if (!prefs.dispatcharrSyncEnabledOnce()) return
         val active = playlistDao.observeActive().first().firstOrNull()?.takeIf { it.isDispatcharrDirectConnect() }?.id
         if (active != playlistId) return
         if (com.aeriotv.android.core.app.LaunchWorkHold.pinPadOpen.value) {
@@ -651,7 +651,7 @@ class DispatcharrSyncManager @Inject constructor(
      */
     suspend fun ownsCategory(category: com.aeriotv.android.core.sync.SyncCategory): Boolean {
         if (category !in DsyncCoexistence.SHARED_CATEGORIES) return false
-        val on = runCatching { prefs.syncProviderOnce() == PROVIDER }.getOrDefault(false)
+        val on = runCatching { prefs.dispatcharrSyncEnabledOnce() }.getOrDefault(false)
         val active = runCatching { playlistDao.allOnce().firstOrNull { it.isActive } }.getOrNull()
         val isD = active?.isDispatcharrDirectConnect() == true
         val done = if (on && isD) {

@@ -91,7 +91,7 @@ class AddProfilesStepViewModel @Inject constructor(
 
     /** Dispatcharr Sync is on: roster suggestions can still land from the first pull. */
     suspend fun syncOn(): Boolean =
-        prefs.syncProviderOnce() == com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager.PROVIDER
+        prefs.dispatcharrSyncEnabledOnce()
 
     fun suggestions(playlistId: String) = manager.rosterSuggestions(playlistId)
 
