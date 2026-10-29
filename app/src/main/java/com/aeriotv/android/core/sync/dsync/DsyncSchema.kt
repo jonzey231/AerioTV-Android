@@ -791,3 +791,50 @@ object DsyncPinHash {
         return ByteArray(hex.length / 2) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     }
 }
+
+/**
+ * Coexistence with Google Drive sync (docs/DispatcharrSyncSchema.md,
+ * "Coexistence with Drive and iCloud"). Pure so the rules are unit tested.
+ */
+object DsyncCoexistence {
+    /** Drive categories that carry at least one Dispatcharr Sync key (Playlists and Credentials never do). */
+    val SHARED_CATEGORIES: Set<SyncCategory> = DsyncKey.entries.mapNotNull { it.category }.toSet()
+
+    /**
+     * Rule 1: Dispatcharr Sync owns [category] (Drive still pushes it but a
+     * Drive pull does not apply it) when the active playlist is Dispatcharr,
+     * Dispatcharr Sync is on for its active user, and this device has
+     * completed at least one Dispatcharr pull for that user.
+     */
+    fun owns(
+        category: SyncCategory,
+        activeIsDispatcharr: Boolean,
+        dispatcharrSyncOn: Boolean,
+        firstPullDoneForUser: Boolean,
+    ): Boolean = category in SHARED_CATEGORIES && activeIsDispatcharr && dispatcharrSyncOn && firstPullDoneForUser
+
+    /**
+     * Rule 2: on the first pull of [key] for a user on this device
+     * ([consumedBefore] false: no server stamp was ever applied here), a
+     * server envelope with empty data is not applied; local seeds the
+     * server instead. `profiles` merges per row and never seeds this way.
+     */
+    fun seedFromLocal(key: DsyncKey, consumedBefore: Boolean, data: JsonObject): Boolean =
+        key != DsyncKey.Profiles && !consumedBefore && isEmptyData(key, data)
+
+    /** No rows, ids, names, or lanes. A primitive is a real value, except groupOrder mode "default" with no order. */
+    fun isEmptyData(key: DsyncKey, data: JsonObject): Boolean {
+        if (key == DsyncKey.GroupOrder) {
+            val mode = data["mode"].asStr() ?: "default"
+            return mode == "default" && data.filterKeys { it != "mode" }.values.all { emptyElement(it) }
+        }
+        return data.values.all { emptyElement(it) }
+    }
+
+    private fun emptyElement(e: JsonElement): Boolean = when (e) {
+        is JsonNull -> true
+        is JsonArray -> e.isEmpty()
+        is JsonObject -> e.values.all { emptyElement(it) }
+        else -> false
+    }
+}

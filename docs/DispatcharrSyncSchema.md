@@ -638,6 +638,32 @@ never trimmed. After the last step still fails: "Sync data too large".
 | ChannelCollection id, name, memberIds, placement (AppPreferences `channel_collections`, in Drive as `channelCollections.v1` since 2026-10-27) | collections row | Same conversion as Apple |
 | Playlists, Credentials | not synced here | Stay on Drive |
 
+## 10a. Coexistence with Drive and iCloud
+
+Google Drive sync (Android) and iCloud sync (Apple) can be on at the same time as Dispatcharr Sync. Apple applies the same rules with iCloud in place of Drive.
+
+Rule 1, precedence. For a Dispatcharr playlist whose active user has Dispatcharr Sync on, Dispatcharr Sync takes precedence for every category both providers carry: favorites, recents, collections, watch progress, reminders, watchlist, hidden titles, hidden groups, group order, radio default, remote map, and settings. Drive (or iCloud) keeps owning playlists and credentials, and every category for non-Dispatcharr playlists. Drive keeps pushing its full snapshot as a backup; a Drive pull does not apply a Dispatcharr-owned category.
+
+Ownership predicate (Android `DispatcharrSyncManager.ownsCategory`, pure rule `DsyncCoexistence.owns`): true when all of these hold:
+
+1. the Drive category carries at least one key of this schema (Favorites, Watch Progress, Reminders, Watchlist, App Preferences; never Playlists or Credentials),
+2. the active playlist is Dispatcharr,
+3. Dispatcharr Sync is on for that playlist's active user, and
+4. this device has completed at least one Dispatcharr pull for that user (persisted per playlist and profile).
+
+Until condition 4 holds, a Drive pull still applies its categories, so restoring from Drive and then turning on Dispatcharr Sync leaves the Drive data on the device, and the first Dispatcharr push seeds it to the server. Each skipped category logs one line:
+
+```
+[DRIVE] pull <category> skipped: Dispatcharr Sync owns it
+```
+
+Per-item Sync Categories still apply: an item that is Off neither pushes nor applies on any provider.
+
+Rule 2, first-pull seeding. An empty or missing server copy never overwrites what a user already has when they turn on Dispatcharr Sync:
+
+1. Missing (bucket 404, absent from the list, or category absent inside the bucket): the key is marked read and not present, and the post-pull flush pushes local up. This was already the behavior.
+2. Present with empty data (no ids, rows, names, or lanes; `groupOrder` with mode `default` and no order) on the first read of that key for this user on this device (no server stamp ever consumed here): the envelope is recorded as consumed without applying it, the key is marked dirty, and local is pushed up. Log line: `[DSYNC] pull <key> bytes=<n> empty on server, first pull: seeding from local`. Primitive values (for example `radioDefault.on=false`) are real choices and apply as usual. An empty copy seen after the first read is a real change from another device and applies as usual. `profiles` merges per row and is exempt.
+
 ## 11. README rows (both repos, same commit as the code)
 
 Pangolin rules table: already covered by the existing `/api/accounts/*` prefix rule; no new row.

@@ -643,6 +643,23 @@ class DispatcharrSyncManager @Inject constructor(
         }
     }
 
+    /**
+     * Coexistence Rule 1: true when Drive must not apply [category] on pull,
+     * because Dispatcharr Sync owns it for the active Dispatcharr playlist's
+     * active user and this device has finished a Dispatcharr pull for them.
+     */
+    suspend fun ownsCategory(category: com.aeriotv.android.core.sync.SyncCategory): Boolean {
+        if (category !in DsyncCoexistence.SHARED_CATEGORIES) return false
+        val on = runCatching { prefs.syncProviderOnce() == PROVIDER }.getOrDefault(false)
+        val active = runCatching { playlistDao.allOnce().firstOrNull { it.isActive } }.getOrNull()
+        val isD = active?.isDispatcharrDirectConnect() == true
+        val done = if (on && isD) {
+            val profileKey = currentProfileId(active!!.id) ?: ProfileScope.token.value.ifEmpty { "default" }
+            state.getBoolean("fpdone|${active.id}|$profileKey", false)
+        } else false
+        return DsyncCoexistence.owns(category, isD, on, done)
+    }
+
     private fun currentProfileId(playlistId: String): String? =
         profileStore.activeProfileId(playlistId)?.takeIf { profileStore.byId(it) != null }
             ?: profileStore.forPlaylist(playlistId).firstOrNull { it.isDefault }?.id
@@ -789,6 +806,7 @@ class DispatcharrSyncManager @Inject constructor(
             }
             s.lastPullAt = System.currentTimeMillis()
             s.firstPullDone = true
+            state.edit().putBoolean(k("fpdone", s), true).apply()
             stampLast(s)
             Log.i(TAG, "[DSYNC] pull done ($reason) read=${s.read.size} server=${s.serverBytes.size}")
             // A category absent on the server, or changed here before this
@@ -966,6 +984,17 @@ class DispatcharrSyncManager @Inject constructor(
         val raw = env.raw
         val localAt = state.getLong(k("at", s, key), 0L)
         val localDev = state.getString(k("dev", s, key), "").orEmpty()
+        // Rule 2 (Coexistence): the first time this device reads this key for
+        // this user, an empty server copy never clears local. Record the
+        // envelope as consumed without applying it and mark the key dirty, so
+        // the post-pull flush and refreshBeforePut push local up.
+        if (DsyncCoexistence.seedFromLocal(key, localAt > 0L || state.contains(k("at", s, key)), env.data)) {
+            saveAfter(s, key, raw, env.updatedAt, env.deviceId, env.data)
+            setDirty(s, key, true)
+            Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes empty on server, first pull: seeding from local")
+            s.read += key
+            return
+        }
         val wins = DsyncEnvelopeCodec.remoteWins(localAt, localDev, env.updatedAt, env.deviceId)
         // profiles merges per row on every pull; the rows carry their own updatedAt.
         val decision = if (key == DsyncKey.Profiles) DsyncGate.DirtyPull.Merge

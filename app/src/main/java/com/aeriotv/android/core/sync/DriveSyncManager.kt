@@ -50,6 +50,8 @@ class DriveSyncManager @Inject constructor(
     /** Provider: a replacing pull deletes local playlists through the
      * repository's full cleanup path (guide, channel cache, VOD, tokens). */
     private val playlistRepository: javax.inject.Provider<com.aeriotv.android.core.data.repository.PlaylistRepository>,
+    /** Coexistence Rule 1: Dispatcharr Sync owns the shared categories for its playlist's user. */
+    private val dispatcharrSync: javax.inject.Provider<com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager>,
 ) {
 
     private val okHttp: OkHttpClient = OkHttpClient.Builder()
@@ -265,7 +267,7 @@ class DriveSyncManager @Inject constructor(
                 .getOrDefault(PullOutcome.Failed)
             result[category] = outcome == PullOutcome.Applied
             when (outcome) {
-                PullOutcome.Applied -> updateRestoreStep(category, RestoreStepState.Done)
+                PullOutcome.Applied, PullOutcome.Owned -> updateRestoreStep(category, RestoreStepState.Done)
                 PullOutcome.NoRemote -> updateRestoreStep(category, RestoreStepState.Done, "Nothing in Drive yet")
                 PullOutcome.Failed -> updateRestoreStep(category, RestoreStepState.Failed, "Couldn't restore")
             }
@@ -299,7 +301,7 @@ class DriveSyncManager @Inject constructor(
     }
 
     private suspend fun pullCategory(token: String, category: SyncCategory, replace: Boolean = false): Boolean =
-        pullCategoryDetailed(token, category, replace) == PullOutcome.Applied
+        pullCategoryDetailed(token, category, replace).let { it == PullOutcome.Applied || it == PullOutcome.Owned }
 
     /** Tri-state pull so [pullAllTracked] can tell "no remote snapshot yet"
      * (fresh account, not an error) apart from a genuine failure. The Boolean
@@ -309,6 +311,12 @@ class DriveSyncManager @Inject constructor(
         category: SyncCategory,
         replace: Boolean = false,
     ): PullOutcome {
+        // Coexistence Rule 1 (docs/DispatcharrSyncSchema.md): Drive still
+        // pushes this category as a backup, but does not apply it on pull.
+        if (runCatching { dispatcharrSync.get().ownsCategory(category) }.getOrDefault(false)) {
+            Log.i(TAG, "[DRIVE] pull ${category.name} skipped: Dispatcharr Sync owns it")
+            return PullOutcome.Owned
+        }
         val fileId = driveClient.findFileId(token, category.fileName) ?: return PullOutcome.NoRemote
         val body = driveClient.download(token, fileId) ?: return PullOutcome.Failed
         return kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { runCatching {
@@ -326,7 +334,7 @@ class DriveSyncManager @Inject constructor(
             .getOrDefault(PullOutcome.Failed) }
     }
 
-    private enum class PullOutcome { Applied, NoRemote, Failed }
+    private enum class PullOutcome { Applied, NoRemote, Failed, Owned }
 
     // ── Snapshot builders ─────────────────────────────────────────────────
 
