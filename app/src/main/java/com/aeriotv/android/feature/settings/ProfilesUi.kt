@@ -303,14 +303,16 @@ private fun ProfileSwitcherHost(button: @Composable (active: DispatcharrProfile,
 
     if (open) {
         LaunchedEffect(pid) { vm.notePickerOpened(pid, "switch") }
-        // Few profiles: no drag, the resting height shows everything and a
-        // drag only snapped back (Logan, 2026-10-29). Many profiles: the sheet
-        // expands on drag and the list scrolls. The scrim always dismisses.
+        // Few profiles: the resting height shows everything, so swipe down
+        // dismisses but an upward drag is inert (it used to move the sheet
+        // and snap back, Logan 2026-10-29). Many profiles: the sheet expands
+        // on drag and the list scrolls. The scrim always dismisses.
         val longList = profiles.size > SWITCH_SHEET_FIXED_MAX
         com.aeriotv.android.ui.FormFactorModal(
             onDismiss = { open = false },
             traceName = "switch-profile",
-            sheetGesturesEnabled = longList,
+            sheetGesturesEnabled = true,
+            sheetDragDownOnly = !longList,
             sheetExpandable = longList,
         ) {
             Column(Modifier.padding(bottom = 12.dp)) {

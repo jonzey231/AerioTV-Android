@@ -14,6 +14,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
@@ -83,6 +86,15 @@ fun FormFactorModal(
      * New sheet bounced at the end of its list for exactly that reason).
      */
     sheetExpandable: Boolean = false,
+    /**
+     * Touch sheets only (Logan 2026-10-29): keep the sheet's gestures so a
+     * downward swipe dismisses, but make an UPWARD drag inert. For a short
+     * sheet that already shows everything, an upward drag used to move the
+     * sheet and snap it back, which felt broken. See [DragDownOnlyModifier]
+     * for the mechanism. Use with sheetGesturesEnabled = true and
+     * sheetExpandable = false.
+     */
+    sheetDragDownOnly: Boolean = false,
     /** Name for the TV focus trace ([SETTINGS] sheet open / close). */
     traceName: String = "modal",
     /**
@@ -152,6 +164,10 @@ fun FormFactorModal(
             // 2026-10-02 15:23) every scroll re-measured the content and the
             // sheet jumped between two heights.
             contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
+            // Drag-down-only sheets draw the handle inside the guarded
+            // content (below), so an upward drag that starts on the handle
+            // is filtered too. Same look: BottomSheetDefaults.DragHandle.
+            dragHandle = if (sheetDragDownOnly) null else ({ androidx.compose.material3.BottomSheetDefaults.DragHandle() }),
         ) {
             // Bound the content column to the window height.
             //
@@ -193,6 +209,7 @@ fun FormFactorModal(
             // makes it read as a panel without breaking swipe-to-dismiss.
             Column(
                 modifier = Modifier
+                    .then(if (sheetDragDownOnly) DragDownOnlyModifier else Modifier)
                     .then(
                         if (sheetMaxWidth != null) {
                             Modifier
@@ -207,8 +224,55 @@ fun FormFactorModal(
                         if (sheetExpandable) Modifier.height(expandedContentHeight)
                         else Modifier.heightIn(max = maxSheetHeight),
                     ),
-                content = content,
-            )
+            ) {
+                if (sheetDragDownOnly) {
+                    androidx.compose.material3.BottomSheetDefaults.DragHandle(
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    )
+                }
+                content()
+            }
+        }
+    }
+}
+
+/**
+ * Makes upward drags on a sheet inert while downward drags still reach the
+ * sheet (Material3 1.4.0, compose BOM 2026.05.00).
+ *
+ * Mechanism: in 1.4.0 the sheet's drag is an `anchoredDraggable` on the
+ * sheet Surface, a PARENT of this content. Compose delivers the Main pointer
+ * pass child first, so this modifier sees each move before the sheet does.
+ * Once a pointer has travelled upward past touch slop (so taps with a little
+ * jitter still click), every upward move is consumed. The sheet's drag
+ * detector ignores consumed changes: an upward start never begins a sheet
+ * drag, and an upward reversal mid-drag cancels it, so the sheet settles
+ * back to Expanded. Downward moves are never consumed, so swipe-to-dismiss
+ * works as before.
+ *
+ * Rejected: (a) a nestedScroll connection eating negative deltas only
+ * covers drags that go through a scrollable child; the short sheet has no
+ * scroll container, the drag reaches anchoredDraggable directly as a pointer
+ * gesture, so the connection would never see it. (c) confirmValueChange
+ * only vetoes target STATES, not the live offset during the drag, and the
+ * move-then-snap-back is anchoredDraggable offset tracking, not a Compose
+ * overscroll effect, so disabling overscroll does nothing here.
+ */
+private val DragDownOnlyModifier: Modifier = Modifier.pointerInput(Unit) {
+    val slop = viewConfiguration.touchSlop
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        var upTravel = 0f
+        var blocking = false
+        while (true) {
+            val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Main)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            val dy = change.position.y - change.previousPosition.y
+            upTravel = (upTravel - dy).coerceAtLeast(0f)
+            if (upTravel > slop) blocking = true
+            if (blocking && dy < 0f) change.consume()
+            if (dy > 0f && upTravel == 0f) blocking = false
         }
     }
 }
