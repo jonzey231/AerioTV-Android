@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -123,6 +124,8 @@ internal fun DispatcharrHeroCard(
                     Text("Scan QR code")
                 }
                 OutlinedButton(onClick = onEnterDetails, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                    Icon(Icons.Outlined.Keyboard, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(8.dp))
                     Text("Enter details")
                 }
             }
