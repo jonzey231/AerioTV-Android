@@ -27,6 +27,9 @@ class DriveIdLookup @Inject constructor(
     suspend fun activeDispatcharr(): PlaylistEntity? =
         playlistDao.allOnce().firstOrNull { it.isActive && it.isDispatcharrDirectConnect() }
 
+    /** The base user key for the offer and migration flags: the active playlist id, any type. */
+    suspend fun activeKey(): String = playlistDao.allOnce().firstOrNull { it.isActive }?.id ?: "none"
+
     fun host(row: PlaylistEntity): String? = WatchlistStore.scopeFor(row)
 
     suspend fun moviesReady(row: PlaylistEntity): Boolean = vodIds.moviesReady(row)

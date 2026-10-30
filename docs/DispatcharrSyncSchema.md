@@ -720,18 +720,22 @@ favorites entries, `dispatcharrVodId` on watch progress, watchlist, and
 hidden title entries, and `dispatcharrChannelIds` (local channel id to
 Dispatcharr channel id) on the preferences snapshot for the channels that
 recents and collections reference. Older files decode unchanged and the
-envelope version stays 1. The probe falls back to resolving local ids for
-rows written before these fields existed. When a Drive restore (onboarding,
-or Settings > Sync with Drive on) finds a backup in the old format and the
-restored playlists include a Dispatcharr playlist, AerioTV offers "Your
-backup needs an update" with "Update backup" and "Not now". Nothing is
-rewritten without "Update backup", which rewrites each shared Drive file
-once with the ids filled in, keeping its envelope and every other field,
-gated per base user and category by a saved flag; the VOD categories wait,
-flag unset, while the movie catalog is not built and a movie row does not
-resolve, and finish on a later sync. "Not now" keeps the old format and the
-prompt-when-unsure behavior; onboarding does not show the offer again that
-app session, and Settings offers it at most once per app session.
+envelope version stays 1; instead the envelope gains `format`, and every
+push from this build writes `format` 2. The probe falls back to resolving
+local ids for rows written before these fields existed. When a Drive
+restore (onboarding, or Settings > Sync with Drive on) finds any shared
+file whose envelope `format` is missing or below 2, AerioTV offers "Your
+backup needs an update" with "Update backup" and "Not now", for every
+playlist type. Nothing is rewritten without "Update backup", which rewrites
+each shared Drive file once at `format` 2, keeping its envelope time and
+every other field, gated per base user and category by a saved flag. With
+an active Dispatcharr playlist the Dispatcharr ids are filled where they
+resolve; the channel categories wait for the channel list and the VOD
+categories wait for the movie catalog, flag unset, and finish on a later
+sync. Any other playlist type rewrites at once with the ids left null.
+"Not now" keeps the old format and the prompt-when-unsure behavior;
+onboarding does not show the offer again that app session, and Settings
+offers it at most once per app session.
 
 | Drive | Dispatcharr | Result |
 | --- | --- | --- |

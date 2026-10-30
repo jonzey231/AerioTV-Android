@@ -69,10 +69,13 @@ class WelcomeSyncChainTest {
         WelcomeSyncChain.plan(drive = true, dispatcharr = true, restoredIsDispatcharr = true, driveAvailable = true, backupNeedsUpdate = true),
     )
 
-    @Test fun updateNeedsADispatcharrRestoreAndDrive() {
-        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = true, restoredIsDispatcharr = false, backupNeedsUpdate = true))
-        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = false, restoredIsDispatcharr = true, backupNeedsUpdate = true))
-        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = true, restoredIsDispatcharr = true, backupNeedsUpdate = false))
-        assertEquals(listOf(Step.DriveRestore, Step.Main), WelcomeSyncChain.plan(true, false, false, true, backupNeedsUpdate = true))
+    @Test fun updateOfferedForEveryPlaylistTypeAfterADriveRestore() {
+        assertTrue(WelcomeSyncChain.showBackupUpdate(drive = true, backupNeedsUpdate = true))
+        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = false, backupNeedsUpdate = true))
+        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = true, backupNeedsUpdate = false))
+        assertEquals(
+            listOf(Step.DriveRestore, Step.BackupUpdate, Step.Main),
+            WelcomeSyncChain.plan(true, false, false, true, backupNeedsUpdate = true),
+        )
     }
 }

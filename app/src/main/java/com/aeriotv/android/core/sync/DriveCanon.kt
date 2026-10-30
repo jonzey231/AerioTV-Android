@@ -236,26 +236,14 @@ object DriveCanon {
     const val K_ORDER = "groupOrder.v1"
     const val K_SORT_MODE = "groupSortMode.v1"
 
-    /**
-     * True when a backup predates the canonical-id format: some shared file
-     * has rows that need a Dispatcharr id and not one of them carries it.
-     * Series rows and reminders need none. Null files are absent.
-     */
-    fun backupPredatesCanonicalIds(
-        favorites: FavoritesSnapshot?,
-        progress: WatchProgressSnapshot?,
-        watchlist: WatchlistSnapshot?,
-        preferences: PreferencesSnapshot?,
-    ): Boolean {
-        fun <T> old(rows: List<T>, id: (T) -> Int?) = rows.isNotEmpty() && rows.all { id(it) == null }
-        return (favorites != null && old(favorites.entries) { it.dispatcharrChannelId }) ||
-            (progress != null && old(progressCandidates(progress)) { it.dispatcharrVodId }) ||
-            (watchlist != null && old(
-                watchlist.entries.filter { it.vodType != "series" }.map { it.dispatcharrVodId } +
-                    watchlist.hidden.filter { it.vodType != "series" }.map { it.dispatcharrVodId },
-            ) { it }) ||
-            (preferences != null && referencedChannels(preferences).isNotEmpty() && preferences.dispatcharrChannelIds.isNullOrEmpty())
-    }
+    /** The backup format this build writes on every Drive file (SyncEnvelope.format). */
+    const val FORMAT = 2
+
+    /** A file is old format when its envelope format is missing or below [FORMAT]. */
+    fun isOldFormat(format: Int?): Boolean = format == null || format < FORMAT
+
+    /** Old format backup: any shared file present (non-null entry) is old format. Absent files do not count. */
+    fun backupOutdated(fileFormats: List<Int?>): Boolean = fileFormats.any(::isOldFormat)
 
     /** The single migration log line: counts only, never ids. */
     fun migrationLine(category: String, rows: Int) = "[DRIVE] id migration: $category $rows rows enriched"

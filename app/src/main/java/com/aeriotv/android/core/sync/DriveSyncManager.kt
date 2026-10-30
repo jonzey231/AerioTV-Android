@@ -508,131 +508,150 @@ class DriveSyncManager @Inject constructor(
 
     private val idMigration = context.getSharedPreferences("aerio_drive_ids", Context.MODE_PRIVATE)
 
+    /** The shared files the backup update rewrites. */
+    private val updateFiles = listOf(
+        SyncCategory.Favorites, SyncCategory.WatchProgress, SyncCategory.Reminders,
+        SyncCategory.Watchlist, SyncCategory.Preferences,
+    )
+
     /**
-     * One-time id migration (Rule 4): rewrite each shared Drive snapshot once
-     * with the Dispatcharr ids filled in, keeping its envelope and every
-     * other field, so the setup prompt can prove both sides equal. Gated per
-     * playlist (the base user) and category by a persisted flag. The VOD
-     * categories wait, flag unset, while the movie catalog is not built and
-     * a movie row does not resolve (DsyncReadiness), and run again on a
-     * later sync. Logs counts only.
+     * Backup update (Rule 4), only after the user's "Update backup": rewrite
+     * each shared Drive file once at format 2, keeping its envelope time and
+     * every other field. With an active Dispatcharr playlist the Dispatcharr
+     * ids are filled where they resolve; the channel categories wait for the
+     * channel list and the VOD categories for the movie catalog
+     * (DsyncReadiness), flag unset, and finish on a later sync. Any other
+     * playlist type rewrites at once with the ids left null. Gated per base
+     * user (active playlist) and category by a saved flag. Logs counts only.
      */
     suspend fun migrateCanonicalIds(token: String, enabled: Set<SyncCategory>) =
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty() || sharedHeld()) return@withContext
-            val row = idLookup.activeDispatcharr() ?: return@withContext
-            // Never without the user's "Update backup" (BackupUpdateOffer).
-            if (!idUpdateAccepted(row.id)) return@withContext
-            val cats = listOf(SyncCategory.Favorites, SyncCategory.WatchProgress, SyncCategory.Watchlist, SyncCategory.Preferences)
-                .filter { it in enabled && !idMigration.getBoolean(migrationKey(row.id, it), false) }
+            val key = idLookup.activeKey()
+            if (!idUpdateAccepted(key)) return@withContext
+            val row = idLookup.activeDispatcharr()
+            val cats = updateFiles.filter { it in enabled && !idMigration.getBoolean(migrationKey(key, it), false) }
             if (cats.isEmpty()) return@withContext
             val files = driveClient.listAll(token).associate { (id, name) -> name to id }
             cats.forEach { c ->
-                runCatching { if (migrateCategory(token, row, c, files[c.fileName])) idMigration.edit().putBoolean(migrationKey(row.id, c), true).commit() }
+                runCatching { if (migrateCategory(token, row, c, files[c.fileName])) idMigration.edit().putBoolean(migrationKey(key, c), true).commit() }
                     .onFailure { Log.w(TAG, "[DRIVE] id migration ${c.name} failed: ${it.javaClass.simpleName}") }
             }
         }
 
-    fun idUpdateAccepted(playlistId: String): Boolean = idMigration.getBoolean("idmig_ok|$playlistId|default", false)
+    private fun migrationKey(key: String, c: SyncCategory) = "idmig|$key|default|${c.storageSuffix}"
 
-    /**
-     * Whether the Drive backup predates the canonical-id format
-     * (DriveCanon.backupPredatesCanonicalIds). Read only; false when Drive
-     * cannot be read.
-     */
-    suspend fun backupPredatesCanonicalIds(token: String): Boolean = runCatching {
+    fun idUpdateAccepted(key: String): Boolean = idMigration.getBoolean("idmig_ok|$key|default", false)
+
+    /** Whether any shared Drive file is old format (DriveCanon.backupOutdated). Read only; false when Drive cannot be read. */
+    suspend fun backupOutdated(token: String): Boolean = runCatching {
         val files = driveClient.listAll(token).associate { (id, name) -> name to id }
-        suspend fun body(c: SyncCategory): String? = files[c.fileName]?.let { driveClient.download(token, it) }
-        DriveCanon.backupPredatesCanonicalIds(
-            body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) },
-            body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it) },
-            body(SyncCategory.Watchlist)?.let { json.decodeFromString<WatchlistSnapshot>(it) },
-            body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) },
-        )
+        val formats = updateFiles.mapNotNull { c ->
+            val id = files[c.fileName] ?: return@mapNotNull null
+            val body = driveClient.download(token, id) ?: return@mapNotNull null
+            listOf(envelopeFormat(body))
+        }.flatten()
+        DriveCanon.backupOutdated(formats)
     }.getOrDefault(false)
 
-    /** The user chose "Update backup": remember it (deferred VOD categories finish on later syncs) and run now. */
-    suspend fun acceptIdUpdate(playlistId: String) {
-        idMigration.edit().putBoolean("idmig_ok|$playlistId|default", true).commit()
-        Log.i(TAG, "[DRIVE] id migration accepted")
+    @kotlinx.serialization.Serializable
+    private data class EnvelopeOnly(val envelope: SyncEnvelope)
+
+    private fun envelopeFormat(body: String): Int? = runCatching { json.decodeFromString<EnvelopeOnly>(body).envelope.format }.getOrNull()
+
+    /** The user chose "Update backup": remember it (waiting categories finish on later syncs) and run now. */
+    suspend fun acceptIdUpdate(key: String) {
+        idMigration.edit().putBoolean("idmig_ok|$key|default", true).commit()
+        Log.i(TAG, "[DRIVE] backup update accepted")
         val token = ensureSignedIn() ?: return
         val enabled = SyncCategory.entries.filter { appPreferences.syncCategoryEnabled(it).first() }.toSet()
         runCatching { migrateCanonicalIds(token, enabled) }
     }
 
-    /** Offer check for the active Dispatcharr playlist: its id, or null when nothing to offer. */
+    /** Offer check: the base user key (active playlist id) when the backup is old format and not yet accepted, else null. */
     suspend fun idUpdateCandidate(): String? {
-        val row = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { idLookup.activeDispatcharr() } ?: return null
-        if (idUpdateAccepted(row.id)) return null
+        val key = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { idLookup.activeKey() }
+        if (idUpdateAccepted(key)) return null
         val token = ensureSignedIn() ?: return null
-        return row.id.takeIf { backupPredatesCanonicalIds(token) }
+        return key.takeIf { backupOutdated(token) }
     }
 
-    private fun migrationKey(playlistId: String, c: SyncCategory) = "idmig|$playlistId|default|${c.storageSuffix}"
-
-    /** True when done for good (written, nothing to fill, or no file); false to try again later. */
+    /** True when done for good (written, already current, or no file); false to try again later. */
     private suspend fun migrateCategory(
         token: String,
-        row: PlaylistEntity,
+        row: PlaylistEntity?,
         c: SyncCategory,
         fileId: String?,
     ): Boolean {
         fileId ?: return true
         val body = driveClient.download(token, fileId) ?: return false
-        suspend fun ready() = idLookup.moviesReady(row)
-        val payload: String? = when (c) {
+        val wasOld = DriveCanon.isOldFormat(envelopeFormat(body))
+        fun SyncEnvelope.v2() = copy(format = DriveCanon.FORMAT)
+        val (payload: String, filled: Int) = when (c) {
             SyncCategory.Favorites -> {
                 val f = json.decodeFromString<FavoritesSnapshot>(body)
-                val ch = idLookup.channels(row)
+                val ch = row?.let { idLookup.channels(it) }.orEmpty()
                 // Channel ids wait for the channel list, as Dispatcharr Sync does.
-                if (ch.isEmpty() && f.entries.isNotEmpty()) return false
+                if (row != null && ch.isEmpty() && f.entries.isNotEmpty()) return false
                 val (s, n) = DriveCanon.enrichFavorites(f, DriveCanon.Ids(channels = ch))
-                Log.i(TAG, DriveCanon.migrationLine("favorites", n))
-                if (n > 0) json.encodeToString(s) else null
+                if (row != null) Log.i(TAG, DriveCanon.migrationLine("favorites", n))
+                json.encodeToString(s.copy(envelope = s.envelope.v2())) to n
             }
             SyncCategory.WatchProgress -> {
                 val w = json.decodeFromString<WatchProgressSnapshot>(body)
-                val (movies, episodes) = DriveCanon.progressNeeds(w)
-                val ids = DriveCanon.Ids(movies = idLookup.movies(row, movies), episodes = idLookup.episodes(row, episodes, network = true))
-                val unresolved = movies.count { it !in ids.movies }
-                if (com.aeriotv.android.core.sync.dsync.DsyncReadiness.decide(
-                        com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, ready(), unresolved,
-                    ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
-                ) {
-                    Log.i(TAG, "[DRIVE] id migration: progress waiting for the VOD catalog")
-                    return false
+                var ids = DriveCanon.Ids()
+                if (row != null) {
+                    val (movies, episodes) = DriveCanon.progressNeeds(w)
+                    ids = DriveCanon.Ids(movies = idLookup.movies(row, movies), episodes = idLookup.episodes(row, episodes, network = true))
+                    if (com.aeriotv.android.core.sync.dsync.DsyncReadiness.decide(
+                            com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, idLookup.moviesReady(row), movies.count { it !in ids.movies },
+                        ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
+                    ) {
+                        Log.i(TAG, "[DRIVE] id migration: progress waiting for the VOD catalog")
+                        return false
+                    }
                 }
                 val (s, n) = DriveCanon.enrichProgress(w, ids)
-                Log.i(TAG, DriveCanon.migrationLine("progress", n))
-                if (n > 0) json.encodeToString(s) else null
+                if (row != null) Log.i(TAG, DriveCanon.migrationLine("progress", n))
+                json.encodeToString(s.copy(envelope = s.envelope.v2())) to n
+            }
+            SyncCategory.Reminders -> {
+                val r = json.decodeFromString<RemindersSnapshot>(body)
+                json.encodeToString(r.copy(envelope = r.envelope.v2())) to 0
             }
             SyncCategory.Watchlist -> {
                 val w = json.decodeFromString<WatchlistSnapshot>(body)
-                val needs = DriveCanon.watchlistMovieNeeds(w)
-                val ids = DriveCanon.Ids(movies = idLookup.movies(row, needs))
-                if (com.aeriotv.android.core.sync.dsync.DsyncReadiness.decide(
-                        com.aeriotv.android.core.sync.dsync.DsyncKey.Watchlist, ready(), needs.count { it !in ids.movies },
-                    ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
-                ) {
-                    Log.i(TAG, "[DRIVE] id migration: watchlist waiting for the VOD catalog")
-                    return false
+                var ids = DriveCanon.Ids()
+                if (row != null) {
+                    val needs = DriveCanon.watchlistMovieNeeds(w)
+                    ids = DriveCanon.Ids(movies = idLookup.movies(row, needs))
+                    if (com.aeriotv.android.core.sync.dsync.DsyncReadiness.decide(
+                            com.aeriotv.android.core.sync.dsync.DsyncKey.Watchlist, idLookup.moviesReady(row), needs.count { it !in ids.movies },
+                        ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
+                    ) {
+                        Log.i(TAG, "[DRIVE] id migration: watchlist waiting for the VOD catalog")
+                        return false
+                    }
                 }
                 val (s, nw, nh) = DriveCanon.enrichWatchlist(w, ids)
-                Log.i(TAG, DriveCanon.migrationLine("watchlist", nw))
-                Log.i(TAG, DriveCanon.migrationLine("hiddenTitles", nh))
-                if (nw + nh > 0) json.encodeToString(s) else null
+                if (row != null) {
+                    Log.i(TAG, DriveCanon.migrationLine("watchlist", nw))
+                    Log.i(TAG, DriveCanon.migrationLine("hiddenTitles", nh))
+                }
+                json.encodeToString(s.copy(envelope = s.envelope.v2())) to (nw + nh)
             }
             SyncCategory.Preferences -> {
                 val p = json.decodeFromString<PreferencesSnapshot>(body)
-                val ch = idLookup.channels(row)
-                if (ch.isEmpty() && DriveCanon.referencedChannels(p).isNotEmpty()) return false
+                val ch = row?.let { idLookup.channels(it) }.orEmpty()
+                if (row != null && ch.isEmpty() && DriveCanon.referencedChannels(p).isNotEmpty()) return false
                 val (s, n) = DriveCanon.enrichPreferences(p, DriveCanon.Ids(channels = ch))
-                Log.i(TAG, DriveCanon.migrationLine("recents and collections", n))
-                if (n > 0) json.encodeToString(s) else null
+                if (row != null) Log.i(TAG, DriveCanon.migrationLine("recents and collections", n))
+                json.encodeToString(s.copy(envelope = s.envelope.v2())) to n
             }
-            else -> null
+            else -> return true
         }
-        return payload == null || driveClient.upload(token, c.fileName, payload).isSuccess
+        if (!wasOld && filled == 0) return true
+        return driveClient.upload(token, c.fileName, payload).isSuccess
     }
 
     // ── Snapshot builders ─────────────────────────────────────────────────
@@ -641,6 +660,7 @@ class DriveSyncManager @Inject constructor(
         lastModified = System.currentTimeMillis(),
         device = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
         syncProviders = pushProviders,
+        format = DriveCanon.FORMAT,
     )
 
     private suspend fun buildPlaylistsSnapshot(): PlaylistsSnapshot {

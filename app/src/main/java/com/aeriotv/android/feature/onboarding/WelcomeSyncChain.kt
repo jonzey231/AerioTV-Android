@@ -11,7 +11,7 @@ object WelcomeSyncChain {
     enum class Step {
         /** Google sign-in, Drive on, restore (tryRestoreAndAdvance). */
         DriveRestore,
-        /** "Your backup needs an update" (BackupUpdateStepScreen): old-format backup, Dispatcharr playlist restored. */
+        /** "Your backup needs an update" (BackupUpdateStepScreen): the restored backup is old format. */
         BackupUpdate,
         /** Connect a Server, Dispatcharr entry, Dispatcharr Sync on after the connect. */
         ConnectServer,
@@ -39,7 +39,7 @@ object WelcomeSyncChain {
         if (!drive && !dispatcharr) return emptyList()
         val steps = mutableListOf<Step>()
         if (drive) steps += Step.DriveRestore
-        if (showBackupUpdate(drive, restoredIsDispatcharr, backupNeedsUpdate)) steps += Step.BackupUpdate
+        if (showBackupUpdate(drive, backupNeedsUpdate)) steps += Step.BackupUpdate
         if (dispatcharr) {
             if (!(drive && restoredIsDispatcharr)) steps += Step.ConnectServer
             steps += Step.DispatcharrSync
@@ -55,9 +55,8 @@ object WelcomeSyncChain {
         return steps
     }
 
-    /** The backup update step runs right after a Drive restore that brought a Dispatcharr playlist and an old-format backup. */
-    fun showBackupUpdate(drive: Boolean, restoredIsDispatcharr: Boolean, backupNeedsUpdate: Boolean): Boolean =
-        drive && restoredIsDispatcharr && backupNeedsUpdate
+    /** The backup update step runs right after a Drive restore of an old-format backup, for every playlist type. */
+    fun showBackupUpdate(drive: Boolean, backupNeedsUpdate: Boolean): Boolean = drive && backupNeedsUpdate
 
     /** "Also back up to Google Drive?" runs after the Dispatcharr Sync step only while Drive is off and available. */
     fun showDriveOffer(driveOn: Boolean, driveAvailable: Boolean): Boolean = !driveOn && driveAvailable

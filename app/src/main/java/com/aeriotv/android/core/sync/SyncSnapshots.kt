@@ -18,6 +18,12 @@ data class SyncEnvelope(
     val device: String,
     /** Owner's sync providers (SyncProviders.kt). Absent in older files; older readers ignore it. */
     val syncProviders: SyncProvidersRecord? = null,
+    /**
+     * Backup format (docs/DispatcharrSyncSchema.md 10a, Rule 4). 2 = written by
+     * a build that fills the canonical Dispatcharr ids where they resolve.
+     * Null in older files, which AerioTV offers to update. [version] stays 1.
+     */
+    val format: Int? = null,
 )
 
 @Serializable

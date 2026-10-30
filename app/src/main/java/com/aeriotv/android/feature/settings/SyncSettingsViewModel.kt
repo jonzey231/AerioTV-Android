@@ -52,7 +52,7 @@ class SyncSettingsViewModel @Inject constructor(
         val pid = runCatching { sync.idUpdateCandidate() }.getOrNull() ?: return null
         return pid.takeIf {
             it == playlistId && com.aeriotv.android.core.sync.BackupUpdateOffer.shouldOffer(
-                backupPredatesIds = true, restoredHasDispatcharr = true, accepted = false, playlistId = it,
+                backupOutdated = true, accepted = false, playlistId = it,
             )
         }
     }
@@ -63,7 +63,7 @@ class SyncSettingsViewModel @Inject constructor(
         if (!driveOn) return null
         val pid = runCatching { sync.idUpdateCandidate() }.getOrNull() ?: return null
         val offer = com.aeriotv.android.core.sync.BackupUpdateOffer.shouldOfferInSettings(
-            driveOn = true, backupPredatesIds = true, restoredHasDispatcharr = true, accepted = false, playlistId = pid,
+            driveOn = true, backupOutdated = true, accepted = false, playlistId = pid,
         )
         if (!offer) return null
         com.aeriotv.android.core.sync.BackupUpdateOffer.markSettingsShown(pid)

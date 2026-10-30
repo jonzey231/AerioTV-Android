@@ -614,6 +614,9 @@ fun AerioTVNavHost(
                 // on TV. BACK is swallowed inside the progress screen.
                 var restoreOverlayVisible by remember { mutableStateOf(false) }
                 var restoreActivatedPlaylist by remember { mutableStateOf(false) }
+                // "Your backup needs an update" after a restore that goes straight to MAIN.
+                var welcomeBackupPid by remember { mutableStateOf<String?>(null) }
+                var welcomeBackupBusy by remember { mutableStateOf(false) }
                 val restoreSteps by syncVm.restoreSteps.collectAsStateWithLifecycle()
                 // Shared restore closure: pulls all categories from Drive,
                 // then asks PlaylistViewModel to re-bootstrap from whatever
@@ -737,6 +740,13 @@ fun AerioTVNavHost(
                             }
                             return@LaunchedEffect
                         }
+                        if (restoreActivatedPlaylist && restored != null) {
+                            val bpid = runCatching { syncVm.backupUpdateFor(restored.id) }.getOrNull()
+                            if (bpid != null) {
+                                welcomeBackupPid = bpid
+                                return@LaunchedEffect
+                            }
+                        }
                         navController.navigate(Routes.MAIN) {
                             popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
                         }
@@ -840,7 +850,30 @@ fun AerioTVNavHost(
                     }
                 }
 
-                if (restoreOverlayVisible) {
+                val welcomeBpid = welcomeBackupPid
+                val afterWelcomeBackup: () -> Unit = {
+                    welcomeBackupPid = null
+                    welcomeBackupBusy = false
+                    navController.navigate(Routes.MAIN) {
+                        popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
+                    }
+                }
+                if (welcomeBpid != null) {
+                    com.aeriotv.android.feature.onboarding.BackupUpdateStepScreen(
+                        busy = welcomeBackupBusy,
+                        onUpdate = {
+                            welcomeBackupBusy = true
+                            scope.launch {
+                                runCatching { syncVm.acceptBackupUpdate(welcomeBpid) }
+                                afterWelcomeBackup()
+                            }
+                        },
+                        onNotNow = {
+                            syncVm.declineBackupUpdate(welcomeBpid)
+                            afterWelcomeBackup()
+                        },
+                    )
+                } else if (restoreOverlayVisible) {
                     com.aeriotv.android.feature.onboarding.OnboardingSyncProgressScreen(
                         steps = restoreSteps,
                         channelsState = when {

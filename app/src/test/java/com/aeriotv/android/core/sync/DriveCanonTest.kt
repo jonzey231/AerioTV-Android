@@ -171,17 +171,18 @@ class DriveCanonTest {
     }
 
     @Test fun detectsOldFormatBackup() {
-        val old = FavoritesSnapshot(env, listOf(fav("a"), fav("b")))
-        val migrated = FavoritesSnapshot(env, listOf(fav("a", 1), fav("b")))
-        assertTrue(DriveCanon.backupPredatesCanonicalIds(old, null, null, null))
-        assertTrue(!DriveCanon.backupPredatesCanonicalIds(migrated, null, null, null))
-        assertTrue(!DriveCanon.backupPredatesCanonicalIds(FavoritesSnapshot(env, emptyList()), null, null, null))
-        // Series-only watchlist and recordings need no id.
-        val series = WatchlistSnapshot(env, listOf(WatchlistSnapshotEntry("42", "series", "B", addedAt = 1)))
-        val dvr = WatchProgressSnapshot(env, listOf(prog("dvr-1", "recording")))
-        assertTrue(!DriveCanon.backupPredatesCanonicalIds(null, dvr, series, null))
-        val prefs = PreferencesSnapshot(env, mapOf(DriveCanon.K_RECENTS to "a"))
-        assertTrue(DriveCanon.backupPredatesCanonicalIds(null, null, null, prefs))
-        assertTrue(!DriveCanon.backupPredatesCanonicalIds(null, null, null, prefs.copy(dispatcharrChannelIds = mapOf("a" to 1))))
+        assertTrue(DriveCanon.backupOutdated(listOf(2, null)))
+        assertTrue(DriveCanon.backupOutdated(listOf(1)))
+        assertTrue(!DriveCanon.backupOutdated(listOf(2, 2)))
+        assertTrue(!DriveCanon.backupOutdated(emptyList()))
+        assertTrue(!DriveCanon.backupOutdated(listOf(3)))
+    }
+
+    @Test fun envelopeFormatDecodesAndDefaults() {
+        val old = json.decodeFromString<FavoritesSnapshot>("""{"envelope":{"lastModified":1,"device":"d"},"entries":[]}""")
+        assertNull(old.envelope.format)
+        assertEquals(1, old.envelope.version)
+        val v2 = json.decodeFromString<FavoritesSnapshot>(json.encodeToString(old.copy(envelope = old.envelope.copy(format = DriveCanon.FORMAT))))
+        assertEquals(2, v2.envelope.format)
     }
 }

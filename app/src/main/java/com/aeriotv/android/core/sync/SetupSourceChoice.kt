@@ -79,9 +79,8 @@ object SetupSourceChoice {
     // ---- "Your backup needs an update" (Drive canonical-id migration offer) ----
 
     const val UPDATE_TITLE = "Your backup needs an update"
-    const val UPDATE_BODY = "AerioTV backups changed format. Updating lets this device compare your Google Drive backup " +
-        "with Dispatcharr Sync so you are only asked about real differences. This takes a moment and does not change " +
-        "your favorites, progress, or settings."
+    const val UPDATE_BODY = "AerioTV backups changed format. Updating keeps your backup working with the newest " +
+        "version of AerioTV on every device. This takes a moment and does not change your favorites, progress, or settings."
     const val UPDATE_ACCEPT = "Update backup"
     const val UPDATE_NOT_NOW = "Not now"
 
@@ -140,19 +139,17 @@ object BackupUpdateOffer {
     private val declined = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val settingsShown = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    /** Restore found an old-format backup and the restored playlists include a Dispatcharr playlist. */
-    fun shouldOffer(backupPredatesIds: Boolean, restoredHasDispatcharr: Boolean, accepted: Boolean, playlistId: String): Boolean =
-        backupPredatesIds && restoredHasDispatcharr && !accepted && playlistId !in declined
+    /** A Drive restore found an old-format backup (any playlist type). */
+    fun shouldOffer(backupOutdated: Boolean, accepted: Boolean, playlistId: String): Boolean =
+        backupOutdated && !accepted && playlistId !in declined
 
     /** Settings (Drive sync on): the same rule, once per app session. */
     fun shouldOfferInSettings(
         driveOn: Boolean,
-        backupPredatesIds: Boolean,
-        restoredHasDispatcharr: Boolean,
+        backupOutdated: Boolean,
         accepted: Boolean,
         playlistId: String,
-    ): Boolean = driveOn && playlistId !in settingsShown &&
-        shouldOffer(backupPredatesIds, restoredHasDispatcharr, accepted, playlistId)
+    ): Boolean = driveOn && playlistId !in settingsShown && shouldOffer(backupOutdated, accepted, playlistId)
 
     fun markSettingsShown(playlistId: String) { settingsShown.add(playlistId) }
     fun decline(playlistId: String) { declined.add(playlistId) }

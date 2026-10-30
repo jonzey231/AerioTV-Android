@@ -135,22 +135,25 @@ class SetupSourceChoiceTest {
         assertEquals("Your backup needs an update", SetupSourceChoice.UPDATE_TITLE)
         assertEquals("Update backup", SetupSourceChoice.UPDATE_ACCEPT)
         assertEquals("Not now", SetupSourceChoice.UPDATE_NOT_NOW)
-        assertTrue(SetupSourceChoice.UPDATE_BODY.startsWith("AerioTV backups changed format."))
-        assertTrue(SetupSourceChoice.UPDATE_BODY.endsWith("does not change your favorites, progress, or settings."))
+        assertEquals(
+            "AerioTV backups changed format. Updating keeps your backup working with the newest version of AerioTV " +
+                "on every device. This takes a moment and does not change your favorites, progress, or settings.",
+            SetupSourceChoice.UPDATE_BODY,
+        )
+        assertTrue(!SetupSourceChoice.UPDATE_BODY.contains("Dispatcharr"))
     }
 
     @Test fun backupUpdateOfferDeclineAndSettingsOncePerSession() {
         BackupUpdateOffer.resetForTest()
-        assertTrue(BackupUpdateOffer.shouldOffer(true, true, accepted = false, playlistId = "p"))
-        assertTrue(!BackupUpdateOffer.shouldOffer(false, true, false, "p"))
-        assertTrue(!BackupUpdateOffer.shouldOffer(true, false, false, "p"))
-        assertTrue(!BackupUpdateOffer.shouldOffer(true, true, accepted = true, playlistId = "p"))
-        assertTrue(!BackupUpdateOffer.shouldOfferInSettings(driveOn = false, true, true, false, "p"))
-        assertTrue(BackupUpdateOffer.shouldOfferInSettings(true, true, true, false, "p"))
+        assertTrue(BackupUpdateOffer.shouldOffer(true, accepted = false, playlistId = "p"))
+        assertTrue(!BackupUpdateOffer.shouldOffer(false, false, "p"))
+        assertTrue(!BackupUpdateOffer.shouldOffer(true, accepted = true, playlistId = "p"))
+        assertTrue(!BackupUpdateOffer.shouldOfferInSettings(driveOn = false, true, false, "p"))
+        assertTrue(BackupUpdateOffer.shouldOfferInSettings(true, true, false, "p"))
         BackupUpdateOffer.markSettingsShown("p")
-        assertTrue(!BackupUpdateOffer.shouldOfferInSettings(true, true, true, false, "p"))
+        assertTrue(!BackupUpdateOffer.shouldOfferInSettings(true, true, false, "p"))
         BackupUpdateOffer.decline("q")
-        assertTrue(!BackupUpdateOffer.shouldOffer(true, true, false, "q"))
+        assertTrue(!BackupUpdateOffer.shouldOffer(true, false, "q"))
         BackupUpdateOffer.resetForTest()
     }
 
