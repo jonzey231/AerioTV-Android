@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -530,7 +532,7 @@ class DriveSyncManager @Inject constructor(
             val key = idLookup.activeKey()
             if (!idUpdateAccepted(key)) return@withContext
             val row = idLookup.activeDispatcharr()
-            val cats = updateFiles.filter { it in enabled && !idMigration.getBoolean(migrationKey(key, it), false) }
+            val cats = DriveCanon.pendingCategories(true, updateFiles, enabled) { idMigration.getBoolean(migrationKey(key, it), false) }
             if (cats.isEmpty()) return@withContext
             val files = driveClient.listAll(token).associate { (id, name) -> name to id }
             cats.forEach { c ->
@@ -538,6 +540,47 @@ class DriveSyncManager @Inject constructor(
                     .onFailure { Log.w(TAG, "[DRIVE] id migration ${c.name} failed: ${it.javaClass.simpleName}") }
             }
         }
+
+    private val retryScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    @Volatile private var retryStarted = false
+
+    /** Categories still waiting after "Update backup" (none when not accepted). */
+    private suspend fun pendingIdUpdate(): List<SyncCategory> =
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val key = idLookup.activeKey()
+            val enabled = SyncCategory.entries.filter { appPreferences.syncCategoryEnabled(it).first() }.toSet()
+            DriveCanon.pendingCategories(idUpdateAccepted(key), updateFiles, enabled) { idMigration.getBoolean(migrationKey(key, it), false) }
+        }
+
+    private suspend fun retryIdUpdate(reason: String) {
+        if (!appPreferences.syncMasterEnabled.first()) return
+        if (pendingIdUpdate().isEmpty()) return
+        val row = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { idLookup.activeDispatcharr() }
+        // Catalog page ticks: only once the movie catalog is built (launch always tries).
+        if (reason == "catalog" && row != null && !idLookup.moviesReady(row)) return
+        val token = ensureSignedIn() ?: return
+        Log.i(TAG, "[DRIVE] id migration retry ($reason)")
+        val enabled = SyncCategory.entries.filter { appPreferences.syncCategoryEnabled(it).first() }.toSet()
+        runCatching { migrateCanonicalIds(token, enabled) }
+    }
+
+    /**
+     * Retries a deferred backup update without waiting for the 6-hour worker:
+     * once at app launch, and on the VOD catalog page signal Dispatcharr
+     * Sync uses (VodIdSink.pageWritten), debounced by
+     * DsyncReadiness.PAGE_RECHECK_MS so it runs seconds after the sweep ends.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    fun startIdUpdateRetry() {
+        if (retryStarted) return
+        retryStarted = true
+        retryScope.launch { runCatching { retryIdUpdate("launch") } }
+        retryScope.launch {
+            com.aeriotv.android.core.sync.dsync.VodIdSink.pageWritten
+                .debounce(com.aeriotv.android.core.sync.dsync.DsyncReadiness.PAGE_RECHECK_MS)
+                .collect { runCatching { retryIdUpdate("catalog") } }
+        }
+    }
 
     private fun migrationKey(key: String, c: SyncCategory) = "idmig|$key|default|${c.storageSuffix}"
 

@@ -236,6 +236,14 @@ object DriveCanon {
     const val K_ORDER = "groupOrder.v1"
     const val K_SORT_MODE = "groupSortMode.v1"
 
+    /**
+     * Categories the accepted backup update still has to rewrite: enabled,
+     * among [all], and without a done flag. Empty when not accepted, so a
+     * retry never runs without "Update backup".
+     */
+    fun <C> pendingCategories(accepted: Boolean, all: List<C>, enabled: Set<C>, done: (C) -> Boolean): List<C> =
+        if (!accepted) emptyList() else all.filter { it in enabled && !done(it) }
+
     /** The backup format this build writes on every Drive file (SyncEnvelope.format). */
     const val FORMAT = 2
 

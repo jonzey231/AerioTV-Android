@@ -157,6 +157,12 @@ class SetupSourceChoiceTest {
         BackupUpdateOffer.resetForTest()
     }
 
+    @Test fun decisionNamesArePlain() {
+        assertEquals("UseDrive", SetupSourceChoice.decisionName(Decision.UseDrive))
+        assertEquals("UseDispatcharr", SetupSourceChoice.decisionName(Decision.UseDispatcharr))
+        assertEquals("Ask", SetupSourceChoice.decisionName(Decision.Ask(Summary.EMPTY, Summary.EMPTY)))
+    }
+
     @Test fun copyHasNoEmDash() {
         listOf(SetupSourceChoice.TITLE, SetupSourceChoice.FOOTER, SetupSourceChoice.UPDATE_TITLE, SetupSourceChoice.UPDATE_BODY).forEach { assertTrue(!it.contains('\u2014')) }
     }

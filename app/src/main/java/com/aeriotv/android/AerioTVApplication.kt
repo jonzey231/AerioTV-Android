@@ -70,6 +70,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var profileManager: com.aeriotv.android.core.profiles.ProfileManager
     @Inject lateinit var dispatcharrSync: com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
     @Inject lateinit var aerioDatabase: AerioDatabase
+    @Inject lateinit var driveSync: com.aeriotv.android.core.sync.DriveSyncManager
     @Inject lateinit var timeshiftStore: com.aeriotv.android.core.timeshift.TimeshiftBufferStore
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -148,6 +149,8 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         profileManager.start()
         // Dispatcharr Sync: idle unless Settings > Sync uses Dispatcharr.
         dispatcharrSync.start()
+        // Drive backup update: finish categories that waited for the VOD catalog.
+        driveSync.startIdUpdateRetry()
         // Crash capture FIRST, and independent of the Debug Logging toggle: a
         // user whose app dies seconds after launch cannot turn logging on in
         // time, so the report has to be collected without being asked for.

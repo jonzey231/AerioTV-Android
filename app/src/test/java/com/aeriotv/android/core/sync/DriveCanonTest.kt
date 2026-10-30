@@ -185,4 +185,14 @@ class DriveCanonTest {
         val v2 = json.decodeFromString<FavoritesSnapshot>(json.encodeToString(old.copy(envelope = old.envelope.copy(format = DriveCanon.FORMAT))))
         assertEquals(2, v2.envelope.format)
     }
+
+    @Test fun pendingCategoriesAfterReadiness() {
+        val all = listOf("favorites", "progress", "watchlist")
+        val done = mutableSetOf("favorites")
+        assertEquals(emptyList<String>(), DriveCanon.pendingCategories(false, all, all.toSet()) { it in done })
+        assertEquals(listOf("progress", "watchlist"), DriveCanon.pendingCategories(true, all, all.toSet()) { it in done })
+        assertEquals(listOf("progress"), DriveCanon.pendingCategories(true, all, setOf("favorites", "progress")) { it in done })
+        done += listOf("progress", "watchlist")
+        assertEquals(emptyList<String>(), DriveCanon.pendingCategories(true, all, all.toSet()) { it in done })
+    }
 }

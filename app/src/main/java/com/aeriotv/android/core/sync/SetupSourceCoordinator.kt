@@ -52,7 +52,7 @@ class SetupSourceCoordinator @Inject constructor(
         val d = drive.readSharedSummary(token) ?: return null
         val x = dsync.get().serverSummary(pid) ?: return null
         val decision = SetupSourceChoice.decide(d, x)
-        Log.i(TAG, "[SYNC] setup source drive=${d.categories.values.sumOf { it.rows }} rows dsync=${x.categories.values.sumOf { it.rows }} rows decision=${decision.javaClass.simpleName}")
+        Log.i(TAG, "[SYNC] setup source drive=${d.categories.values.sumOf { it.rows }} rows dsync=${x.categories.values.sumOf { it.rows }} rows decision=${SetupSourceChoice.decisionName(decision)}")
         return Probe(pid, d, x, decision)
     }
 

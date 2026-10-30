@@ -62,6 +62,13 @@ object SetupSourceChoice {
                 (xr == yr && x?.fingerprint != null && x.fingerprint == y?.fingerprint)
         }
 
+    /** Plain name for logs (class names are renamed in release builds). */
+    fun decisionName(d: Decision): String = when (d) {
+        Decision.UseDrive -> "UseDrive"
+        Decision.UseDispatcharr -> "UseDispatcharr"
+        is Decision.Ask -> "Ask"
+    }
+
     /** The card selected when the prompt opens: the more recently updated side (ties: Dispatcharr). */
     fun defaultSelection(drive: Summary, dsync: Summary): Source =
         if (drive.updatedAt > dsync.updatedAt) Source.Drive else Source.Dispatcharr
