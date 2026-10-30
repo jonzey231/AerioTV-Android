@@ -31,6 +31,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import com.aeriotv.android.ui.settings.dpadFocusRing
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.heightIn
@@ -64,13 +75,18 @@ import com.aeriotv.android.ui.scale.subtext
 fun WelcomeScreen(
     onConnectServer: () -> Unit,
     onSkip: () -> Unit,
-    /** Google sign-in; turns Drive sync on and restores a backup when one exists. Null hides the row. */
-    onSignInWithGoogle: (() -> Unit)? = null,
+    /** Shows the "Sync with Google Drive" card (sign-in turns Drive on and restores a backup). */
+    showDrive: Boolean = false,
     googleSignInInProgress: Boolean = false,
     /** Signed-in Google account, shown on the sync row. */
     googleSignedInEmail: String? = null,
-    /** "Sync with Dispatcharr": opens the Direct Connect form, sync turns on after the connect. */
-    onSyncViaDispatcharr: (() -> Unit)? = null,
+    /** Shows the "Sync with Dispatcharr" card (Direct Connect form, sync on after the connect). */
+    showDispatcharr: Boolean = false,
+    /**
+     * Continue under the sync cards (Logan, 2026-10-30): the cards only toggle
+     * selection; this runs the chain for the selection (see WelcomeSyncChain).
+     */
+    onContinueSync: (drive: Boolean, dispatcharr: Boolean) -> Unit = { _, _ -> },
     /** TV only: "Set up from your phone" (docs/DeviceSetupHandoff.md). Null hides it. */
     onSetUpFromPhone: (() -> Unit)? = null,
 ) {
@@ -81,10 +97,11 @@ fun WelcomeScreen(
         isTv = isTv,
         onConnectServer = onConnectServer,
         onSkip = onSkip,
-        onSignInWithGoogle = onSignInWithGoogle,
+        showDrive = showDrive,
         googleSignInInProgress = googleSignInInProgress,
         googleSignedInEmail = googleSignedInEmail,
-        onSyncViaDispatcharr = onSyncViaDispatcharr,
+        showDispatcharr = showDispatcharr,
+        onContinueSync = onContinueSync,
         onFastest = if (isTv) onSetUpFromPhone else null,
     )
     // TV: Welcome is the top of onboarding, and Back never closes the app.
@@ -102,10 +119,11 @@ private class WelcomeContent(
     val isTv: Boolean,
     val onConnectServer: () -> Unit,
     val onSkip: () -> Unit,
-    val onSignInWithGoogle: (() -> Unit)?,
+    val showDrive: Boolean,
     val googleSignInInProgress: Boolean,
     val googleSignedInEmail: String?,
-    val onSyncViaDispatcharr: (() -> Unit)?,
+    val showDispatcharr: Boolean,
+    val onContinueSync: (Boolean, Boolean) -> Unit,
     val onFastest: (() -> Unit)?,
 )
 
@@ -137,8 +155,7 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
             Spacer(Modifier.height(12.dp))
             StartHereSection(c)
             Spacer(Modifier.height(6.dp))
-            SyncSection(c, sideBySide = false)
-            SkipPill(line = PHONE_SKIP, onSkip = c.onSkip)
+            SyncSection(c, sideBySide = false, skipLine = PHONE_SKIP)
             if (tall) Spacer(Modifier.weight(0.45f))
         }
     }
@@ -163,8 +180,7 @@ private fun WelcomeTwoColumn(c: WelcomeContent) {
         ) {
             StartHereSection(c)
             Spacer(Modifier.height(6.dp))
-            SyncSection(c, sideBySide = false)
-            SkipPill(line = PHONE_SKIP, onSkip = c.onSkip)
+            SyncSection(c, sideBySide = false, skipLine = PHONE_SKIP)
         }
     }
 }
@@ -188,8 +204,12 @@ private fun WelcomeTv(c: WelcomeContent) {
         ) {
             StartHereSection(c)
             Spacer(Modifier.height(4.dp))
-            SyncSection(c, sideBySide = true)
-            SkipPill(line = "Look around first. You can connect a server any time from Settings.", onSkip = c.onSkip, centered = false)
+            SyncSection(
+                c,
+                sideBySide = true,
+                skipLine = "Look around first. You can connect a server any time from Settings.",
+                skipCentered = false,
+            )
         }
     }
 }
@@ -264,59 +284,80 @@ private fun StartHereSection(c: WelcomeContent) {
     )
 }
 
+/**
+ * Both cards are selectable (checkmark plus accent outline, both may be on);
+ * the D-pad focus ring stays separate from selection. A filled Continue shows
+ * once one is selected and replaces Skip for now; with nothing selected Skip stays.
+ */
 @Composable
-private fun SyncSection(c: WelcomeContent, sideBySide: Boolean) {
-    val google = c.onSignInWithGoogle
-    val dispatcharr = c.onSyncViaDispatcharr
-    if (google == null && dispatcharr == null) return
-    OnboardingSectionLabel("Keep your devices in sync")
-    Text(
-        "Pick one to start. You can turn on the other at any time, and both work together.",
-        style = MaterialTheme.typography.bodySmall.subtext(),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun SyncSection(c: WelcomeContent, sideBySide: Boolean, skipLine: String, skipCentered: Boolean = true) {
+    var driveSelected by rememberSaveable { mutableStateOf(false) }
+    var dispatcharrSelected by rememberSaveable { mutableStateOf(false) }
+    if (c.showDrive || c.showDispatcharr) {
+        OnboardingSectionLabel("Keep your devices in sync")
+        Text(
+            "Pick one or both, then Continue.",
+            style = MaterialTheme.typography.bodySmall.subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    val selectMark: @Composable (Boolean) -> Unit = { on ->
+        if (on) Icon(Icons.Filled.CheckCircle, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+        else Icon(Icons.Outlined.Circle, contentDescription = "Not selected", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     val googleRow: @Composable (Modifier) -> Unit = { m ->
-        if (google != null) OnboardingCard(
+        if (c.showDrive) OnboardingCard(
             icon = Icons.Filled.CloudSync,
             title = "Sync with Google Drive",
             subtitle = c.googleSignedInEmail?.let { "Signed in as $it" }
                 ?: if (c.isTv) "Turns on sync from here on. If you already have a backup, it restores it too."
                 else "Turns on sync. Restores a backup if you have one.",
-            onClick = google,
+            onClick = { driveSelected = !driveSelected },
             enabled = !c.googleSignInInProgress,
             compact = c.isTv,
-            chevron = !sideBySide,
-            trailing = when {
-                c.googleSignInInProgress -> ({ Text("...", style = MaterialTheme.typography.titleMedium) })
-                c.googleSignedInEmail != null -> ({
-                    Icon(Icons.Filled.CheckCircle, contentDescription = "Signed in", tint = MaterialTheme.colorScheme.primary)
-                })
-                else -> null
-            },
-            modifier = m,
+            highlighted = driveSelected,
+            trailing = if (c.googleSignInInProgress) ({ Text("...", style = MaterialTheme.typography.titleMedium) })
+            else ({ selectMark(driveSelected) }),
+            modifier = m.semantics { selected = driveSelected },
         )
     }
     val dispatcharrRow: @Composable (Modifier) -> Unit = { m ->
-        if (dispatcharr != null) OnboardingCard(
+        if (c.showDispatcharr) OnboardingCard(
             icon = Icons.Filled.Key,
             title = "Sync with Dispatcharr",
             subtitle = if (c.isTv) "Connects your server and turns on sync for favorites, progress, and settings."
             else "Connects your server and turns on sync.",
-            onClick = dispatcharr,
+            onClick = { dispatcharrSelected = !dispatcharrSelected },
             compact = c.isTv,
-            chevron = !sideBySide,
-            modifier = m,
+            highlighted = dispatcharrSelected,
+            trailing = { selectMark(dispatcharrSelected) },
+            modifier = m.semantics { selected = dispatcharrSelected },
         )
     }
     if (sideBySide) {
         // Dispatcharr first, Google Drive second (Logan, 2026-10-29).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (dispatcharr != null) dispatcharrRow(Modifier.weight(1f))
-            if (google != null) googleRow(Modifier.weight(1f))
+            if (c.showDispatcharr) dispatcharrRow(Modifier.weight(1f))
+            if (c.showDrive) googleRow(Modifier.weight(1f))
         }
     } else {
         dispatcharrRow(Modifier)
         googleRow(Modifier)
+    }
+    val drive = driveSelected && c.showDrive
+    val dispatcharr = dispatcharrSelected && c.showDispatcharr
+    if (drive || dispatcharr) {
+        Button(
+            onClick = { if (!c.googleSignInInProgress) c.onContinueSync(drive, dispatcharr) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = if (c.isTv) 44.dp else 54.dp)
+                .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+        ) { Text("Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+    } else {
+        SkipPill(line = skipLine, onSkip = c.onSkip, centered = skipCentered)
     }
 }
 

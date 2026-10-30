@@ -53,7 +53,7 @@ class SyncProvidersOfferViewModel @Inject constructor(
     suspend fun evaluate(): Offer? {
         if (ProfileScope.token.value.isNotEmpty()) return null // a sub-profile is active: never offer
         val active = playlistDao.allOnce().firstOrNull { it.isActive } ?: return null
-        val offers = if (store.offerShown(active.id)) emptyList() else {
+        val raw = if (store.offerShown(active.id)) emptyList() else {
             val isD = active.isDispatcharrDirectConnect()
             // The onboarding restore already asked about Dispatcharr Sync for this playlist.
             val offerD = isD && !com.aeriotv.android.feature.onboarding.components.RestoreSyncStep.wasShown(active.id)
@@ -72,6 +72,8 @@ class SyncProvidersOfferViewModel @Inject constructor(
             )
         }
         store.disarm()
+        // Providers the user already selected or answered in onboarding are never re-offered.
+        val offers = WelcomeSyncChain.filterOffers(raw)
         if (offers.isEmpty()) return null
         store.markOfferShown(active.id)
         Log.i(TAG, "[SYNC] offer providers=${offers.map { it.wire }}")

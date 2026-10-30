@@ -599,6 +599,14 @@ fun AerioTVNavHost(
                 var welcomeSyncChooser by remember { mutableStateOf(false) }
                 var welcomeSyncChoicesMade by remember { mutableStateOf(false) }
                 var pendingSignIn by remember { mutableStateOf(false) }
+                // Welcome Continue with Dispatcharr selected alongside Drive: the
+                // Dispatcharr part runs after the Drive restore (WelcomeSyncChain).
+                var chainDispatcharr by remember { mutableStateOf(false) }
+                val goDispatcharr: () -> Unit = {
+                    chainDispatcharr = false
+                    vm.enableDispatcharrSyncAfterConnect = true
+                    navController.navigate(Routes.CHOOSE_TYPE)
+                }
                 // Restore-progress screen state (replaces the old silent
                 // wait between sign-in success and the auto-advance to MAIN).
                 // While visible it REPLACES WelcomeScreen entirely -- an
@@ -664,6 +672,8 @@ fun AerioTVNavHost(
                         restoreOverlayVisible = false
                         syncVm.clearRestoreProgress()
                     }
+                    // Both selected and nothing restored: Dispatcharr part next.
+                    if (!activated && chainDispatcharr) goDispatcharr()
                     val message = when {
                         activated -> "Signed in as ${signedInEmail.orEmpty()}. Restoring your data..."
                         signedInEmail != null -> "Signed in as $signedInEmail. Drive sync is on. No backup yet, so connect a server below."
@@ -701,6 +711,19 @@ fun AerioTVNavHost(
                         // to the same "Turn on Dispatcharr Sync?" step (then
                         // Add Profiles) the connect path shows, never auto-on.
                         val restored = vm.state.value.playlist
+                        val restoredIsD = restored?.isDispatcharrDirectConnect() == true
+                        if (restoreActivatedPlaylist && chainDispatcharr &&
+                            com.aeriotv.android.feature.onboarding.WelcomeSyncChain.connectAfterRestore(dispatcharr = true, restoredIsDispatcharr = restoredIsD)
+                        ) {
+                            // Both selected, restore brought a non-Dispatcharr playlist.
+                            goDispatcharr()
+                            return@LaunchedEffect
+                        }
+                        if (restoreActivatedPlaylist && chainDispatcharr && restoredIsD) {
+                            // Both selected: the sync step turns on without another tap.
+                            vm.enableDispatcharrSyncAfterConnect = true
+                        }
+                        chainDispatcharr = false
                         if (restoreActivatedPlaylist && restored != null &&
                             restored.isDispatcharrDirectConnect() &&
                             !runCatching { syncVm.dispatcharrSyncEnabled.first() }.getOrDefault(false)
@@ -772,6 +795,7 @@ fun AerioTVNavHost(
                         val email = syncVm.signInWithGoogle(activity)
                         if (email == null) {
                             googleSignInInFlight = false
+                            chainDispatcharr = false
                             android.widget.Toast.makeText(
                                 context,
                                 "Sign-in cancelled or failed.",
@@ -791,6 +815,7 @@ fun AerioTVNavHost(
                             }
                             com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Failed, null -> {
                                 googleSignInInFlight = false
+                                chainDispatcharr = false
                                 android.widget.Toast.makeText(
                                     context,
                                     "Drive authorization failed.",
@@ -830,9 +855,31 @@ fun AerioTVNavHost(
                     onSetUpFromPhone = { navController.navigate(Routes.TV_SETUP) },
                     // Same flow as Connect a Server > Dispatcharr (Scan QR code or
                     // Enter details), with Dispatcharr Sync turned on after connect.
-                    onSyncViaDispatcharr = {
-                        vm.enableDispatcharrSyncAfterConnect = true
-                        navController.navigate(Routes.CHOOSE_TYPE)
+                    showDispatcharr = true,
+                    showDrive = true,
+                    // Logan, 2026-10-30: the cards toggle selection; Continue runs
+                    // Drive first (sign-in and restore), then the Dispatcharr part.
+                    onContinueSync = onCont@{ drive, dispatcharr ->
+                        if (googleSignInInFlight) return@onCont
+                        if (drive) com.aeriotv.android.feature.onboarding.WelcomeSyncChain.markAnswered(com.aeriotv.android.core.sync.SyncProviderId.GoogleDrive)
+                        if (dispatcharr) com.aeriotv.android.feature.onboarding.WelcomeSyncChain.markAnswered(com.aeriotv.android.core.sync.SyncProviderId.Dispatcharr)
+                        if (!drive) {
+                            goDispatcharr()
+                            return@onCont
+                        }
+                        chainDispatcharr = dispatcharr
+                        if (!syncBuildConfigured) {
+                            chainDispatcharr = false
+                            welcomeNotConfiguredDialog = true
+                            return@onCont
+                        }
+                        // Logan 2026-08-10: ask what should come in BEFORE any
+                        // of it does (sync-category chooser, then sign-in).
+                        if (!welcomeSyncChoicesMade) {
+                            welcomeSyncChooser = true
+                            return@onCont
+                        }
+                        startGoogleSignIn()
                     },
                     // "Skip for now" is iOS parity. With no playlist saved the channel
                     // list is empty; user can reach Settings -> Change playlist later.
@@ -845,25 +892,6 @@ fun AerioTVNavHost(
                     },
                     googleSignInInProgress = googleSignInInFlight,
                     googleSignedInEmail = welcomeGoogleEmail.takeIf { it.isNotBlank() },
-                    onSignInWithGoogle = {
-                        if (!syncBuildConfigured) {
-                            welcomeNotConfiguredDialog = true
-                            return@WelcomeScreen
-                        }
-                        // Logan 2026-08-10: ask what should come in BEFORE any
-                        // of it does. Apple's onboarding chooser, same idea:
-                        // the per-category toggles already existed in Settings,
-                        // but by the time a user goes looking for them the
-                        // restore has already landed (Discord: Glitzbr, whose
-                        // second Apple TV inherited a remote map meant for a
-                        // different remote). Deferring sign-in behind the sheet
-                        // means a declined category is never fetched at all.
-                        if (!welcomeSyncChoicesMade) {
-                            welcomeSyncChooser = true
-                            return@WelcomeScreen
-                        }
-                        startGoogleSignIn()
-                    },
                 )
 
                 if (welcomeSyncChooser) {
@@ -880,7 +908,7 @@ fun AerioTVNavHost(
                                 pendingSignIn = true
                             }
                         },
-                        onDismiss = { welcomeSyncChooser = false },
+                        onDismiss = { welcomeSyncChooser = false; chainDispatcharr = false },
                     )
                 }
 
@@ -984,6 +1012,27 @@ fun AerioTVNavHost(
                         popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
                     }
                 }
+                // "Also back up to Google Drive?" between the sync step and Add Profiles.
+                var driveOfferFor by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+                var driveOfferBusy by remember { mutableStateOf(false) }
+                val cfgSyncVm: com.aeriotv.android.feature.settings.SyncSettingsViewModel = hiltViewModel(parent)
+                val cfgScope = androidx.compose.runtime.rememberCoroutineScope()
+                val cfgContext = androidx.compose.ui.platform.LocalContext.current
+                val afterDriveOffer: () -> Unit = {
+                    val pid = driveOfferFor
+                    driveOfferFor = null
+                    driveOfferBusy = false
+                    if (childOnly) toMain() else profileStepFor = pid
+                }
+                val driveOfferConsent = androidx.activity.compose.rememberLauncherForActivityResult(
+                    androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
+                ) { result ->
+                    cfgScope.launch {
+                        cfgSyncVm.acceptConsentResultNow(result.data)
+                        if (result.resultCode == android.app.Activity.RESULT_OK) cfgSyncVm.setMasterEnabled(true)
+                        afterDriveOffer()
+                    }
+                }
                 LaunchedEffect(Unit) {
                     // Navigate on a one-shot "configured" EVENT, not on
                     // phase == ChannelsReady: when adding a second playlist the
@@ -1038,6 +1087,34 @@ fun AerioTVNavHost(
                             onDismiss = { setUpTvOpen = false },
                         )
                     }
+                } else if (driveOfferFor != null) {
+                    com.aeriotv.android.feature.onboarding.DriveBackupOfferStepScreen(
+                        busy = driveOfferBusy,
+                        onNotNow = afterDriveOffer,
+                        onSignIn = signIn@{
+                            val activity = cfgContext.findActivity() ?: return@signIn
+                            driveOfferBusy = true
+                            cfgScope.launch {
+                                // Same sign-in as the Welcome Google card; the playlist
+                                // already exists, so turning Drive on is all that is needed.
+                                if (cfgSyncVm.signInWithGoogle(activity) == null) {
+                                    driveOfferBusy = false
+                                    return@launch
+                                }
+                                when (val r = cfgSyncVm.requestDriveScope()) {
+                                    is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Authorized -> {
+                                        cfgSyncVm.setMasterEnabled(true)
+                                        afterDriveOffer()
+                                    }
+                                    is com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.NeedsConsent ->
+                                        driveOfferConsent.launch(
+                                            androidx.activity.result.IntentSenderRequest.Builder(r.intentSender).build(),
+                                        )
+                                    else -> driveOfferBusy = false
+                                }
+                            }
+                        },
+                    )
                 } else if (syncStepFor != null) {
                     com.aeriotv.android.feature.onboarding.DispatcharrSyncStepScreen(
                         autoEnable = vm.enableDispatcharrSyncAfterConnect,
@@ -1048,9 +1125,18 @@ fun AerioTVNavHost(
                             syncStepFor = null
                             qrSignIn = null
                             vm.enableDispatcharrSyncAfterConnect = false
-                            // A Child cannot add profiles; a parent adds theirs
-                            // later from Manage Profiles behind the device PIN.
-                            if (childOnly) toMain() else profileStepFor = pid
+                            cfgScope.launch {
+                                val driveOn = runCatching { cfgSyncVm.masterEnabled.first() }.getOrDefault(true)
+                                val driveAvailable = com.aeriotv.android.core.sync.SyncConfig.isConfigured()
+                                if (com.aeriotv.android.feature.onboarding.WelcomeSyncChain.showDriveOffer(driveOn, driveAvailable)) {
+                                    com.aeriotv.android.feature.onboarding.WelcomeSyncChain.markAnswered(com.aeriotv.android.core.sync.SyncProviderId.GoogleDrive)
+                                    driveOfferFor = pid
+                                    return@launch
+                                }
+                                // A Child cannot add profiles; a parent adds theirs
+                                // later from Manage Profiles behind the device PIN.
+                                if (childOnly) toMain() else profileStepFor = pid
+                            }
                         },
                     )
                 } else ConfigureSourceScreen(
