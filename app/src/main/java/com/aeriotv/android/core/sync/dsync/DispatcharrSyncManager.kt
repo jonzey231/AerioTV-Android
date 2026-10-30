@@ -135,6 +135,12 @@ class DispatcharrSyncManager @Inject constructor(
         @Volatile var bound: Conn? = null
         /** Keys deferred because their id cache was not built (DsyncReadiness), with the local row count waiting. */
         val awaitingCache = java.util.concurrent.ConcurrentHashMap<DsyncKey, Int>()
+        /** Deferred keys already retried once mid-sweep after a clean probe. */
+        val sweepRetried = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
+        /** Keys whose last build pushed with untranslated rows after the sweep (stay dirty). */
+        val partial = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
+        /** Whether the cache was built when a deferred key's push finally went out. */
+        val readyAtPush = java.util.concurrent.ConcurrentHashMap<DsyncKey, Boolean>()
         /** No key is written before this session's first complete pull. */
         @Volatile var firstPullDone = false
         /** The last list call answered (false while offline). */
@@ -631,6 +637,21 @@ class DispatcharrSyncManager @Inject constructor(
                     for (key in s.awaitingCache.keys.toList()) {
                         if (cacheReady(s, key)) schedule(s, key, 0L)
                     }
+                }
+            }
+            // Mid-sweep: each catalog page write (at most every 3 s) re-checks the
+            // waiting VOD keys locally and pushes one as soon as every row translates.
+            launch {
+                VodIdSink.pageWritten.collect {
+                    for (key in s.awaitingCache.keys.toList()) {
+                        if (key in s.sweepRetried) continue
+                        val misses = probeMovieMisses(s, key) ?: continue
+                        if (DsyncReadiness.retryDuringSweep(key, cacheReady(s, key), misses)) {
+                            s.sweepRetried += key
+                            schedule(s, key, 0L)
+                        }
+                    }
+                    delay(DsyncReadiness.PAGE_RECHECK_MS)
                 }
             }
         }
@@ -1216,7 +1237,7 @@ class DispatcharrSyncManager @Inject constructor(
             .getOrNull() ?: return
         if (!s.live() || ProfileScope.token.value != s.token) return
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
-            setDirty(s, key, false)
+            markSent(s, key)
             clearAwaiting(s, key)
             if (key == DsyncKey.Profiles) {
                 state.edit()
@@ -1240,7 +1261,7 @@ class DispatcharrSyncManager @Inject constructor(
             when (put(s, c, b, key, value, data)) {
                 PutStatus.Ok -> {
                     s.resend -= key
-                    setDirty(s, key, false)
+                    markSent(s, key)
                     clearAwaiting(s, key)
                     if (key == DsyncKey.Profiles) {
                         state.edit()
@@ -1484,7 +1505,16 @@ class DispatcharrSyncManager @Inject constructor(
      */
     private suspend fun deferForCache(s: Session, key: DsyncKey, localRows: Int, unresolvedRows: Int, ready: Boolean? = null): Boolean {
         val isReady = ready ?: cacheReady(s, key)
-        if (DsyncReadiness.decide(key, isReady, unresolvedRows) != DsyncReadiness.Decision.Defer) return false
+        val decision = DsyncReadiness.decide(key, isReady, unresolvedRows)
+        if (decision == DsyncReadiness.Decision.PushPartial) {
+            if (s.partial.add(key)) {
+                Log.i(TAG, "[DSYNC] push ${key.suffix} partial after sweep: translated=${localRows - unresolvedRows} untranslated=$unresolvedRows (kept local; key stays dirty)")
+            }
+        } else s.partial -= key
+        if (decision != DsyncReadiness.Decision.Defer) {
+            if (s.awaitingCache.containsKey(key)) s.readyAtPush[key] = isReady
+            return false
+        }
         setDirty(s, key, DsyncReadiness.dirtyAfter(DsyncReadiness.Decision.Defer, putOk = false, dirtyBefore = isDirty(s, key)))
         if (s.awaitingCache.put(key, localRows) == null) {
             Log.i(TAG, "[DSYNC] push ${key.suffix} deferred: id cache not ready (rows=$localRows, untranslated=$unresolvedRows)")
@@ -1493,7 +1523,45 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     private fun clearAwaiting(s: Session, key: DsyncKey) {
-        s.awaitingCache.remove(key)?.let { n -> Log.i(TAG, "[DSYNC] ${key.suffix} re-pushed after cache ready rows=$n") }
+        val ready = s.readyAtPush.remove(key) ?: true
+        s.sweepRetried -= key
+        s.awaitingCache.remove(key)?.let { n ->
+            Log.i(TAG, "[DSYNC] ${key.suffix} re-pushed after cache ready rows=$n${if (ready) "" else " during sweep"}")
+        }
+    }
+
+    /** After a successful send: clean, unless untranslated rows stayed local (PushPartial keeps it dirty). */
+    private fun markSent(s: Session, key: DsyncKey) {
+        if (key in s.partial) {
+            // Keep dirtyAt: the rows did not change locally, so pulls are not outvoted by this flag.
+            state.edit().putBoolean(k("dirty", s, key), true).commit()
+        } else setDirty(s, key, false)
+    }
+
+    /**
+     * Local-only probe (no network): how many movie rows of [key] do not
+     * translate yet, or null for keys outside the VOD catalog. Episodes are
+     * left to the real build, which re-decides on every row.
+     */
+    private suspend fun probeMovieMisses(s: Session, key: DsyncKey): Int? {
+        if (DsyncReadiness.cacheFor(key) != DsyncReadiness.Cache.VodCatalog) return null
+        val c = conn(s) ?: return null
+        val movieIds: List<String> = when (key) {
+            DsyncKey.Progress -> watchProgressDao.allOnce()
+                .filter { (it.playlistId == null || it.playlistId == s.playlistId) && !it.videoId.contains("://") && it.vodType == "movie" }
+                .map { it.videoId }
+            DsyncKey.Watchlist, DsyncKey.HiddenTitles -> {
+                val host = scopeHost(s)
+                val keys = if (key == DsyncKey.Watchlist) {
+                    watchlistStore.allOnce().filter { it.isLive && (it.playlistId == host || it.playlistId == null) }.map { it.key }
+                } else {
+                    hiddenTitlesStore.allOnce().filter { it.isLive && (it.playlistId == host || it.playlistId == null) }.map { it.key }
+                }
+                keys.filter { it.startsWith("m:") }.map { it.substring(2) }
+            }
+            else -> return null
+        }
+        return movieIds.count { vodIds.movieId(c.row, it) == null }
     }
 
     // ---- build (local -> data), section 4 and 6.2 ----

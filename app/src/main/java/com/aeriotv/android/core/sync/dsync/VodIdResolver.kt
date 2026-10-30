@@ -16,6 +16,11 @@ import javax.inject.Singleton
  */
 object VodIdSink {
     @Volatile var onEpisodes: ((List<Pair<String, Int>>) -> Unit)? = null
+
+    /** One tick per "[VOD-CAT] page written" (conflated); Dispatcharr Sync re-checks deferred keys on it. */
+    val pageWritten = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
 }
 
 /**

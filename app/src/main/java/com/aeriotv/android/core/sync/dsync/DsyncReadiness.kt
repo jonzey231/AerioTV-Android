@@ -12,11 +12,28 @@ package com.aeriotv.android.core.sync.dsync
  * dirty and is re-pushed when the cache is ready. Once the cache is built, a
  * row that still cannot be translated is a real miss (not in this catalog)
  * and stays on this device only, as before.
+ *
+ * Field run 2026-10-30 08:56 to 09:02 (fresh install, 544 movie lanes): the
+ * sweep was still walking six minutes later, so waiting for "sweep complete"
+ * held progress and watchlist for many minutes. Now the waiting keys are
+ * re-checked on catalog page writes (at most every 3 s) and go out as soon as
+ * every row translates ([retryDuringSweep]). After the sweep, rows that still
+ * do not translate stay local and the key stays dirty ([Decision.PushPartial]).
+ *
+ * Persistence: the dirty flag lives in the "aerio_dsync" SharedPreferences
+ * (DispatcharrSyncManager.setDirty, written with commit()), not in memory, and
+ * every session start (launch, reconnect, profile) schedules each dirty key, so
+ * a deferred key that never pushed before backgrounding or process death goes
+ * out on the next session start or the 15-minute periodic pull.
  */
 object DsyncReadiness {
     enum class Cache { Channels, VodCatalog }
 
-    enum class Decision { Push, Defer }
+    enum class Decision {
+        Push, Defer,
+        /** Cache built, some rows still untranslated: push the rest, keep the key dirty. */
+        PushPartial,
+    }
 
     /** The id cache [key] translates through, or null when it needs none. */
     fun cacheFor(key: DsyncKey): Cache? = when (key) {
@@ -33,12 +50,26 @@ object DsyncReadiness {
     fun decide(key: DsyncKey, cacheReady: Boolean, unresolvedRows: Int): Decision = when (cacheFor(key)) {
         null -> Decision.Push
         Cache.Channels -> if (cacheReady) Decision.Push else Decision.Defer
-        Cache.VodCatalog -> if (!cacheReady && unresolvedRows > 0) Decision.Defer else Decision.Push
+        Cache.VodCatalog -> when {
+            unresolvedRows <= 0 -> Decision.Push
+            !cacheReady -> Decision.Defer
+            else -> Decision.PushPartial
+        }
     }
+
+    /**
+     * On a catalog page write mid-sweep: retry a deferred VOD key's push now,
+     * because a local probe found every movie row translates.
+     */
+    fun retryDuringSweep(key: DsyncKey, cacheReady: Boolean, probeMisses: Int): Boolean =
+        cacheFor(key) == Cache.VodCatalog && !cacheReady && probeMisses == 0
+
+    /** Minimum gap between page-write re-checks of the waiting keys. */
+    const val PAGE_RECHECK_MS = 3_000L
 
     /** Whether the key is dirty after this write attempt: a deferred key stays dirty. */
     fun dirtyAfter(decision: Decision, putOk: Boolean, dirtyBefore: Boolean): Boolean = when (decision) {
-        Decision.Defer -> true
+        Decision.Defer, Decision.PushPartial -> true
         Decision.Push -> if (putOk) false else dirtyBefore
     }
 }

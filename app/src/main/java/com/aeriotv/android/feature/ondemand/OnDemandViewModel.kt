@@ -2047,6 +2047,7 @@ class OnDemandViewModel @Inject constructor(
                     "[VOD-CAT] page written kind=$label lane='${lane.lane}' page=$pages " +
                         "rows=${page.written} runningTotal=$written serverCount=${page.count}",
                 )
+                com.aeriotv.android.core.sync.dsync.VodIdSink.pageWritten.tryEmit(Unit)
                 // A server whose `next` never ends must not walk forever.
                 val next = page.nextQuery?.takeIf { pages < LANE_PAGE_SAFETY }
                 val updated = lane.copy(

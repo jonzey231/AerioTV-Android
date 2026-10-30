@@ -28,8 +28,32 @@ class DsyncReadinessTest {
         assertEquals(Decision.Push, DsyncReadiness.decide(DsyncKey.Progress, cacheReady = false, unresolvedRows = 0))
     }
 
-    @Test fun catalogReadyMissesAreRealAndPush() {
-        assertEquals(Decision.Push, DsyncReadiness.decide(DsyncKey.Watchlist, cacheReady = true, unresolvedRows = 3))
+    @Test fun catalogReadyMissesAreRealAndPushPartial() {
+        assertEquals(Decision.PushPartial, DsyncReadiness.decide(DsyncKey.Watchlist, cacheReady = true, unresolvedRows = 3))
+    }
+
+    /** Field run 2026-10-30: 544 lanes still walking; every row translates mid-sweep, so push now. */
+    @Test fun allRowsTranslateMidSweepPushes() {
+        assertEquals(Decision.Defer, DsyncReadiness.decide(DsyncKey.Progress, cacheReady = false, unresolvedRows = 8))
+        assertTrue(DsyncReadiness.retryDuringSweep(DsyncKey.Progress, cacheReady = false, probeMisses = 0))
+        assertFalse(DsyncReadiness.retryDuringSweep(DsyncKey.Progress, cacheReady = false, probeMisses = 1))
+        assertFalse(DsyncReadiness.retryDuringSweep(DsyncKey.Favorites, cacheReady = false, probeMisses = 0))
+        val d = DsyncReadiness.decide(DsyncKey.Progress, cacheReady = false, unresolvedRows = 0)
+        assertEquals(Decision.Push, d)
+        assertFalse(DsyncReadiness.dirtyAfter(d, putOk = true, dirtyBefore = true))
+    }
+
+    /** Sweep done, one of two watchlist rows still unknown: push the other, key stays dirty. */
+    @Test fun partialAfterSweepKeepsDirty() {
+        val d = DsyncReadiness.decide(DsyncKey.Watchlist, cacheReady = true, unresolvedRows = 1)
+        assertEquals(Decision.PushPartial, d)
+        assertTrue(DsyncReadiness.dirtyAfter(d, putOk = true, dirtyBefore = true))
+        assertTrue(DsyncReadiness.dirtyAfter(d, putOk = false, dirtyBefore = false))
+    }
+
+    @Test fun channelKeysNeverWaitOnVodSweep() {
+        assertNull(DsyncReadiness.cacheFor(DsyncKey.Favorites).takeIf { it == Cache.VodCatalog })
+        assertEquals(Decision.Push, DsyncReadiness.decide(DsyncKey.Collections, cacheReady = true, unresolvedRows = 4))
     }
 
     @Test fun channelKeysWaitForChannelMap() {
