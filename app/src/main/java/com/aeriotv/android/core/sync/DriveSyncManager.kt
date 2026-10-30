@@ -476,7 +476,7 @@ class DriveSyncManager @Inject constructor(
             }
         }
         Log.i(TAG, "[DRIVE] setup probe ${out.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
-        SetupSourceChoice.Summary(out)
+        SetupSourceChoice.Summary(out, lastWrite = out.values.maxOfOrNull { it.updatedAt })
     }.onFailure { Log.w(TAG, "[DRIVE] setup probe failed: ${it.javaClass.simpleName}") }.getOrNull()
 
     // ── Rule 4 canonical ids (DriveCanon) ─────────────────────────────────

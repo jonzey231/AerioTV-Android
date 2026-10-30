@@ -1312,17 +1312,11 @@ class DispatcharrSyncManager @Inject constructor(
             .onFailure { Log.w(TAG, "[DSYNC] build ${key.suffix} failed: ${it.javaClass.simpleName}") }
             .getOrNull() ?: return
         if (!s.live() || ProfileScope.token.value != s.token) return
-        if (force && DsyncCoexistence.isEmptyData(key, data)) {
-            // Never write an empty list over the server copy: the server copy
-            // stays and the next pull applies it here (stamp reset to 0).
-            clearForced(s, key)
-            setDirty(s, key, false)
-            state.edit().putLong(k("at", s, key), 0L).putString(k("dev", s, key), "").commit()
-            Log.i(TAG, "[DSYNC] force push ${key.suffix} skipped: no local rows; server copy kept")
-            scope.launch { pullAll(s, "force-empty") }
-            return
-        }
-        if (force) Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)} (user chose Google Drive)")
+        // Rule 4: a forced replace writes every category, an empty one included,
+        // so the server mirrors the chosen Google Drive setup exactly.
+        if (DsyncCoexistence.forcedWritesEmpty(force, key) && DsyncCoexistence.isEmptyData(key, data)) {
+            Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=0 (empty, mirrors Google Drive)")
+        } else if (force) Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)} (user chose Google Drive)")
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
             if (force) clearForced(s, key)
             markSent(s, key)

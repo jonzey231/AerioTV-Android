@@ -840,6 +840,12 @@ object DsyncCoexistence {
         DsyncKey.Watchlist, DsyncKey.HiddenTitles, DsyncKey.HiddenGroups, DsyncKey.GroupOrder, DsyncKey.Settings,
     )
 
+    /**
+     * Rule 4 forced replace: every [FORCE_KEYS] category is written, an empty
+     * one included (never skipped), so the server mirrors the chosen side.
+     */
+    fun forcedWritesEmpty(force: Boolean, key: DsyncKey): Boolean = force && key in FORCE_KEYS
+
     /** Row categories whose forced build drops the server rows (no merge, no kept ids). */
     val FORCE_ROW_KEYS: Set<DsyncKey> = setOf(
         DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,

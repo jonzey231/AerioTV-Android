@@ -163,6 +163,23 @@ class SetupSourceChoiceTest {
         assertEquals("Ask", SetupSourceChoice.decisionName(Decision.Ask(Summary.EMPTY, Summary.EMPTY)))
     }
 
+    @Test fun forcedReplacePushesEmptyCategories() {
+        // Choosing Google Drive: an empty category is written (server mirrors Drive), not skipped.
+        com.aeriotv.android.core.sync.dsync.DsyncCoexistence.FORCE_KEYS.forEach { key ->
+            assertTrue(com.aeriotv.android.core.sync.dsync.DsyncCoexistence.forcedWritesEmpty(true, key))
+            assertTrue(!com.aeriotv.android.core.sync.dsync.DsyncCoexistence.forcedWritesEmpty(false, key))
+        }
+        assertTrue(!com.aeriotv.android.core.sync.dsync.DsyncCoexistence.forcedWritesEmpty(true, com.aeriotv.android.core.sync.dsync.DsyncKey.Profiles))
+        val empty = kotlinx.serialization.json.JsonObject(mapOf("rows" to kotlinx.serialization.json.JsonArray(emptyList())))
+        assertTrue(com.aeriotv.android.core.sync.dsync.DsyncCoexistence.isEmptyData(com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, empty))
+    }
+
+    @Test fun driveLastWriteDrivesUpdatedLine() {
+        val d = Summary(mapOf("favorites" to Category(2, 1_000), "settings" to Category(0, 9_000)), lastWrite = 9_000)
+        assertEquals(9_000L, d.updatedAt)
+        assertEquals(0L, Summary(emptyMap(), lastWrite = 5).updatedAt)
+    }
+
     @Test fun copyHasNoEmDash() {
         listOf(SetupSourceChoice.TITLE, SetupSourceChoice.FOOTER, SetupSourceChoice.UPDATE_TITLE, SetupSourceChoice.UPDATE_BODY).forEach { assertTrue(!it.contains('\u2014')) }
     }

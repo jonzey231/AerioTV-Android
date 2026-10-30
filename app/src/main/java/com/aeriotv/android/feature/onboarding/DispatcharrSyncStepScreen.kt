@@ -160,11 +160,14 @@ fun DispatcharrSyncStepScreen(
             dsync = p.dsync,
             busy = choosing,
             onContinue = { source ->
+                // Dismiss at once; the step's progress view shows while the
+                // choice applies (the chain needs it done before the next step).
                 choosing = true
+                ask = null
+                ready = false
                 scope.launch {
                     vm.choose(source, p.playlistId)
                     vm.turnOn(askFromCard)
-                    ask = null
                     onDone()
                 }
             },

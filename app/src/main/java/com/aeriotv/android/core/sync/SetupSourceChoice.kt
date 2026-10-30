@@ -23,9 +23,15 @@ object SetupSourceChoice {
      */
     data class Category(val rows: Int, val updatedAt: Long, val fingerprint: String? = null)
 
-    data class Summary(val categories: Map<String, Category>) {
+    /**
+     * [lastWrite], when set, is the side's latest write time (Drive: the newest
+     * envelope lastModified across the shared files, the same moment the Sync
+     * screen's Push to Drive row reports) and wins over the per-category times.
+     */
+    data class Summary(val categories: Map<String, Category>, val lastWrite: Long? = null) {
         val isEmpty: Boolean get() = categories.values.all { it.rows <= 0 }
-        val updatedAt: Long get() = categories.values.filter { it.rows > 0 }.maxOfOrNull { it.updatedAt } ?: 0L
+        val updatedAt: Long get() = lastWrite?.takeIf { it > 0 && !isEmpty }
+            ?: categories.values.filter { it.rows > 0 }.maxOfOrNull { it.updatedAt } ?: 0L
         fun rows(name: String): Int = categories[name]?.rows ?: 0
         companion object { val EMPTY = Summary(emptyMap()) }
     }
