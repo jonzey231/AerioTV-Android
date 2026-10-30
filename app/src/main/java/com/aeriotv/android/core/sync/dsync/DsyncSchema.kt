@@ -854,6 +854,12 @@ object DsyncCoexistence {
     fun cancelledForceKeys(applied: Map<SyncCategory, Boolean>): List<DsyncKey> =
         FORCE_KEYS.filter { k -> k.category?.let { applied[it] } != true }
 
+    /** The forced keys to arm after the Drive apply: those whose Sync Category applied. */
+    fun armedForceKeys(applied: Map<SyncCategory, Boolean>): List<DsyncKey> = FORCE_KEYS - cancelledForceKeys(applied).toSet()
+
+    /** The Rule 4 apply hold is on until [until] (0 = off). */
+    fun choiceHeld(until: Long, now: Long): Boolean = until > 0L && now < until
+
     /** Row categories whose forced build drops the server rows (no merge, no kept ids). */
     val FORCE_ROW_KEYS: Set<DsyncKey> = setOf(
         DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,

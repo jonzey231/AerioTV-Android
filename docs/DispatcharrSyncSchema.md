@@ -765,10 +765,12 @@ rows is written empty, so the server mirrors Google Drive exactly and the
 two sides compare equal afterward (2026-10-30; before this the server copy
 was kept and the prompt came back). In the other direction, choosing
 Dispatcharr makes the next Drive push write every enabled file, empty ones
-included. The forced replace runs only for categories whose Drive backup
-applied (a missing Drive file counts as applied with no rows); when the
-apply fails, the force flags of that category's keys clear, the server copy
-stays, and the prompt shows again next time, logged as `[SYNC] forced
+included. While the Drive backup applies, Dispatcharr Sync neither pulls
+nor pushes the shared keys (a hold of at most 2 minutes), and the forced
+replace is armed per category only after that category's Drive backup
+applied (a missing Drive file counts as applied with no rows). When the
+apply fails, that category's keys are not armed (any earlier flag clears),
+the server copy stays, and the prompt shows again next time, logged as `[SYNC] forced
 replace cancelled: Drive backup did not apply (<category>)`. The flag
 clears per key on a successful PUT. Log lines:
 `[DSYNC] force push <key> rows=<n> (user chose Google Drive)` and, for an

@@ -685,16 +685,42 @@ class DispatcharrSyncManager @Inject constructor(
      * consumed-stamp check, until each one has been sent (persisted, so a
      * deferred key survives a restart). Profiles are excluded (per-row merge).
      */
-    fun requestForceReplace(playlistId: String) {
+    fun requestForceReplace(playlistId: String, keys: Collection<DsyncKey> = DsyncCoexistence.FORCE_KEYS) {
+        val arm = keys.filter { it in DsyncCoexistence.FORCE_KEYS }
+        if (arm.isEmpty()) return
         val e = state.edit()
-        DsyncCoexistence.FORCE_KEYS.forEach { e.putBoolean(forceKey(playlistId, it), true) }
+        arm.forEach { e.putBoolean(forceKey(playlistId, it), true) }
         e.commit()
-        Log.i(TAG, "[DSYNC] force replace armed for playlist=${playlistId.take(8)} keys=${DsyncCoexistence.FORCE_KEYS.size} (user chose Google Drive)")
+        Log.i(TAG, "[DSYNC] force replace armed for playlist=${playlistId.take(8)} keys=${arm.size} (user chose Google Drive)")
         val s = session ?: return
         if (s.playlistId != playlistId || !isBase(s)) return
-        DsyncCoexistence.FORCE_KEYS.forEach { setDirty(s, it, true) }
-        if (s.firstPullDone) DsyncCoexistence.FORCE_KEYS.forEach { if (it in s.read) schedule(s, it, 0L) }
+        arm.forEach { setDirty(s, it, true) }
+        if (s.firstPullDone && !choiceHeld()) arm.forEach { if (it in s.read) schedule(s, it, 0L) }
     }
+
+    /**
+     * Rule 4: while the chosen Drive backup applies, no shared key is pulled
+     * or pushed, so nothing reaches the server (or local) before the forced
+     * replace is armed per category. Time-bounded so a crash mid-apply never
+     * blocks sync for good. Writes skipped meanwhile stay dirty and go out on
+     * [releaseChoiceHold].
+     */
+    @Volatile private var choiceHoldUntil = 0L
+
+    fun holdForChoice() {
+        choiceHoldUntil = System.currentTimeMillis() + CHOICE_HOLD_MS
+        Log.i(TAG, "[DSYNC] shared keys held while the Google Drive backup applies")
+    }
+
+    fun releaseChoiceHold() {
+        if (choiceHoldUntil == 0L) return
+        choiceHoldUntil = 0L
+        Log.i(TAG, "[DSYNC] shared key hold released")
+        val s = session ?: return
+        if (s.firstPullDone) DsyncCoexistence.FORCE_KEYS.forEach { if (it in s.read && isDirty(s, it)) schedule(s, it, 0L) }
+    }
+
+    private fun choiceHeld(): Boolean = DsyncCoexistence.choiceHeld(choiceHoldUntil, System.currentTimeMillis())
 
     /** Disarm the forced replace for [keys] (the Drive backup did not apply for them). */
     fun cancelForceReplace(playlistId: String, keys: Collection<DsyncKey>) {
@@ -872,6 +898,10 @@ class DispatcharrSyncManager @Inject constructor(
 
     private suspend fun pullAll(s: Session, reason: String) = s.mutex.withLock {
         if (session !== s) return@withLock
+        if (choiceHeld()) {
+            Log.i(TAG, "[DSYNC] pull ($reason) held while the Google Drive backup applies")
+            return@withLock
+        }
         val c = conn(s) ?: return@withLock
         s.listOk = false
         _ui.value = _ui.value.copy(running = true)
@@ -1292,6 +1322,10 @@ class DispatcharrSyncManager @Inject constructor(
 
     private suspend fun writeLocked(s: Session, key: DsyncKey, retry413: Boolean) {
         if (!s.live() || s.paused) return
+        if (key in DsyncCoexistence.FORCE_KEYS && choiceHeld()) {
+            setDirty(s, key, true)
+            return
+        }
         if (!DsyncGate.mayWrite(s.token, ProfileScope.token.value, s.firstPullDone, key in s.read)) {
             // Section 7.2 and the switch rule: the dirty flag stays set for this profile's next session.
             if (ProfileScope.token.value != s.token) Log.i(TAG, "[DSYNC] drop ${key.suffix}: profile changed before send")
@@ -2199,6 +2233,7 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     companion object {
+        const val CHOICE_HOLD_MS = 120_000L
         private const val TAG = "AerioDsync"
         const val PROVIDER = "dispatcharr"
         private const val K_DEVICE = "deviceId"

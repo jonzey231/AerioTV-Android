@@ -183,6 +183,19 @@ class SetupSourceChoiceTest {
         assertEquals(setOf(com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, com.aeriotv.android.core.sync.dsync.DsyncKey.Reminders), r.toSet())
         // Favorites failing disarms favorites, recents, and collections.
         assertEquals(setOf(com.aeriotv.android.core.sync.dsync.DsyncKey.Favorites, com.aeriotv.android.core.sync.dsync.DsyncKey.Recents, com.aeriotv.android.core.sync.dsync.DsyncKey.Collections), c.cancelledForceKeys(all + (SyncCategory.Favorites to false)).toSet())
+        // Arming happens after the apply, for the applied categories only.
+        val failed = all + (SyncCategory.WatchProgress to false)
+        val armed = c.armedForceKeys(failed).toSet()
+        assertTrue(com.aeriotv.android.core.sync.dsync.DsyncKey.Progress !in armed)
+        assertEquals(c.FORCE_KEYS.toSet(), armed + c.cancelledForceKeys(failed))
+        assertTrue(armed.intersect(c.cancelledForceKeys(failed).toSet()).isEmpty())
+    }
+
+    @Test fun choiceHoldIsTimeBounded() {
+        val c = com.aeriotv.android.core.sync.dsync.DsyncCoexistence
+        assertTrue(!c.choiceHeld(0L, 5))
+        assertTrue(c.choiceHeld(10L, 5))
+        assertTrue(!c.choiceHeld(10L, 10))
     }
 
     @Test fun driveLastWriteDrivesUpdatedLine() {

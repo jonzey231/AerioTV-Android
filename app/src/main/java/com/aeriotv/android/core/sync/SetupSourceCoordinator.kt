@@ -66,16 +66,22 @@ class SetupSourceCoordinator @Inject constructor(
         Log.i(TAG, "[SYNC] setup source chosen: $source")
         when (source) {
             SetupSourceChoice.Source.Drive -> {
-                dsync.get().requestForceReplace(playlistId)
-                drive.releaseHold()
-                // The server copy is replaced only for categories whose Drive backup applied.
-                val applied = drive.applySharedForReplace(ignoreOwnership)
-                val cancel = com.aeriotv.android.core.sync.dsync.DsyncCoexistence.cancelledForceKeys(applied)
-                if (cancel.isNotEmpty()) {
-                    dsync.get().cancelForceReplace(playlistId, cancel)
+                // Dispatcharr Sync neither pulls nor pushes shared keys until the
+                // apply is done; the forced replace is armed only per category
+                // whose Drive backup applied (onboarding and Settings alike).
+                val d = dsync.get()
+                d.holdForChoice()
+                try {
+                    drive.releaseHold()
+                    val applied = drive.applySharedForReplace(ignoreOwnership)
+                    val cancel = com.aeriotv.android.core.sync.dsync.DsyncCoexistence.cancelledForceKeys(applied)
+                    d.cancelForceReplace(playlistId, cancel) // leftovers from an earlier arm
                     cancel.mapNotNull { it.category }.distinct().forEach {
                         Log.i(TAG, "[SYNC] forced replace cancelled: Drive backup did not apply (${it.name})")
                     }
+                    d.requestForceReplace(playlistId, com.aeriotv.android.core.sync.dsync.DsyncCoexistence.armedForceKeys(applied))
+                } finally {
+                    d.releaseChoiceHold()
                 }
             }
             SetupSourceChoice.Source.Dispatcharr -> pendingDriveReplace = true
