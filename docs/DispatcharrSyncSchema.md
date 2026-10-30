@@ -765,7 +765,12 @@ rows is written empty, so the server mirrors Google Drive exactly and the
 two sides compare equal afterward (2026-10-30; before this the server copy
 was kept and the prompt came back). In the other direction, choosing
 Dispatcharr makes the next Drive push write every enabled file, empty ones
-included. The flag clears per key on a successful PUT. Log lines:
+included. The forced replace runs only for categories whose Drive backup
+applied (a missing Drive file counts as applied with no rows); when the
+apply fails, the force flags of that category's keys clear, the server copy
+stays, and the prompt shows again next time, logged as `[SYNC] forced
+replace cancelled: Drive backup did not apply (<category>)`. The flag
+clears per key on a successful PUT. Log lines:
 `[DSYNC] force push <key> rows=<n> (user chose Google Drive)` and, for an
 empty key, `[DSYNC] force push <key> rows=0 (empty, mirrors Google Drive)`.
 Profiles, remoteMap, and radioDefault are not forced.

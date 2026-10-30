@@ -418,6 +418,28 @@ class DriveSyncManager @Inject constructor(
         return pullAll(token, wanted, ignoreOwnership = ignoreOwnership)
     }
 
+    /**
+     * [applySharedNow] for the Rule 4 Drive choice, per category: true when the
+     * backup applied or had no file (nothing to apply is fine), false when the
+     * apply failed (network, decode, an exception) or did not run (owned, off).
+     */
+    suspend fun applySharedForReplace(ignoreOwnership: Boolean): Map<SyncCategory, Boolean> {
+        val token = ensureSignedIn() ?: return emptyMap()
+        val wanted = SyncCategory.entries
+            .filter { it in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES }
+            .filter { appPreferences.syncCategoryEnabled(it).first() }
+        Log.i(TAG, "[DRIVE] applying backup (user chose Google Drive) categories=${wanted.map { it.name }}")
+        val out = wanted.associateWith { c ->
+            val r = runCatching { pullCategoryDetailed(token, c, replace = false, ignoreOwnership = ignoreOwnership) }
+                .onFailure { Log.w(TAG, "pull ${c.name} failed", it) }
+                .getOrDefault(PullOutcome.Failed)
+            r == PullOutcome.Applied || r == PullOutcome.NoRemote
+        }
+        appPreferences.setSyncLastPullAt(System.currentTimeMillis())
+        appPreferences.setSyncInitialPullDone(true)
+        return out
+    }
+
     /** The user chose Dispatcharr: the next Drive push overwrites the backup with this device's copy. */
     suspend fun replaceBackupOnNextPush() {
         appPreferences.setSyncInitialPullDone(true)

@@ -846,6 +846,14 @@ object DsyncCoexistence {
      */
     fun forcedWritesEmpty(force: Boolean, key: DsyncKey): Boolean = force && key in FORCE_KEYS
 
+    /**
+     * Rule 4 guard: the forced keys to disarm after the Drive apply, because
+     * their Sync Category did not apply ([applied] false or absent). The
+     * server copy of those stays; the prompt shows again next time.
+     */
+    fun cancelledForceKeys(applied: Map<SyncCategory, Boolean>): List<DsyncKey> =
+        FORCE_KEYS.filter { k -> k.category?.let { applied[it] } != true }
+
     /** Row categories whose forced build drops the server rows (no merge, no kept ids). */
     val FORCE_ROW_KEYS: Set<DsyncKey> = setOf(
         DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,

@@ -696,6 +696,14 @@ class DispatcharrSyncManager @Inject constructor(
         if (s.firstPullDone) DsyncCoexistence.FORCE_KEYS.forEach { if (it in s.read) schedule(s, it, 0L) }
     }
 
+    /** Disarm the forced replace for [keys] (the Drive backup did not apply for them). */
+    fun cancelForceReplace(playlistId: String, keys: Collection<DsyncKey>) {
+        if (keys.isEmpty()) return
+        val e = state.edit()
+        keys.forEach { e.remove(forceKey(playlistId, it)) }
+        e.commit()
+    }
+
     /**
      * Read-only probe: the base user's App Data for [playlistId], summarized per
      * shared category. Nothing is applied or stored. Null when the server

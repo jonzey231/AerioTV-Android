@@ -174,6 +174,17 @@ class SetupSourceChoiceTest {
         assertTrue(com.aeriotv.android.core.sync.dsync.DsyncCoexistence.isEmptyData(com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, empty))
     }
 
+    @Test fun forcedReplaceCancelledWhereDriveDidNotApply() {
+        val c = com.aeriotv.android.core.sync.dsync.DsyncCoexistence
+        val all = SyncCategory.entries.associateWith { true }
+        assertEquals(emptyList<Any>(), c.cancelledForceKeys(all))
+        // Watch Progress failed, Reminders was not run: their keys disarm, the rest stay.
+        val r = c.cancelledForceKeys(all + (SyncCategory.WatchProgress to false) - SyncCategory.Reminders)
+        assertEquals(setOf(com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, com.aeriotv.android.core.sync.dsync.DsyncKey.Reminders), r.toSet())
+        // Favorites failing disarms favorites, recents, and collections.
+        assertEquals(setOf(com.aeriotv.android.core.sync.dsync.DsyncKey.Favorites, com.aeriotv.android.core.sync.dsync.DsyncKey.Recents, com.aeriotv.android.core.sync.dsync.DsyncKey.Collections), c.cancelledForceKeys(all + (SyncCategory.Favorites to false)).toSet())
+    }
+
     @Test fun driveLastWriteDrivesUpdatedLine() {
         val d = Summary(mapOf("favorites" to Category(2, 1_000), "settings" to Category(0, 9_000)), lastWrite = 9_000)
         assertEquals(9_000L, d.updatedAt)
