@@ -133,6 +133,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** The live session, or a picker peek while no session runs (one writer at a time). */
         fun live(): Boolean = session === this || (peek && session == null)
         @Volatile var bound: Conn? = null
+        /** Keys deferred because their id cache was not built (DsyncReadiness), with the local row count waiting. */
+        val awaitingCache = java.util.concurrent.ConcurrentHashMap<DsyncKey, Int>()
         /** No key is written before this session's first complete pull. */
         @Volatile var firstPullDone = false
         /** The last list call answered (false while offline). */
@@ -619,6 +621,16 @@ class DispatcharrSyncManager @Inject constructor(
                 while (isActive) {
                     delay(PERIODIC_PULL_MS)
                     if (foreground) pullAll(s, "periodic")
+                }
+            }
+            // Deferred keys go out as soon as their id cache is built.
+            launch {
+                while (isActive) {
+                    delay(CACHE_POLL_MS)
+                    if (s.awaitingCache.isEmpty()) continue
+                    for (key in s.awaitingCache.keys.toList()) {
+                        if (cacheReady(s, key)) schedule(s, key, 0L)
+                    }
                 }
             }
         }
@@ -1205,6 +1217,7 @@ class DispatcharrSyncManager @Inject constructor(
         if (!s.live() || ProfileScope.token.value != s.token) return
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
             setDirty(s, key, false)
+            clearAwaiting(s, key)
             if (key == DsyncKey.Profiles) {
                 state.edit()
                     .remove(profilesPendingKey(s.playlistId))
@@ -1228,6 +1241,7 @@ class DispatcharrSyncManager @Inject constructor(
                 PutStatus.Ok -> {
                     s.resend -= key
                     setDirty(s, key, false)
+                    clearAwaiting(s, key)
                     if (key == DsyncKey.Profiles) {
                         state.edit()
                             .remove(profilesPendingKey(s.playlistId))
@@ -1455,13 +1469,40 @@ class DispatcharrSyncManager @Inject constructor(
     private suspend fun scopeHost(s: Session): String? =
         playlistDao.byId(s.playlistId)?.let { WatchlistStore.scopeFor(it) }
 
+    // ---- id cache readiness (DsyncReadiness) ----
+
+    private suspend fun cacheReady(s: Session, key: DsyncKey): Boolean = when (DsyncReadiness.cacheFor(key)) {
+        null -> true
+        DsyncReadiness.Cache.Channels -> channelMap(s).toInt.isNotEmpty()
+        DsyncReadiness.Cache.VodCatalog -> conn(s)?.let { vodIds.moviesReady(it.row) } ?: false
+    }
+
+    /**
+     * Gate one build: true = defer. A deferred key stays dirty (never an
+     * empty list over local rows that could not be translated) and the
+     * cache poll in [runSession] re-pushes it once the cache is built.
+     */
+    private suspend fun deferForCache(s: Session, key: DsyncKey, localRows: Int, unresolvedRows: Int, ready: Boolean? = null): Boolean {
+        val isReady = ready ?: cacheReady(s, key)
+        if (DsyncReadiness.decide(key, isReady, unresolvedRows) != DsyncReadiness.Decision.Defer) return false
+        setDirty(s, key, DsyncReadiness.dirtyAfter(DsyncReadiness.Decision.Defer, putOk = false, dirtyBefore = isDirty(s, key)))
+        if (s.awaitingCache.put(key, localRows) == null) {
+            Log.i(TAG, "[DSYNC] push ${key.suffix} deferred: id cache not ready (rows=$localRows, untranslated=$unresolvedRows)")
+        }
+        return true
+    }
+
+    private fun clearAwaiting(s: Session, key: DsyncKey) {
+        s.awaitingCache.remove(key)?.let { n -> Log.i(TAG, "[DSYNC] ${key.suffix} re-pushed after cache ready rows=$n") }
+    }
+
     // ---- build (local -> data), section 4 and 6.2 ----
 
     private suspend fun build(s: Session, key: DsyncKey, base: JsonObject?, now: Long): JsonObject? = when (key) {
         DsyncKey.Favorites -> {
             val m = channelMap(s)
-            if (m.toInt.isEmpty()) null else {
-                val rows = favoriteDao.allOnceIn(s.token).sortedBy { it.displayOrder }
+            val rows = favoriteDao.allOnceIn(s.token).sortedBy { it.displayOrder }
+            if (deferForCache(s, key, rows.size, rows.size, ready = m.toInt.isNotEmpty())) null else {
                 val local = rows.mapNotNull { m.toInt[it.channelId] }
                 // Remote ids this device cannot map (another channel set) are kept.
                 val keep = base?.let(DsyncPayloads::decodeFavorites).orEmpty().filter { it !in m.toLocal }
@@ -1472,7 +1513,8 @@ class DispatcharrSyncManager @Inject constructor(
         }
         DsyncKey.Recents -> {
             val m = channelMap(s)
-            if (m.toInt.isEmpty()) null else {
+            val n = prefs.recentChannelIdsIn(s.token).size
+            if (deferForCache(s, key, n, n, ready = m.toInt.isNotEmpty())) null else {
                 val stamps = recentStamps(s)
                 val ids = prefs.recentChannelIdsIn(s.token)
                 val local = ids.mapIndexedNotNull { i, id -> m.toInt[id]?.let { RecentRow(it, stamps[id] ?: (now - i)) } }
@@ -1482,9 +1524,10 @@ class DispatcharrSyncManager @Inject constructor(
         }
         DsyncKey.Progress -> {
             val c = conn(s) ?: return null
-            val local = watchProgressDao.allOnce()
+            val candidates = watchProgressDao.allOnce()
                 .filter { (it.playlistId == null || it.playlistId == s.playlistId) && !it.videoId.contains("://") }
                 .filter { it.vodType == "movie" || it.vodType == "episode" }
+            val local = candidates
                 .mapNotNull { p ->
                     val ep = p.vodType == "episode"
                     val sid = p.seriesId?.toIntOrNull()
@@ -1500,12 +1543,14 @@ class DispatcharrSyncManager @Inject constructor(
                         title = p.title,
                     )
                 }
+            if (deferForCache(s, key, candidates.size, candidates.size - local.size)) return null
             val remote = base?.let(DsyncPayloads::decodeProgress).orEmpty()
             DsyncPayloads.encodeProgress(base, DsyncMerge.progress(local, remote), now)
         }
         DsyncKey.Reminders -> {
             val m = channelMap(s)
-            if (m.toInt.isEmpty()) null else {
+            val n = reminderDao.allOnce().size
+            if (deferForCache(s, key, n, n, ready = m.toInt.isNotEmpty())) null else {
                 val local = reminderDao.allOnce()
                     .filter { it.playlistId == null || it.playlistId == s.playlistId }
                     .mapNotNull { r ->
@@ -1520,16 +1565,18 @@ class DispatcharrSyncManager @Inject constructor(
         }
         DsyncKey.Watchlist -> {
             val host = scopeHost(s)
-            val local = watchlistStore.allOnce().filter { it.isLive && (it.playlistId == host || it.playlistId == null) }
-                .mapNotNull { e -> markRow(s, "watchlist", e.key, e.addedAt / 1000) }
+            val live = watchlistStore.allOnce().filter { it.isLive && (it.playlistId == host || it.playlistId == null) }
+            val local = live.mapNotNull { e -> markRow(s, "watchlist", e.key, e.addedAt / 1000) }
+            if (deferForCache(s, key, live.size, live.size - local.size)) return null
             val remote = base?.let(DsyncPayloads::decodeVodMarks).orEmpty()
             val rows = DsyncPayloads.carryTails(local, remote, { it.type to it.vodId }, { it.tail }) { r, t -> r.copy(tail = t) }
             DsyncPayloads.encodeVodMarks(base, rows + unknownMovieRows(s, remote, rows), DsyncLimits.WATCHLIST)
         }
         DsyncKey.HiddenTitles -> {
             val host = scopeHost(s)
-            val local = hiddenTitlesStore.allOnce().filter { it.isLive && (it.playlistId == host || it.playlistId == null) }
-                .mapNotNull { e -> markRow(s, "hiddenTitles", e.key, e.hiddenAt / 1000) }
+            val live = hiddenTitlesStore.allOnce().filter { it.isLive && (it.playlistId == host || it.playlistId == null) }
+            val local = live.mapNotNull { e -> markRow(s, "hiddenTitles", e.key, e.hiddenAt / 1000) }
+            if (deferForCache(s, key, live.size, live.size - local.size)) return null
             val remote = base?.let(DsyncPayloads::decodeVodMarks).orEmpty()
             val rows = DsyncPayloads.carryTails(local, remote, { it.type to it.vodId }, { it.tail }) { r, t -> r.copy(tail = t) }
             DsyncPayloads.encodeVodMarks(base, rows + unknownMovieRows(s, remote, rows), DsyncLimits.HIDDEN_TITLES)
@@ -1570,7 +1617,8 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncKey.RadioDefault -> DsyncPayloads.encodeRadioDefault(base, prefs.radioModeByDefaultIn(s.token))
         DsyncKey.Collections -> {
             val m = channelMap(s)
-            if (m.toInt.isEmpty()) null else {
+            val n = prefs.channelCollectionsIn(s.token).size
+            if (deferForCache(s, key, n, n, ready = m.toInt.isNotEmpty())) null else {
                 val remote = base?.let(DsyncPayloads::decodeCollections).orEmpty().associateBy { it.id }
                 val rows = prefs.channelCollectionsIn(s.token).map { c ->
                     val r = remote[c.id]
@@ -1994,6 +2042,8 @@ class DispatcharrSyncManager @Inject constructor(
         const val DEBOUNCE_MS = 5_000L
         const val FOREGROUND_PULL_MS = 5L * 60 * 1000
         const val PERIODIC_PULL_MS = 15L * 60 * 1000
+        /** How often a session with keys deferred for an id cache checks the cache. */
+        const val CACHE_POLL_MS = 5_000L
         /** Picker-open profiles pull: at most one per playlist in this window. */
         const val PICKER_PULL_MIN_MS = 30_000L
         /** The one follow-up read after a picker-open pull. */

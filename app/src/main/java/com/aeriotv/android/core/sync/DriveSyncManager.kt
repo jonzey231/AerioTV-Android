@@ -339,10 +339,21 @@ class DriveSyncManager @Inject constructor(
         return kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { runCatching {
             when (category) {
                 SyncCategory.Playlists -> applyPlaylistsSnapshot(json.decodeFromString(body), replace)
-                SyncCategory.WatchProgress -> applyWatchProgressSnapshot(json.decodeFromString(body))
-                SyncCategory.Reminders -> applyRemindersSnapshot(json.decodeFromString(body))
-                SyncCategory.Favorites -> applyFavoritesSnapshot(json.decodeFromString(body))
-                SyncCategory.Watchlist -> applyWatchlistSnapshot(json.decodeFromString(body))
+                // Drive rows carry local ids (no server-id translation), so no
+                // cache gate is needed; the counts measure what each apply carried.
+                SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(body).let {
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyWatchProgressSnapshot(it)
+                }
+                SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(body).let {
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyRemindersSnapshot(it)
+                }
+                SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(body).let {
+                    applyFavoritesSnapshot(it)
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} local now=${favoriteChannelDao.allOnce().size}")
+                }
+                SyncCategory.Watchlist -> json.decodeFromString<WatchlistSnapshot>(body).let {
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} hidden=${it.hidden.size}"); applyWatchlistSnapshot(it)
+                }
                 SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body), replace)
                 SyncCategory.Credentials -> applyCredentialsSnapshot(json.decodeFromString(body))
             }

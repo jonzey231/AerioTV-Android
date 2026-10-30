@@ -66,6 +66,18 @@ class VodIdResolver @Inject constructor(
 
     fun catalogKey(row: PlaylistEntity): String = snapshots.identity(row)
 
+    /**
+     * True once [row]'s movie catalog has completed a sweep (or VOD is off for
+     * the playlist, so no catalog will come). Until then a movie uuid that is
+     * not yet translated may simply not be loaded yet (DsyncReadiness).
+     */
+    suspend fun moviesReady(row: PlaylistEntity): Boolean {
+        if (!row.vodEnabled) return true
+        catalog.migrateIdentitiesToV2()
+        val st = catalog.state(catalogKey(row), VodCatalogStore.KIND_MOVIE) ?: return false
+        return st.completedAtMs > 0L
+    }
+
     /** Movie uuid -> Dispatcharr movie id. */
     suspend fun movieId(row: PlaylistEntity, uuid: String): Int? {
         if (prefs.contains("m:$uuid")) return prefs.getInt("m:$uuid", 0)

@@ -675,6 +675,17 @@ Rule 2, first-pull seeding. An empty or missing server copy never overwrites wha
 1. Missing (bucket 404, absent from the list, or category absent inside the bucket): the key is marked read and not present, and the post-pull flush pushes local up. This was already the behavior.
 2. Present with empty data (no ids, rows, names, or lanes; `groupOrder` with mode `default` and no order) on the first read of that key for this user on this device (no server stamp ever consumed here): the envelope is recorded as consumed without applying it, the key is marked dirty, and local is pushed up. Log line: `[DSYNC] pull <key> bytes=<n> empty on server, first pull: seeding from local`. Primitive values (for example `radioDefault.on=false`) are real choices and apply as usual. An empty copy seen after the first read is a real change from another device and applies as usual. `profiles` merges per row and is exempt.
 
+Rule 3 (id cache readiness, 2026-10-30). Keys translated through the
+channel map (favorites, recents, reminders, collections) are not written
+until the session's channel snapshot has Dispatcharr channel ids. Keys
+translated through the VOD catalog (progress, watchlist, hiddenTitles) are
+not written while the movie catalog has not completed a sweep and a local
+row could not be translated. A deferred key stays dirty and is re-pushed
+when the cache is ready, so an empty list never goes up over local rows
+that exist but could not be translated. After the cache is built, a row
+that still cannot be translated is a real miss and stays on the device.
+Drive snapshots carry local ids and need no translation.
+
 ## 10b. Sync providers record (`syncProviders`)
 
 Every backup carries which sync providers the device owner runs, so a new device can offer the same ones.
