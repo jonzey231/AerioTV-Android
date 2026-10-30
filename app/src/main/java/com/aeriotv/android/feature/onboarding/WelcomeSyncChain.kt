@@ -65,5 +65,15 @@ object WelcomeSyncChain {
     fun markAnswered(id: SyncProviderId) { answered.add(id) }
     fun wasAnswered(id: SyncProviderId): Boolean = id in answered
     fun filterOffers(offers: List<SyncProviderId>): List<SyncProviderId> = offers.filterNot { wasAnswered(it) }
-    internal fun resetForTest() = answered.clear()
+    internal fun resetForTest() { answered.clear(); kept = null; returnedFromChoice = false }
+
+    /** The Welcome card selections of the last Continue, restored after a Cancel on the setup prompt. */
+    @Volatile var kept: Pair<Boolean, Boolean>? = null
+        private set
+    fun keepSelection(drive: Boolean, dispatcharr: Boolean) { kept = drive to dispatcharr }
+
+    @Volatile private var returnedFromChoice = false
+    fun markReturnedFromChoice() { returnedFromChoice = true }
+    /** True once after a setup prompt Cancel, so Welcome does not auto-advance on the restored playlist. */
+    fun consumeReturnedFromChoice(): Boolean = returnedFromChoice.also { returnedFromChoice = false }
 }

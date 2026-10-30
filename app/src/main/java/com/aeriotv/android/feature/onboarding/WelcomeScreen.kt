@@ -291,8 +291,9 @@ private fun StartHereSection(c: WelcomeContent) {
  */
 @Composable
 private fun SyncSection(c: WelcomeContent, sideBySide: Boolean, skipLine: String, skipCentered: Boolean = true) {
-    var driveSelected by rememberSaveable { mutableStateOf(false) }
-    var dispatcharrSelected by rememberSaveable { mutableStateOf(false) }
+    // A Cancel on the setup prompt comes back with the last selections kept.
+    var driveSelected by rememberSaveable { mutableStateOf(WelcomeSyncChain.kept?.first ?: false) }
+    var dispatcharrSelected by rememberSaveable { mutableStateOf(WelcomeSyncChain.kept?.second ?: false) }
     if (c.showDrive || c.showDispatcharr) {
         OnboardingSectionLabel("Keep your devices in sync")
         Text(

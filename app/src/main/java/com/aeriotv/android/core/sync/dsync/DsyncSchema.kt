@@ -831,6 +831,53 @@ object DsyncCoexistence {
         return data.values.all { emptyElement(it) }
     }
 
+    /**
+     * Rule 4: the keys a "user chose Google Drive" replace pushes whole from
+     * local. Profiles (per-row merge), remoteMap, and radioDefault are excluded.
+     */
+    val FORCE_KEYS: List<DsyncKey> = listOf(
+        DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,
+        DsyncKey.Watchlist, DsyncKey.HiddenTitles, DsyncKey.HiddenGroups, DsyncKey.GroupOrder, DsyncKey.Settings,
+    )
+
+    /** Row categories whose forced build drops the server rows (no merge, no kept ids). */
+    val FORCE_ROW_KEYS: Set<DsyncKey> = setOf(
+        DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,
+        DsyncKey.Watchlist, DsyncKey.HiddenTitles,
+    )
+
+    /** Rows (or names) one category's data holds, for the setup prompt and the force-push log. */
+    fun rowCount(key: DsyncKey, data: JsonObject): Int = when (key) {
+        DsyncKey.Favorites -> DsyncPayloads.decodeFavorites(data)?.size ?: 0
+        DsyncKey.Recents -> DsyncPayloads.decodeRecents(data)?.size ?: 0
+        DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)?.size ?: 0
+        DsyncKey.Reminders -> DsyncPayloads.decodeReminders(data)?.size ?: 0
+        DsyncKey.Watchlist, DsyncKey.HiddenTitles -> DsyncPayloads.decodeVodMarks(data)?.size ?: 0
+        DsyncKey.Collections -> DsyncPayloads.decodeCollections(data)?.size ?: 0
+        DsyncKey.HiddenGroups -> DsyncPayloads.decodeHiddenGroups(data)?.let { it.live.size + it.movies.size + it.series.size } ?: 0
+        DsyncKey.GroupOrder -> DsyncPayloads.decodeGroupOrder(data)?.let { g ->
+            if (g.order.isNotEmpty()) g.order.size else if (g.mode != "default") 1 else 0
+        } ?: 0
+        DsyncKey.Settings -> DsyncPayloads.decodeSettingsLanes(data)?.values?.sumOf { it.size } ?: 0
+        else -> if (isEmptyData(key, data)) 0 else 1
+    }
+
+    /**
+     * A content fingerprint built only from identifiers a Drive snapshot also
+     * carries (SetupSourceChoice): progress by title, reminders by channel name
+     * and start time. Null for categories whose rows use server integer ids
+     * (favorites, recents, collections, watchlist, hidden titles) or lane
+     * names (settings, hidden groups, group order), which Drive stores differently.
+     */
+    fun fingerprint(key: DsyncKey, data: JsonObject): String? = when (key) {
+        DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)
+            ?.takeIf { rows -> rows.all { it.title.isNotBlank() } }
+            ?.let { rows -> com.aeriotv.android.core.sync.SetupSourceChoice.fingerprint(rows.map { it.title }) }
+        DsyncKey.Reminders -> DsyncPayloads.decodeReminders(data)
+            ?.let { rows -> com.aeriotv.android.core.sync.SetupSourceChoice.fingerprint(rows.map { "${it.channelName}|${it.start}" }) }
+        else -> null
+    }
+
     private fun emptyElement(e: JsonElement): Boolean = when (e) {
         is JsonNull -> true
         is JsonArray -> e.isEmpty()

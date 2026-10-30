@@ -63,7 +63,17 @@ class DispatcharrSyncStepViewModel @Inject constructor(
     private val dsync: DispatcharrSyncManager,
     private val client: com.aeriotv.android.core.network.DispatcharrClient,
     private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
+    private val setupSource: com.aeriotv.android.core.sync.SetupSourceCoordinator,
 ) : ViewModel() {
+
+    /** Rule 4: both Drive and Dispatcharr hold data for this user? Read-only. */
+    suspend fun probe(): com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe? = setupSource.probe()
+
+    suspend fun choose(source: com.aeriotv.android.core.sync.SetupSourceChoice.Source, playlistId: String) =
+        setupSource.choose(source, playlistId)
+
+    /** No choice needed (or Skip): Drive applies whatever it held, as before. */
+    suspend fun releaseHeld() = setupSource.releaseHeld()
 
     /**
      * After a Dispatcharr user QR sign-in: does this user already have AerioTV
@@ -88,6 +98,7 @@ class DispatcharrSyncStepViewModel @Inject constructor(
         Log.i(TAG, "[DSYNC] $where first pull ${if (ok) "done" else "not finished; continuing"}")
         // Onboarding first pull for the base user: evaluate the providers offer once in Main.
         if (where == "onboarding" && com.aeriotv.android.core.profiles.ProfileScope.token.value.isEmpty()) providersStore.arm()
+        setupSource.afterDispatcharrOn()
     }
 
     private companion object { const val TAG = "AerioDsync" }
@@ -100,10 +111,31 @@ fun DispatcharrSyncStepScreen(
     /** Set when the playlist was just signed in from a Dispatcharr user QR. */
     qrSignIn: com.aeriotv.android.core.qr.QrImportBus.SignIn? = null,
     onDone: () -> Unit,
+    /** Cancel on the "Which setup" prompt; null keeps the step open. */
+    onCancel: (() -> Unit)? = null,
     vm: DispatcharrSyncStepViewModel = hiltViewModel(),
 ) {
     var ready by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    // Rule 4: both sides hold differing data; the prompt decides before Turn On.
+    var ask by remember { mutableStateOf<com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe?>(null) }
+    var askFromCard by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf(false) }
+    val runTurnOn: suspend (Boolean) -> Unit = { fromCard ->
+        val p = vm.probe()
+        when (p?.decision) {
+            is com.aeriotv.android.core.sync.SetupSourceChoice.Decision.Ask -> { askFromCard = fromCard; ask = p }
+            com.aeriotv.android.core.sync.SetupSourceChoice.Decision.UseDrive -> {
+                vm.choose(com.aeriotv.android.core.sync.SetupSourceChoice.Source.Drive, p.playlistId)
+                vm.turnOn(fromCard); onDone()
+            }
+            com.aeriotv.android.core.sync.SetupSourceChoice.Decision.UseDispatcharr -> {
+                vm.choose(com.aeriotv.android.core.sync.SetupSourceChoice.Source.Dispatcharr, p.playlistId)
+                vm.turnOn(fromCard); onDone()
+            }
+            null -> { vm.releaseHeld(); vm.turnOn(fromCard); onDone() }
+        }
+    }
     // Server already holds this user's AerioTV data: lead with the restore
     // copy and put focus on Turn On.
     var restore by remember { mutableStateOf(false) }
@@ -114,7 +146,7 @@ fun DispatcharrSyncStepScreen(
         // Already on (e.g. a second Dispatcharr playlist): nothing to ask.
         when {
             vm.alreadyOn() -> onDone()
-            autoEnable -> { vm.turnOn(fromCard = true); onDone() }
+            autoEnable -> runTurnOn(true)
             else -> {
                 restore = qrSignIn != null && vm.serverHasData(qrSignIn)
                 ready = true
@@ -122,6 +154,27 @@ fun DispatcharrSyncStepScreen(
         }
     }
     LaunchedEffect(ready, restore) { if (ready && restore) runCatching { turnOnFocus.requestFocus() } }
+    ask?.let { p ->
+        SetupSourceDialog(
+            drive = p.drive,
+            dsync = p.dsync,
+            busy = choosing,
+            onContinue = { source ->
+                choosing = true
+                scope.launch {
+                    vm.choose(source, p.playlistId)
+                    vm.turnOn(askFromCard)
+                    ask = null
+                    onDone()
+                }
+            },
+            onCancel = {
+                ask = null
+                busy = false
+                if (onCancel != null) onCancel() else if (!ready) ready = true
+            },
+        )
+    }
     if (!ready) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         return
@@ -174,10 +227,7 @@ fun DispatcharrSyncStepScreen(
                 onClick = {
                     if (busy) return@Button
                     busy = true
-                    scope.launch {
-                        vm.turnOn()
-                        onDone()
-                    }
+                    scope.launch { runTurnOn(false) }
                 },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
                     .focusRequester(turnOnFocus)
@@ -191,7 +241,7 @@ fun DispatcharrSyncStepScreen(
                 else Text("Turn On", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
             OutlinedButton(
-                onClick = { if (!busy) onDone() },
+                onClick = { if (!busy) scope.launch { vm.releaseHeld(); onDone() } },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
             ) { Text("Skip", style = MaterialTheme.typography.titleMedium) }
             Text(

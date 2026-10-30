@@ -34,7 +34,39 @@ class SyncSettingsViewModel @Inject constructor(
     private val dsync: com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager,
     playlistDao: com.aeriotv.android.core.data.db.dao.PlaylistDao,
     private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
+    private val setupSource: com.aeriotv.android.core.sync.SetupSourceCoordinator,
 ) : ViewModel() {
+
+    // ---- Rule 4: choosing a source when both hold data ----
+
+    /** Welcome with both providers selected: Drive's shared categories wait for the choice. */
+    fun holdSharedForChoice() = setupSource.holdShared()
+
+    /** Apply anything Drive held (no choice was needed or the flow ended). */
+    fun releaseHeld() { viewModelScope.launch { setupSource.releaseHeld() } }
+
+    suspend fun probeSetupSource(): com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe? = setupSource.probe()
+
+    /** Settings: the SECOND provider is being turned on and both hold data. */
+    fun applySetupSourceAndEnable(
+        source: com.aeriotv.android.core.sync.SetupSourceChoice.Source,
+        playlistId: String,
+        enablingDrive: Boolean,
+    ) {
+        viewModelScope.launch {
+            if (enablingDrive) {
+                // Dispatcharr Sync already owns the shared data here, so a Drive
+                // choice applies the backup over it (ignoreOwnership).
+                setupSource.choose(source, playlistId, ignoreOwnership = true)
+                prefs.setSyncMasterEnabled(true)
+                DriveSyncWorker.enqueuePeriodic(context)
+            } else {
+                setupSource.choose(source, playlistId)
+                prefs.setDispatcharrSyncEnabled(true)
+            }
+            setupSource.afterDispatcharrOn()
+        }
+    }
 
     /** Onboarding Drive restore (base profile only): evaluate the providers offer once in Main. */
     fun armProvidersOffer() {

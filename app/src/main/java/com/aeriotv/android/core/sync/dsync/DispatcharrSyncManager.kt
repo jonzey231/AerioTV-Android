@@ -667,6 +667,68 @@ class DispatcharrSyncManager @Inject constructor(
             true
         } ?: false
 
+    // ---- Rule 4: choosing a source when both hold data (SetupSourceChoice) ----
+
+    private fun forceKey(playlistId: String, key: DsyncKey) = "force|$playlistId|${key.suffix}"
+
+    /** Base user only: a sub-profile never takes part in the replace. */
+    private fun isForced(s: Session, key: DsyncKey): Boolean =
+        isBase(s) && key in DsyncCoexistence.FORCE_KEYS && state.getBoolean(forceKey(s.playlistId, key), false)
+
+    private fun clearForced(s: Session, key: DsyncKey) {
+        state.edit().remove(forceKey(s.playlistId, key)).commit()
+    }
+
+    /**
+     * The user chose Google Drive: every shared key of [playlistId]'s base
+     * user goes up whole from this device, bypassing remoteWins and the
+     * consumed-stamp check, until each one has been sent (persisted, so a
+     * deferred key survives a restart). Profiles are excluded (per-row merge).
+     */
+    fun requestForceReplace(playlistId: String) {
+        val e = state.edit()
+        DsyncCoexistence.FORCE_KEYS.forEach { e.putBoolean(forceKey(playlistId, it), true) }
+        e.commit()
+        Log.i(TAG, "[DSYNC] force replace armed for playlist=${playlistId.take(8)} keys=${DsyncCoexistence.FORCE_KEYS.size} (user chose Google Drive)")
+        val s = session ?: return
+        if (s.playlistId != playlistId || !isBase(s)) return
+        DsyncCoexistence.FORCE_KEYS.forEach { setDirty(s, it, true) }
+        if (s.firstPullDone) DsyncCoexistence.FORCE_KEYS.forEach { if (it in s.read) schedule(s, it, 0L) }
+    }
+
+    /**
+     * Read-only probe: the base user's App Data for [playlistId], summarized per
+     * shared category. Nothing is applied or stored. Null when the server
+     * could not be read; an absent key reads as an empty summary.
+     */
+    suspend fun serverSummary(playlistId: String): com.aeriotv.android.core.sync.SetupSourceChoice.Summary? =
+        kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) {
+            val row = playlistDao.byId(playlistId) ?: return@withContext null
+            val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext null
+            val base = repository.get().effectiveBaseUrl(row)
+            val r = runCatching { client.appDataGet(base, apiKey, DsyncBucket.Main.wire) }.getOrNull()
+                ?: return@withContext null
+            if (r.status == 404) return@withContext com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
+            if (!r.ok) {
+                Log.w(TAG, "[DSYNC] setup probe status=${r.status}")
+                return@withContext null
+            }
+            val root = runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull()
+            val bucket = (root?.let { DsyncV2.decode(it) } as? DsyncV2.Decode.Ok)?.bucket
+                ?: return@withContext com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
+            val out = LinkedHashMap<String, com.aeriotv.android.core.sync.SetupSourceChoice.Category>()
+            DsyncCoexistence.FORCE_KEYS.forEach { key ->
+                val env = (DsyncV2.category(bucket, key) as? DsyncDecode.Ok)?.envelope ?: return@forEach
+                out[key.suffix] = com.aeriotv.android.core.sync.SetupSourceChoice.Category(
+                    rows = DsyncCoexistence.rowCount(key, env.data),
+                    updatedAt = env.updatedAt * 1000,
+                    fingerprint = DsyncCoexistence.fingerprint(key, env.data),
+                )
+            }
+            Log.i(TAG, "[DSYNC] setup probe ${out.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
+            com.aeriotv.android.core.sync.SetupSourceChoice.Summary(out)
+        }
+
     /** Settings > Sync Now: pull, then flush anything waiting. */
     fun syncNow() {
         val s = session ?: return
@@ -1017,6 +1079,16 @@ class DispatcharrSyncManager @Inject constructor(
     /** One pulled category (v1 rules per category, section 6). */
     private suspend fun processCategory(s: Session, key: DsyncKey, env: DsyncEnvelope, bytes: Int) {
         val raw = env.raw
+        // Rule 4 (Coexistence): the user chose Google Drive for this base user.
+        // The server copy is recorded as consumed without applying it, and the
+        // key goes up whole from local (writeLocked force path).
+        if (isForced(s, key)) {
+            saveAfter(s, key, raw, env.updatedAt, env.deviceId, env.data)
+            setDirty(s, key, true)
+            Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes not applied: replacing with this device's copy (user chose Google Drive)")
+            s.read += key
+            return
+        }
         val localAt = state.getLong(k("at", s, key), 0L)
         val localDev = state.getString(k("dev", s, key), "").orEmpty()
         // Rule 2 (Coexistence): the first time this device reads this key for
@@ -1224,19 +1296,35 @@ class DispatcharrSyncManager @Inject constructor(
         // Every PUT reads the key first: row categories merge, whole-value
         // categories keep the newer side, and every other category in the key
         // is re-emitted at its current server value.
-        when (refreshBeforePut(s, c, b, key)) {
+        val force = isForced(s, key)
+        when (refreshBeforePut(s, c, b, key, force)) {
             Refresh.Unreachable -> { retryLater(s, key); return }
             Refresh.RemoteTook -> return
             Refresh.Ok -> Unit
         }
         val raw = rawOf(s, key)
-        val base = raw?.get("data") as? JsonObject
+        // A forced replace builds row categories from local alone: no server
+        // rows are merged in or kept. Whole-value categories keep their base,
+        // which only round-trips names and members this device does not own.
+        val base = if (force && key in DsyncCoexistence.FORCE_ROW_KEYS) null else raw?.get("data") as? JsonObject
         val now = System.currentTimeMillis() / 1000
         val data = runCatching { build(s, key, base, now) }
             .onFailure { Log.w(TAG, "[DSYNC] build ${key.suffix} failed: ${it.javaClass.simpleName}") }
             .getOrNull() ?: return
         if (!s.live() || ProfileScope.token.value != s.token) return
+        if (force && DsyncCoexistence.isEmptyData(key, data)) {
+            // Never write an empty list over the server copy: the server copy
+            // stays and the next pull applies it here (stamp reset to 0).
+            clearForced(s, key)
+            setDirty(s, key, false)
+            state.edit().putLong(k("at", s, key), 0L).putString(k("dev", s, key), "").commit()
+            Log.i(TAG, "[DSYNC] force push ${key.suffix} skipped: no local rows; server copy kept")
+            scope.launch { pullAll(s, "force-empty") }
+            return
+        }
+        if (force) Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)} (user chose Google Drive)")
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
+            if (force) clearForced(s, key)
             markSent(s, key)
             clearAwaiting(s, key)
             if (key == DsyncKey.Profiles) {
@@ -1261,6 +1349,7 @@ class DispatcharrSyncManager @Inject constructor(
             when (put(s, c, b, key, value, data)) {
                 PutStatus.Ok -> {
                     s.resend -= key
+                    if (force) clearForced(s, key)
                     markSent(s, key)
                     clearAwaiting(s, key)
                     if (key == DsyncKey.Profiles) {
@@ -1334,7 +1423,7 @@ class DispatcharrSyncManager @Inject constructor(
      * this device last read or wrote it, rows merge into local state first,
      * and a newer whole value is taken instead of overwriting it.
      */
-    private suspend fun refreshBeforePut(s: Session, c: Conn, b: DsyncBucket, key: DsyncKey): Refresh {
+    private suspend fun refreshBeforePut(s: Session, c: Conn, b: DsyncBucket, key: DsyncKey, force: Boolean = false): Refresh {
         val f = fetchBucket(c, b)
         val got = when (f) {
             Fetched.Failed -> return Refresh.Unreachable
@@ -1348,6 +1437,10 @@ class DispatcharrSyncManager @Inject constructor(
         val d = DsyncV2.category(got.bucket, key) as? DsyncDecode.Ok ?: return Refresh.Ok
         val env = d.envelope
         s.present += key
+        // Forced replace (Rule 4): the bucket is saved so the PUT round-trips
+        // every other category, but this key's server copy is neither merged
+        // nor taken, whatever its stamp (no remoteWins, no consumed check).
+        if (force) return Refresh.Ok
         val at = state.getLong(k("at", s, key), 0L)
         val dev = state.getString(k("dev", s, key), "").orEmpty()
         if (env.updatedAt == at && env.deviceId == dev && (rawOf(s, key)?.get("data") as? JsonObject) == env.data) return Refresh.Ok

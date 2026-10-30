@@ -705,6 +705,9 @@ fun AerioTVNavHost(
                 }
 
                 LaunchedEffect(state.phase) {
+                    // Cancel on "Which setup should this device start from?" came back
+                    // here on purpose: stay on Welcome with the selections kept.
+                    if (com.aeriotv.android.feature.onboarding.WelcomeSyncChain.consumeReturnedFromChoice()) return@LaunchedEffect
                     if (state.phase == PlaylistViewModel.Phase.ChannelsReady) {
                         // A Drive restore that activated a Dispatcharr Direct
                         // Connect playlist with Dispatcharr Sync off continues
@@ -796,6 +799,7 @@ fun AerioTVNavHost(
                         if (email == null) {
                             googleSignInInFlight = false
                             chainDispatcharr = false
+                            syncVm.releaseHeld()
                             android.widget.Toast.makeText(
                                 context,
                                 "Sign-in cancelled or failed.",
@@ -816,6 +820,7 @@ fun AerioTVNavHost(
                             com.aeriotv.android.core.sync.DriveSyncManager.RequestResult.Failed, null -> {
                                 googleSignInInFlight = false
                                 chainDispatcharr = false
+                                syncVm.releaseHeld()
                                 android.widget.Toast.makeText(
                                     context,
                                     "Drive authorization failed.",
@@ -863,6 +868,10 @@ fun AerioTVNavHost(
                         if (googleSignInInFlight) return@onCont
                         if (drive) com.aeriotv.android.feature.onboarding.WelcomeSyncChain.markAnswered(com.aeriotv.android.core.sync.SyncProviderId.GoogleDrive)
                         if (dispatcharr) com.aeriotv.android.feature.onboarding.WelcomeSyncChain.markAnswered(com.aeriotv.android.core.sync.SyncProviderId.Dispatcharr)
+                        com.aeriotv.android.feature.onboarding.WelcomeSyncChain.keepSelection(drive, dispatcharr)
+                        // Rule 4: with both selected, Drive restores playlists and
+                        // credentials only; shared data waits for the setup choice.
+                        if (drive && dispatcharr && syncBuildConfigured) syncVm.holdSharedForChoice()
                         if (!drive) {
                             goDispatcharr()
                             return@onCont
@@ -885,6 +894,7 @@ fun AerioTVNavHost(
                     // list is empty; user can reach Settings -> Change playlist later.
                     // The flag stops MAIN's NeedsUrl guard from bouncing right back.
                     onSkip = {
+                        syncVm.releaseHeld()
                         vm.onboardingSkipped = true
                         navController.navigate(Routes.MAIN) {
                             popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
@@ -1119,6 +1129,16 @@ fun AerioTVNavHost(
                     com.aeriotv.android.feature.onboarding.DispatcharrSyncStepScreen(
                         autoEnable = vm.enableDispatcharrSyncAfterConnect,
                         qrSignIn = qrSignIn,
+                        // Rule 4 prompt Cancel: back to Welcome, selections kept.
+                        onCancel = {
+                            syncStepFor = null
+                            qrSignIn = null
+                            vm.enableDispatcharrSyncAfterConnect = false
+                            com.aeriotv.android.feature.onboarding.WelcomeSyncChain.markReturnedFromChoice()
+                            navController.navigate(Routes.WELCOME) {
+                                popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
+                            }
+                        },
                         onDone = {
                             if (syncStepFor == null) return@DispatcharrSyncStepScreen
                             val pid = syncStepFor

@@ -248,10 +248,12 @@ class DriveSyncManager @Inject constructor(
         token: String,
         enabled: Set<SyncCategory>,
         replace: Boolean = false,
+        /** Rule 4: the user chose Google Drive, so apply even a category Dispatcharr Sync owns. */
+        ignoreOwnership: Boolean = false,
     ): Map<SyncCategory, Boolean> {
         val result = mutableMapOf<SyncCategory, Boolean>()
         enabled.forEach { category ->
-            val ok = runCatching { pullCategory(token, category, replace) }
+            val ok = runCatching { pullCategory(token, category, replace, ignoreOwnership) }
                 .onFailure { Log.w(TAG, "pull ${category.name} failed", it) }
                 .getOrDefault(false)
             result[category] = ok
@@ -304,6 +306,11 @@ class DriveSyncManager @Inject constructor(
         }
 
     private suspend fun pushCategoryDefaultProfile(token: String, category: SyncCategory): Boolean {
+        // Rule 4: never push this device's (not yet chosen) shared data over the backup.
+        if (sharedHeld() && category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES) {
+            Log.i(TAG, "[DRIVE] push ${category.name} held: waiting for the setup choice")
+            return true
+        }
         val payload = when (category) {
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
             SyncCategory.WatchProgress -> json.encodeToString(buildWatchProgressSnapshot())
@@ -316,8 +323,8 @@ class DriveSyncManager @Inject constructor(
         return driveClient.upload(token, category.fileName, payload).isSuccess
     }
 
-    private suspend fun pullCategory(token: String, category: SyncCategory, replace: Boolean = false): Boolean =
-        pullCategoryDetailed(token, category, replace).let { it == PullOutcome.Applied || it == PullOutcome.Owned }
+    private suspend fun pullCategory(token: String, category: SyncCategory, replace: Boolean = false, ignoreOwnership: Boolean = false): Boolean =
+        pullCategoryDetailed(token, category, replace, ignoreOwnership).let { it == PullOutcome.Applied || it == PullOutcome.Owned }
 
     /** Tri-state pull so [pullAllTracked] can tell "no remote snapshot yet"
      * (fresh account, not an error) apart from a genuine failure. The Boolean
@@ -326,10 +333,16 @@ class DriveSyncManager @Inject constructor(
         token: String,
         category: SyncCategory,
         replace: Boolean = false,
+        ignoreOwnership: Boolean = false,
     ): PullOutcome {
+        // Rule 4: a shared category waits while the setup choice is pending.
+        if (sharedHeld() && category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES) {
+            Log.i(TAG, "[DRIVE] pull ${category.name} held: waiting for the setup choice")
+            return PullOutcome.Owned
+        }
         // Coexistence Rule 1 (docs/DispatcharrSyncSchema.md): Drive still
         // pushes this category as a backup, but does not apply it on pull.
-        if (runCatching { dispatcharrSync.get().ownsCategory(category) }.getOrDefault(false)) {
+        if (!ignoreOwnership && runCatching { dispatcharrSync.get().ownsCategory(category) }.getOrDefault(false)) {
             Log.i(TAG, "[DRIVE] pull ${category.name} skipped: Dispatcharr Sync owns it")
             return PullOutcome.Owned
         }
@@ -363,6 +376,88 @@ class DriveSyncManager @Inject constructor(
     }
 
     private enum class PullOutcome { Applied, NoRemote, Failed, Owned }
+
+    // ── Rule 4: choosing a source when both hold data ─────────────────────
+
+    private val setupState = context.getSharedPreferences("aerio_setup_source", Context.MODE_PRIVATE)
+
+    /**
+     * Onboarding with both providers selected: hold the shared categories
+     * (pull and push) until the user's setup choice. Playlists and
+     * Credentials still restore, since the probe needs them. Expires after
+     * [HOLD_TTL_MS] so an abandoned flow never blocks Drive for good.
+     */
+    fun holdShared() {
+        setupState.edit().putLong(K_HOLD, System.currentTimeMillis()).commit()
+        Log.i(TAG, "[DRIVE] shared categories held until the setup choice")
+    }
+
+    fun sharedHeld(): Boolean {
+        val at = setupState.getLong(K_HOLD, 0L)
+        return at > 0L && System.currentTimeMillis() - at < HOLD_TTL_MS
+    }
+
+    fun releaseHold() {
+        if (!setupState.contains(K_HOLD)) return
+        setupState.edit().remove(K_HOLD).commit()
+        Log.i(TAG, "[DRIVE] setup hold released")
+    }
+
+    /** Apply the Drive snapshot's shared categories now (the user chose Google Drive). */
+    suspend fun applySharedNow(ignoreOwnership: Boolean): Map<SyncCategory, Boolean> {
+        val token = ensureSignedIn() ?: return emptyMap()
+        val wanted = SyncCategory.entries
+            .filter { it in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES }
+            .filter { appPreferences.syncCategoryEnabled(it).first() }
+            .toSet()
+        Log.i(TAG, "[DRIVE] applying backup (user chose Google Drive) categories=${wanted.map { it.name }}")
+        return pullAll(token, wanted, ignoreOwnership = ignoreOwnership)
+    }
+
+    /** The user chose Dispatcharr: the next Drive push overwrites the backup with this device's copy. */
+    suspend fun replaceBackupOnNextPush() {
+        appPreferences.setSyncInitialPullDone(true)
+        Log.i(TAG, "[DRIVE] next push replaces backup (user chose Dispatcharr)")
+        DriveSyncWorker.enqueueOneShotPush(context)
+    }
+
+    /**
+     * Read-only probe for SetupSourceChoice: the Drive snapshot's shared
+     * categories, summarized. Nothing is applied. Null when Drive could not
+     * be read; a missing file reads as an empty category.
+     */
+    suspend fun readSharedSummary(token: String): SetupSourceChoice.Summary? = runCatching {
+        val files = driveClient.listAll(token).associate { (id, name) -> name to id }
+        suspend fun body(c: SyncCategory): String? {
+            val id = files[c.fileName] ?: return null
+            return driveClient.download(token, id) ?: throw IllegalStateException("download ${c.name}")
+        }
+        val out = LinkedHashMap<String, SetupSourceChoice.Category>()
+        body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) }?.let { f ->
+            out["favorites"] = SetupSourceChoice.Category(f.entries.size, f.envelope.lastModified)
+        }
+        body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it) }?.let { w ->
+            // Only rows Dispatcharr Sync can carry (movies and episodes, no recordings).
+            val rows = w.entries.filter { !it.videoId.contains("://") && (it.vodType == "movie" || it.vodType == "episode") }
+            val fp = rows.takeIf { r -> r.all { it.title.isNotBlank() } }?.let { r -> SetupSourceChoice.fingerprint(r.map { it.title }) }
+            out["progress"] = SetupSourceChoice.Category(rows.size, w.envelope.lastModified, fp)
+        }
+        body(SyncCategory.Reminders)?.let { json.decodeFromString<RemindersSnapshot>(it) }?.let { r ->
+            out["reminders"] = SetupSourceChoice.Category(
+                r.entries.size, r.envelope.lastModified,
+                SetupSourceChoice.fingerprint(r.entries.map { "${it.channelName}|${it.startMillis / 1000}" }),
+            )
+        }
+        body(SyncCategory.Watchlist)?.let { json.decodeFromString<WatchlistSnapshot>(it) }?.let { w ->
+            out["watchlist"] = SetupSourceChoice.Category(w.entries.count { it.removedAt == null }, w.envelope.lastModified)
+            out["hiddenTitles"] = SetupSourceChoice.Category(w.hidden.count { it.unhiddenAt == null }, w.envelope.lastModified)
+        }
+        body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) }?.let { p ->
+            out["settings"] = SetupSourceChoice.Category(p.keys.size + p.tv.size + p.mobile.size, p.envelope.lastModified)
+        }
+        Log.i(TAG, "[DRIVE] setup probe ${out.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
+        SetupSourceChoice.Summary(out)
+    }.onFailure { Log.w(TAG, "[DRIVE] setup probe failed: ${it.javaClass.simpleName}") }.getOrNull()
 
     // ── Snapshot builders ─────────────────────────────────────────────────
 
@@ -765,5 +860,8 @@ class DriveSyncManager @Inject constructor(
          * tokens last ~1h; refreshing at 50min avoids handing out a token
          * that's about to expire mid-sync. */
         private const val TOKEN_TTL_MS = 50L * 60L * 1000L
+        private const val K_HOLD = "holdShared"
+        /** An abandoned setup choice stops holding Drive after 30 minutes. */
+        private const val HOLD_TTL_MS = 30L * 60L * 1000L
     }
 }

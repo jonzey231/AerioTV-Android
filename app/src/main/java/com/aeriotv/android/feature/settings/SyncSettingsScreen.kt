@@ -150,6 +150,39 @@ fun SyncSettingsScreen(
     val credsSyncDisclosed by viewModel.credentialsSyncDisclosed
         .collectAsStateWithLifecycle(initialValue = true)
     var credsSyncDisclosureOpen by remember { mutableStateOf(false) }
+    // Rule 4: turning on the SECOND provider while both hold differing data
+    // asks which setup to keep first; Cancel leaves the switch off.
+    val setupScope = rememberCoroutineScope()
+    var setupAsk by remember { mutableStateOf<Pair<com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe, Boolean>?>(null) }
+    var setupProbing by remember { mutableStateOf(false) }
+    val enableSecond: (Boolean, () -> Unit) -> Unit = { enablingDrive, plain ->
+        if (!setupProbing) {
+            setupProbing = true
+            setupScope.launch {
+                val p = runCatching { viewModel.probeSetupSource() }.getOrNull()
+                setupProbing = false
+                when (p?.decision) {
+                    is com.aeriotv.android.core.sync.SetupSourceChoice.Decision.Ask -> setupAsk = p to enablingDrive
+                    com.aeriotv.android.core.sync.SetupSourceChoice.Decision.UseDrive ->
+                        viewModel.applySetupSourceAndEnable(com.aeriotv.android.core.sync.SetupSourceChoice.Source.Drive, p.playlistId, enablingDrive)
+                    com.aeriotv.android.core.sync.SetupSourceChoice.Decision.UseDispatcharr ->
+                        viewModel.applySetupSourceAndEnable(com.aeriotv.android.core.sync.SetupSourceChoice.Source.Dispatcharr, p.playlistId, enablingDrive)
+                    null -> plain()
+                }
+            }
+        }
+    }
+    setupAsk?.let { (p, enablingDrive) ->
+        com.aeriotv.android.feature.onboarding.SetupSourceDialog(
+            drive = p.drive,
+            dsync = p.dsync,
+            onContinue = { source ->
+                setupAsk = null
+                viewModel.applySetupSourceAndEnable(source, p.playlistId, enablingDrive)
+            },
+            onCancel = { setupAsk = null },
+        )
+    }
 
     // Silently restore a persisted Drive session on open so the screen shows
     // signed-in (and Push/Pull work) without a manual re-login.
@@ -256,7 +289,8 @@ fun SyncSettingsScreen(
                         subtitle = "Sync playlists, preferences, and watch progress",
                         checked = masterEnabled,
                         onCheckedChange = { enabled ->
-                            viewModel.setMasterEnabled(enabled)
+                            if (enabled && dsyncOn) enableSecond(true) { viewModel.setMasterEnabled(true) }
+                            else viewModel.setMasterEnabled(enabled)
                             // First time sync is turned on, disclose that server
                             // credentials are part of the Drive snapshot.
                             if (enabled && !credsSyncDisclosed) {
@@ -374,7 +408,10 @@ fun SyncSettingsScreen(
                             subtitle = if (dsyncAvailable) "Store sync data on your Dispatcharr server under each profile"
                             else "Needs a Dispatcharr playlist",
                             checked = dsyncOn,
-                            onCheckedChange = { viewModel.setDispatcharrSyncEnabled(it) },
+                            onCheckedChange = { on ->
+                                if (on && masterEnabled) enableSecond(false) { viewModel.setDispatcharrSyncEnabled(true) }
+                                else viewModel.setDispatcharrSyncEnabled(on)
+                            },
                         )
                         if (dsyncOn) {
                             SyncTileActionRow(

@@ -686,6 +686,63 @@ that exist but could not be translated. After the cache is built, a row
 that still cannot be translated is a real miss and stays on the device.
 Drive snapshots carry local ids and need no translation.
 
+Rule 4: choosing a source when both hold data (2026-10-30). When Google
+Drive and Dispatcharr Sync both hold data for the signed-in Dispatcharr user
+(the base profile; sub-profiles never take part) and they differ, the user
+picks which setup the device starts from, and the other side is replaced
+with it. It runs in onboarding (both providers selected, or Drive only when
+the restored playlist is Dispatcharr and the user then turns Dispatcharr
+Sync on) and in Settings > Sync when the second provider is turned on.
+
+Probe before apply: with both selected in onboarding, the Drive restore
+applies Playlists and Credentials only (Dispatcharr never holds them and the
+probe needs them); the shared categories are held, neither pulled nor
+pushed, until the choice (the hold expires after 30 minutes). The probe
+reads the Drive files and the user's App Data key (`GET` on the existing
+app-data path, no new server path) without applying either, and summarizes
+per shared category (favorites, recents, collections, progress, reminders,
+watchlist, hiddenTitles, hiddenGroups, groupOrder, settings): row count,
+`updatedAt`, and a content fingerprint where both sides carry the same
+identifiers (progress by title, reminders by channel name and start time).
+Favorites, recents, collections, watchlist, and hidden titles use local ids
+on Drive and server ids here, and settings, hidden groups, and group order
+are stored differently, so their equality cannot be proven from the data;
+when non-empty on either side they count as different.
+
+| Drive | Dispatcharr | Result |
+| --- | --- | --- |
+| empty | empty | Dispatcharr (nothing to replace) |
+| has data | empty | Google Drive, no prompt |
+| empty | has data | Dispatcharr, no prompt |
+| has data | has data, every category provably equal | Dispatcharr, no prompt |
+| has data | has data, any category differs or cannot be proven equal | Ask |
+
+The prompt: "Which setup should this device start from?", two cards
+("Dispatcharr" and "Google Drive", each "Updated <relative time>" and up to
+four non-zero counts, then "and more"), the line "The other will be
+replaced with the setup you choose.", and Continue or Cancel. The more
+recently updated side is selected when it opens (ties: Dispatcharr).
+Cancel in onboarding returns to Welcome with the selections kept; in
+Settings it leaves the switch off.
+
+Google Drive chosen: the Drive snapshot applies (ignoring Rule 1 ownership
+in Settings, where Dispatcharr already owns the data), then every shared key
+of the base user is pushed whole from this device. A persisted per-key force
+flag makes the pull record the server copy as consumed without applying it
+(no `remoteWins`, no consumed-stamp check, no self-heal) and makes the PUT
+skip the merge in the read-before-put; row categories build from local only
+(no server rows merged or kept). Rule 3 still applies: a key whose cache is
+not ready stays dirty and forced until it is sent, and a key with no local
+rows is never written empty (its force flag clears and the server copy
+applies on the next pull). The flag clears per key on a successful PUT. Log
+line: `[DSYNC] force push <key> rows=<n> (user chose Google Drive)`.
+Profiles, remoteMap, and radioDefault are not forced.
+
+Dispatcharr chosen: the held Drive categories are never applied; the normal
+first pull applies the server copy; then Drive's next push replaces the
+backup. Log line: `[DRIVE] next push replaces backup (user chose
+Dispatcharr)`. Rule 1 precedence holds afterward in both cases.
+
 ## 10b. Sync providers record (`syncProviders`)
 
 Every backup carries which sync providers the device owner runs, so a new device can offer the same ones.
