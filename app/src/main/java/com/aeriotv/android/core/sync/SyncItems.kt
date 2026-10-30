@@ -168,7 +168,7 @@ object SyncItemCatalog {
             SyncItem("collections", "Collections", isData = true, dsyncSuffix = "collections"),
             SyncItem("watchProgress", "Watch Progress", isData = true, category = SyncCategory.WatchProgress, dsyncSuffix = "progress"),
             SyncItem("reminders", "Reminders", isData = true, category = SyncCategory.Reminders, dsyncSuffix = "reminders"),
-            SyncItem("watchlist", "My List", isData = true, category = SyncCategory.Watchlist, dsyncSuffix = "watchlist"),
+            SyncItem("watchlist", "Watchlist", isData = true, category = SyncCategory.Watchlist, dsyncSuffix = "watchlist"),
             SyncItem("hiddenTitles", "Hidden Titles", isData = true, dsyncSuffix = "hiddenTitles"),
             SyncItem("hiddenGroups", "Hidden Groups", isData = true, dsyncSuffix = "hiddenGroups"),
             // The per-playlist group choices ride `settings` but follow this toggle (Apple parity).
