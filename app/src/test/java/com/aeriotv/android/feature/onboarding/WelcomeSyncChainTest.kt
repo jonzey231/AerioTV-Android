@@ -58,4 +58,21 @@ class WelcomeSyncChainTest {
             WelcomeSyncChain.filterOffers(listOf(SyncProviderId.Dispatcharr, SyncProviderId.GoogleDrive)))
         WelcomeSyncChain.resetForTest()
     }
+
+    @Test fun oldBackupWithDispatcharrRestoreOffersUpdateFirst() = assertEquals(
+        listOf(Step.DriveRestore, Step.BackupUpdate, Step.DispatcharrSync, Step.AddProfiles, Step.Main),
+        WelcomeSyncChain.plan(drive = true, dispatcharr = false, restoredIsDispatcharr = true, driveAvailable = true, backupNeedsUpdate = true),
+    )
+
+    @Test fun bothSelectedOldBackupOffersUpdateBeforeSync() = assertEquals(
+        listOf(Step.DriveRestore, Step.BackupUpdate, Step.DispatcharrSync, Step.AddProfiles, Step.Main),
+        WelcomeSyncChain.plan(drive = true, dispatcharr = true, restoredIsDispatcharr = true, driveAvailable = true, backupNeedsUpdate = true),
+    )
+
+    @Test fun updateNeedsADispatcharrRestoreAndDrive() {
+        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = true, restoredIsDispatcharr = false, backupNeedsUpdate = true))
+        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = false, restoredIsDispatcharr = true, backupNeedsUpdate = true))
+        assertFalse(WelcomeSyncChain.showBackupUpdate(drive = true, restoredIsDispatcharr = true, backupNeedsUpdate = false))
+        assertEquals(listOf(Step.DriveRestore, Step.Main), WelcomeSyncChain.plan(true, false, false, true, backupNeedsUpdate = true))
+    }
 }

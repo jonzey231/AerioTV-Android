@@ -702,12 +702,36 @@ reads the Drive files and the user's App Data key (`GET` on the existing
 app-data path, no new server path) without applying either, and summarizes
 per shared category (favorites, recents, collections, progress, reminders,
 watchlist, hiddenTitles, hiddenGroups, groupOrder, settings): row count,
-`updatedAt`, and a content fingerprint where both sides carry the same
-identifiers (progress by title, reminders by channel name and start time).
-Favorites, recents, collections, watchlist, and hidden titles use local ids
-on Drive and server ids here, and settings, hidden groups, and group order
-are stored differently, so their equality cannot be proven from the data;
-when non-empty on either side they count as different.
+`updatedAt`, and a content fingerprint over canonical row identities. A
+category whose rows cannot all be resolved to canonical ids has no
+fingerprint and counts as different when non-empty on either side.
+
+Canonical ids and the Drive id migration (2026-10-30). The canonical
+identity of each shared category is the one Dispatcharr Sync puts on the
+wire: Dispatcharr channel ids for favorites, recents, and collection
+members; the type plus the Dispatcharr VOD id for progress, watchlist, and
+hidden titles; channel name and start second for reminders; group names for
+hidden groups and group order; and schema setting names with their values
+for settings (blank values left out on both sides). Drive snapshots keep
+their local ids and gain nullable fields beside them, filled on every Drive
+push when the active playlist is Dispatcharr and the id resolves (an
+unresolved id stays null and never holds a push): `dispatcharrChannelId` on
+favorites entries, `dispatcharrVodId` on watch progress, watchlist, and
+hidden title entries, and `dispatcharrChannelIds` (local channel id to
+Dispatcharr channel id) on the preferences snapshot for the channels that
+recents and collections reference. Older files decode unchanged and the
+envelope version stays 1. The probe falls back to resolving local ids for
+rows written before these fields existed. When a Drive restore (onboarding,
+or Settings > Sync with Drive on) finds a backup in the old format and the
+restored playlists include a Dispatcharr playlist, AerioTV offers "Your
+backup needs an update" with "Update backup" and "Not now". Nothing is
+rewritten without "Update backup", which rewrites each shared Drive file
+once with the ids filled in, keeping its envelope and every other field,
+gated per base user and category by a saved flag; the VOD categories wait,
+flag unset, while the movie catalog is not built and a movie row does not
+resolve, and finish on a later sync. "Not now" keeps the old format and the
+prompt-when-unsure behavior; onboarding does not show the offer again that
+app session, and Settings offers it at most once per app session.
 
 | Drive | Dispatcharr | Result |
 | --- | --- | --- |

@@ -54,6 +54,8 @@ class DriveSyncManager @Inject constructor(
     /** Coexistence Rule 1: Dispatcharr Sync owns the shared categories for its playlist's user. */
     private val dispatcharrSync: javax.inject.Provider<com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager>,
     private val providersStore: SyncProvidersStore,
+    /** Rule 4 canonical ids (DriveCanon): Dispatcharr ids written next to local ids. */
+    private val idLookup: DriveIdLookup,
 ) {
     /** The record every file of the current push carries (envelope.syncProviders). */
     @Volatile private var pushProviders: SyncProvidersRecord? = null
@@ -313,11 +315,11 @@ class DriveSyncManager @Inject constructor(
         }
         val payload = when (category) {
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
-            SyncCategory.WatchProgress -> json.encodeToString(buildWatchProgressSnapshot())
+            SyncCategory.WatchProgress -> json.encodeToString(withCanonicalIds(buildWatchProgressSnapshot()))
             SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
-            SyncCategory.Favorites -> json.encodeToString(buildFavoritesSnapshot())
-            SyncCategory.Watchlist -> json.encodeToString(buildWatchlistSnapshot())
-            SyncCategory.Preferences -> json.encodeToString(buildPreferencesSnapshot())
+            SyncCategory.Favorites -> json.encodeToString(withCanonicalIds(buildFavoritesSnapshot()))
+            SyncCategory.Watchlist -> json.encodeToString(withCanonicalIds(buildWatchlistSnapshot()))
+            SyncCategory.Preferences -> json.encodeToString(withCanonicalIds(buildPreferencesSnapshot()))
             SyncCategory.Credentials -> json.encodeToString(buildCredentialsSnapshot())
         }
         return driveClient.upload(token, category.fileName, payload).isSuccess
@@ -433,31 +435,205 @@ class DriveSyncManager @Inject constructor(
             return driveClient.download(token, id) ?: throw IllegalStateException("download ${c.name}")
         }
         val out = LinkedHashMap<String, SetupSourceChoice.Category>()
-        body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) }?.let { f ->
-            out["favorites"] = SetupSourceChoice.Category(f.entries.size, f.envelope.lastModified)
-        }
-        body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it) }?.let { w ->
-            // Only rows Dispatcharr Sync can carry (movies and episodes, no recordings).
-            val rows = w.entries.filter { !it.videoId.contains("://") && (it.vodType == "movie" || it.vodType == "episode") }
-            val fp = rows.takeIf { r -> r.all { it.title.isNotBlank() } }?.let { r -> SetupSourceChoice.fingerprint(r.map { it.title }) }
-            out["progress"] = SetupSourceChoice.Category(rows.size, w.envelope.lastModified, fp)
-        }
-        body(SyncCategory.Reminders)?.let { json.decodeFromString<RemindersSnapshot>(it) }?.let { r ->
-            out["reminders"] = SetupSourceChoice.Category(
-                r.entries.size, r.envelope.lastModified,
-                SetupSourceChoice.fingerprint(r.entries.map { "${it.channelName}|${it.startMillis / 1000}" }),
-            )
-        }
-        body(SyncCategory.Watchlist)?.let { json.decodeFromString<WatchlistSnapshot>(it) }?.let { w ->
-            out["watchlist"] = SetupSourceChoice.Category(w.entries.count { it.removedAt == null }, w.envelope.lastModified)
-            out["hiddenTitles"] = SetupSourceChoice.Category(w.hidden.count { it.unhiddenAt == null }, w.envelope.lastModified)
-        }
-        body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) }?.let { p ->
-            out["settings"] = SetupSourceChoice.Category(p.keys.size + p.tv.size + p.mobile.size, p.envelope.lastModified)
+        val now = System.currentTimeMillis()
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = idLookup.activeDispatcharr()
+            val channels = row?.let { runCatching { idLookup.channels(it) }.getOrNull() }.orEmpty()
+            val host = row?.let { idLookup.host(it) }
+            body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) }?.let { f ->
+                out["favorites"] = DriveCanon.favorites(f, DriveCanon.Ids(channels = channels))
+            }
+            body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it) }?.let { w ->
+                // Snapshots older than the id migration resolve their local ids here.
+                val (movies, episodes) = DriveCanon.progressNeeds(w)
+                val ids = row?.let { r ->
+                    runCatching { DriveCanon.Ids(movies = idLookup.movies(r, movies), episodes = idLookup.episodes(r, episodes, network = true)) }.getOrNull()
+                } ?: DriveCanon.Ids()
+                out["progress"] = DriveCanon.progress(w, ids, now)
+            }
+            body(SyncCategory.Reminders)?.let { json.decodeFromString<RemindersSnapshot>(it) }?.let { r ->
+                out["reminders"] = DriveCanon.reminders(r, now)
+            }
+            body(SyncCategory.Watchlist)?.let { json.decodeFromString<WatchlistSnapshot>(it) }?.let { w ->
+                val ids = row?.let { r -> runCatching { DriveCanon.Ids(movies = idLookup.movies(r, DriveCanon.watchlistMovieNeeds(w))) }.getOrNull() }
+                    ?: DriveCanon.Ids()
+                out["watchlist"] = DriveCanon.watchlist(w, ids, host)
+                out["hiddenTitles"] = DriveCanon.hiddenTitles(w, ids, host)
+            }
+            body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) }?.let { p ->
+                val ids = DriveCanon.Ids(channels = channels)
+                out["recents"] = DriveCanon.recentsCategory(p, ids)
+                out["collections"] = DriveCanon.collectionsCategory(p, ids)
+                out["hiddenGroups"] = DriveCanon.hiddenGroupsCategory(p)
+                out["groupOrder"] = DriveCanon.groupOrderCategory(p)
+                val lanes = appPreferences.driveLanesAsDsync(
+                    mapOf(SyncScope.LANE_ALL to p.keys, SyncScope.LANE_TV to p.tv, SyncScope.LANE_MOBILE to p.mobile),
+                    row?.id,
+                )
+                out["settings"] = DriveCanon.settingsCategory(lanes, p.envelope.lastModified)
+            }
         }
         Log.i(TAG, "[DRIVE] setup probe ${out.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
         SetupSourceChoice.Summary(out)
     }.onFailure { Log.w(TAG, "[DRIVE] setup probe failed: ${it.javaClass.simpleName}") }.getOrNull()
+
+    // ── Rule 4 canonical ids (DriveCanon) ─────────────────────────────────
+
+    /**
+     * Every push writes the Dispatcharr ids next to the local ids when the
+     * active playlist is Dispatcharr. Lookups are local (channel snapshot,
+     * VOD catalog, saved episode map); an id that does not resolve stays
+     * null and never holds the push.
+     */
+    private suspend fun withCanonicalIds(s: FavoritesSnapshot): FavoritesSnapshot = runCatching {
+        val row = idLookup.activeDispatcharr() ?: return s
+        DriveCanon.enrichFavorites(s, DriveCanon.Ids(channels = idLookup.channels(row))).first
+    }.getOrDefault(s)
+
+    private suspend fun withCanonicalIds(s: WatchProgressSnapshot): WatchProgressSnapshot = runCatching {
+        val row = idLookup.activeDispatcharr() ?: return s
+        val (movies, episodes) = DriveCanon.progressNeeds(s)
+        DriveCanon.enrichProgress(s, DriveCanon.Ids(movies = idLookup.movies(row, movies), episodes = idLookup.episodes(row, episodes, network = false))).first
+    }.getOrDefault(s)
+
+    private suspend fun withCanonicalIds(s: WatchlistSnapshot): WatchlistSnapshot = runCatching {
+        val row = idLookup.activeDispatcharr() ?: return s
+        DriveCanon.enrichWatchlist(s, DriveCanon.Ids(movies = idLookup.movies(row, DriveCanon.watchlistMovieNeeds(s)))).first
+    }.getOrDefault(s)
+
+    private suspend fun withCanonicalIds(s: PreferencesSnapshot): PreferencesSnapshot = runCatching {
+        val row = idLookup.activeDispatcharr() ?: return s
+        DriveCanon.enrichPreferences(s, DriveCanon.Ids(channels = idLookup.channels(row))).first
+    }.getOrDefault(s)
+
+    private val idMigration = context.getSharedPreferences("aerio_drive_ids", Context.MODE_PRIVATE)
+
+    /**
+     * One-time id migration (Rule 4): rewrite each shared Drive snapshot once
+     * with the Dispatcharr ids filled in, keeping its envelope and every
+     * other field, so the setup prompt can prove both sides equal. Gated per
+     * playlist (the base user) and category by a persisted flag. The VOD
+     * categories wait, flag unset, while the movie catalog is not built and
+     * a movie row does not resolve (DsyncReadiness), and run again on a
+     * later sync. Logs counts only.
+     */
+    suspend fun migrateCanonicalIds(token: String, enabled: Set<SyncCategory>) =
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty() || sharedHeld()) return@withContext
+            val row = idLookup.activeDispatcharr() ?: return@withContext
+            // Never without the user's "Update backup" (BackupUpdateOffer).
+            if (!idUpdateAccepted(row.id)) return@withContext
+            val cats = listOf(SyncCategory.Favorites, SyncCategory.WatchProgress, SyncCategory.Watchlist, SyncCategory.Preferences)
+                .filter { it in enabled && !idMigration.getBoolean(migrationKey(row.id, it), false) }
+            if (cats.isEmpty()) return@withContext
+            val files = driveClient.listAll(token).associate { (id, name) -> name to id }
+            cats.forEach { c ->
+                runCatching { if (migrateCategory(token, row, c, files[c.fileName])) idMigration.edit().putBoolean(migrationKey(row.id, c), true).commit() }
+                    .onFailure { Log.w(TAG, "[DRIVE] id migration ${c.name} failed: ${it.javaClass.simpleName}") }
+            }
+        }
+
+    fun idUpdateAccepted(playlistId: String): Boolean = idMigration.getBoolean("idmig_ok|$playlistId|default", false)
+
+    /**
+     * Whether the Drive backup predates the canonical-id format
+     * (DriveCanon.backupPredatesCanonicalIds). Read only; false when Drive
+     * cannot be read.
+     */
+    suspend fun backupPredatesCanonicalIds(token: String): Boolean = runCatching {
+        val files = driveClient.listAll(token).associate { (id, name) -> name to id }
+        suspend fun body(c: SyncCategory): String? = files[c.fileName]?.let { driveClient.download(token, it) }
+        DriveCanon.backupPredatesCanonicalIds(
+            body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) },
+            body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it) },
+            body(SyncCategory.Watchlist)?.let { json.decodeFromString<WatchlistSnapshot>(it) },
+            body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) },
+        )
+    }.getOrDefault(false)
+
+    /** The user chose "Update backup": remember it (deferred VOD categories finish on later syncs) and run now. */
+    suspend fun acceptIdUpdate(playlistId: String) {
+        idMigration.edit().putBoolean("idmig_ok|$playlistId|default", true).commit()
+        Log.i(TAG, "[DRIVE] id migration accepted")
+        val token = ensureSignedIn() ?: return
+        val enabled = SyncCategory.entries.filter { appPreferences.syncCategoryEnabled(it).first() }.toSet()
+        runCatching { migrateCanonicalIds(token, enabled) }
+    }
+
+    /** Offer check for the active Dispatcharr playlist: its id, or null when nothing to offer. */
+    suspend fun idUpdateCandidate(): String? {
+        val row = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { idLookup.activeDispatcharr() } ?: return null
+        if (idUpdateAccepted(row.id)) return null
+        val token = ensureSignedIn() ?: return null
+        return row.id.takeIf { backupPredatesCanonicalIds(token) }
+    }
+
+    private fun migrationKey(playlistId: String, c: SyncCategory) = "idmig|$playlistId|default|${c.storageSuffix}"
+
+    /** True when done for good (written, nothing to fill, or no file); false to try again later. */
+    private suspend fun migrateCategory(
+        token: String,
+        row: PlaylistEntity,
+        c: SyncCategory,
+        fileId: String?,
+    ): Boolean {
+        fileId ?: return true
+        val body = driveClient.download(token, fileId) ?: return false
+        suspend fun ready() = idLookup.moviesReady(row)
+        val payload: String? = when (c) {
+            SyncCategory.Favorites -> {
+                val f = json.decodeFromString<FavoritesSnapshot>(body)
+                val ch = idLookup.channels(row)
+                // Channel ids wait for the channel list, as Dispatcharr Sync does.
+                if (ch.isEmpty() && f.entries.isNotEmpty()) return false
+                val (s, n) = DriveCanon.enrichFavorites(f, DriveCanon.Ids(channels = ch))
+                Log.i(TAG, DriveCanon.migrationLine("favorites", n))
+                if (n > 0) json.encodeToString(s) else null
+            }
+            SyncCategory.WatchProgress -> {
+                val w = json.decodeFromString<WatchProgressSnapshot>(body)
+                val (movies, episodes) = DriveCanon.progressNeeds(w)
+                val ids = DriveCanon.Ids(movies = idLookup.movies(row, movies), episodes = idLookup.episodes(row, episodes, network = true))
+                val unresolved = movies.count { it !in ids.movies }
+                if (com.aeriotv.android.core.sync.dsync.DsyncReadiness.decide(
+                        com.aeriotv.android.core.sync.dsync.DsyncKey.Progress, ready(), unresolved,
+                    ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
+                ) {
+                    Log.i(TAG, "[DRIVE] id migration: progress waiting for the VOD catalog")
+                    return false
+                }
+                val (s, n) = DriveCanon.enrichProgress(w, ids)
+                Log.i(TAG, DriveCanon.migrationLine("progress", n))
+                if (n > 0) json.encodeToString(s) else null
+            }
+            SyncCategory.Watchlist -> {
+                val w = json.decodeFromString<WatchlistSnapshot>(body)
+                val needs = DriveCanon.watchlistMovieNeeds(w)
+                val ids = DriveCanon.Ids(movies = idLookup.movies(row, needs))
+                if (com.aeriotv.android.core.sync.dsync.DsyncReadiness.decide(
+                        com.aeriotv.android.core.sync.dsync.DsyncKey.Watchlist, ready(), needs.count { it !in ids.movies },
+                    ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
+                ) {
+                    Log.i(TAG, "[DRIVE] id migration: watchlist waiting for the VOD catalog")
+                    return false
+                }
+                val (s, nw, nh) = DriveCanon.enrichWatchlist(w, ids)
+                Log.i(TAG, DriveCanon.migrationLine("watchlist", nw))
+                Log.i(TAG, DriveCanon.migrationLine("hiddenTitles", nh))
+                if (nw + nh > 0) json.encodeToString(s) else null
+            }
+            SyncCategory.Preferences -> {
+                val p = json.decodeFromString<PreferencesSnapshot>(body)
+                val ch = idLookup.channels(row)
+                if (ch.isEmpty() && DriveCanon.referencedChannels(p).isNotEmpty()) return false
+                val (s, n) = DriveCanon.enrichPreferences(p, DriveCanon.Ids(channels = ch))
+                Log.i(TAG, DriveCanon.migrationLine("recents and collections", n))
+                if (n > 0) json.encodeToString(s) else null
+            }
+            else -> null
+        }
+        return payload == null || driveClient.upload(token, c.fileName, payload).isSuccess
+    }
 
     // ── Snapshot builders ─────────────────────────────────────────────────
 

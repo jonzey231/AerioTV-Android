@@ -123,6 +123,9 @@ class VodIdResolver @Inject constructor(
         return if (prefs.contains("e:$uuid")) prefs.getInt("e:$uuid", 0) else null
     }
 
+    /** Episode uuid -> id from the saved map only (no network): Drive pushes never wait on a fetch. */
+    fun episodeIdCached(uuid: String): Int? = if (prefs.contains("e:$uuid")) prefs.getInt("e:$uuid", 0) else null
+
     /** Episode id -> local uuid; loads [seriesId]'s episode list once when unknown. */
     suspend fun episodeUuid(base: String, apiKey: String, id: Int, seriesId: Int?): String? {
         prefs.getString("E:$id", null)?.let { return it }

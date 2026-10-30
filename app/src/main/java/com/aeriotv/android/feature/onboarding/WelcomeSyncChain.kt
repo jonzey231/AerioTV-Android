@@ -11,6 +11,8 @@ object WelcomeSyncChain {
     enum class Step {
         /** Google sign-in, Drive on, restore (tryRestoreAndAdvance). */
         DriveRestore,
+        /** "Your backup needs an update" (BackupUpdateStepScreen): old-format backup, Dispatcharr playlist restored. */
+        BackupUpdate,
         /** Connect a Server, Dispatcharr entry, Dispatcharr Sync on after the connect. */
         ConnectServer,
         /** "Turn on Dispatcharr Sync?" step (autoEnable when Dispatcharr was selected). */
@@ -31,10 +33,13 @@ object WelcomeSyncChain {
         dispatcharr: Boolean,
         restoredIsDispatcharr: Boolean,
         driveAvailable: Boolean,
+        /** The restored backup predates the canonical-id format and was not declined this session. */
+        backupNeedsUpdate: Boolean = false,
     ): List<Step> {
         if (!drive && !dispatcharr) return emptyList()
         val steps = mutableListOf<Step>()
         if (drive) steps += Step.DriveRestore
+        if (showBackupUpdate(drive, restoredIsDispatcharr, backupNeedsUpdate)) steps += Step.BackupUpdate
         if (dispatcharr) {
             if (!(drive && restoredIsDispatcharr)) steps += Step.ConnectServer
             steps += Step.DispatcharrSync
@@ -49,6 +54,10 @@ object WelcomeSyncChain {
         steps += Step.Main
         return steps
     }
+
+    /** The backup update step runs right after a Drive restore that brought a Dispatcharr playlist and an old-format backup. */
+    fun showBackupUpdate(drive: Boolean, restoredIsDispatcharr: Boolean, backupNeedsUpdate: Boolean): Boolean =
+        drive && restoredIsDispatcharr && backupNeedsUpdate
 
     /** "Also back up to Google Drive?" runs after the Dispatcharr Sync step only while Drive is off and available. */
     fun showDriveOffer(driveOn: Boolean, driveAvailable: Boolean): Boolean = !driveOn && driveAvailable

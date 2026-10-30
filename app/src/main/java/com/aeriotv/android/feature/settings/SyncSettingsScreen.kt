@@ -155,6 +155,29 @@ fun SyncSettingsScreen(
     val setupScope = rememberCoroutineScope()
     var setupAsk by remember { mutableStateOf<Pair<com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe, Boolean>?>(null) }
     var setupProbing by remember { mutableStateOf(false) }
+    // "Your backup needs an update": on Sync screen open with Drive sync on, once per app session.
+    var backupUpdatePid by remember { mutableStateOf<String?>(null) }
+    var backupUpdateBusy by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        backupUpdatePid = runCatching { viewModel.backupUpdateForSettings() }.getOrNull()
+    }
+    backupUpdatePid?.let { bpid ->
+        com.aeriotv.android.feature.onboarding.BackupUpdateDialog(
+            busy = backupUpdateBusy,
+            onUpdate = {
+                backupUpdateBusy = true
+                setupScope.launch {
+                    runCatching { viewModel.acceptBackupUpdate(bpid) }
+                    backupUpdateBusy = false
+                    backupUpdatePid = null
+                }
+            },
+            onNotNow = {
+                viewModel.declineBackupUpdate(bpid)
+                backupUpdatePid = null
+            },
+        )
+    }
     val enableSecond: (Boolean, () -> Unit) -> Unit = { enablingDrive, plain ->
         if (!setupProbing) {
             setupProbing = true

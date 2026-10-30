@@ -60,6 +60,8 @@ class DriveSyncWorker @AssistedInject constructor(
         // blank fresh install would overwrite a populated Drive backup with
         // empty snapshots (user report). The pull below sets the flag, so
         // the next cycle pushes normally.
+        // Rule 4 one-time id migration (DriveSyncManager.migrateCanonicalIds); never fails the sync.
+        runCatching { sync.migrateCanonicalIds(token, enabled) }
         val initialPullDone = prefs.syncInitialPullDone.first()
         val pushed = if (initialPullDone) {
             sync.pushAll(token, enabled)

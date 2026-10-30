@@ -45,6 +45,35 @@ class SyncSettingsViewModel @Inject constructor(
     /** Apply anything Drive held (no choice was needed or the flow ended). */
     fun releaseHeld() { viewModelScope.launch { setupSource.releaseHeld() } }
 
+    // ---- "Your backup needs an update" (BackupUpdateOffer) ----
+
+    /** Onboarding after a restore: the playlist to offer the id update for, or null. */
+    suspend fun backupUpdateFor(playlistId: String): String? {
+        val pid = runCatching { sync.idUpdateCandidate() }.getOrNull() ?: return null
+        return pid.takeIf {
+            it == playlistId && com.aeriotv.android.core.sync.BackupUpdateOffer.shouldOffer(
+                backupPredatesIds = true, restoredHasDispatcharr = true, accepted = false, playlistId = it,
+            )
+        }
+    }
+
+    /** Sync screen open with Drive sync on: the playlist to offer for (marks the session), or null. */
+    suspend fun backupUpdateForSettings(): String? {
+        val driveOn = runCatching { prefs.syncMasterEnabled.first() }.getOrDefault(false)
+        if (!driveOn) return null
+        val pid = runCatching { sync.idUpdateCandidate() }.getOrNull() ?: return null
+        val offer = com.aeriotv.android.core.sync.BackupUpdateOffer.shouldOfferInSettings(
+            driveOn = true, backupPredatesIds = true, restoredHasDispatcharr = true, accepted = false, playlistId = pid,
+        )
+        if (!offer) return null
+        com.aeriotv.android.core.sync.BackupUpdateOffer.markSettingsShown(pid)
+        return pid
+    }
+
+    suspend fun acceptBackupUpdate(playlistId: String) = sync.acceptIdUpdate(playlistId)
+
+    fun declineBackupUpdate(playlistId: String) = com.aeriotv.android.core.sync.BackupUpdateOffer.decline(playlistId)
+
     suspend fun probeSetupSource(): com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe? = setupSource.probe()
 
     /** Settings: the SECOND provider is being turned on and both hold data. */

@@ -43,7 +43,7 @@ class SetupSourceChoiceTest {
     }
 
     @Test fun sameCountsWithoutFingerprintAsk() {
-        // Favorites carry local ids on Drive and server ids on Dispatcharr: equality cannot be proven.
+        // No fingerprint (a row did not resolve to its canonical id): equality cannot be proven.
         val d = sum("favorites" to Category(5, 10))
         val x = sum("favorites" to Category(5, 10))
         val r = SetupSourceChoice.decide(d, x)
@@ -117,7 +117,44 @@ class SetupSourceChoiceTest {
         assertEquals("Not updated yet", SetupSourceChoice.updatedLine(0, now))
     }
 
+    @Test fun allSharedCategoriesProvablyEqualPreferDispatcharr() {
+        // Every shared category now carries a canonical fingerprint on both sides.
+        val cats = SetupSourceChoice.SHARED.mapIndexed { i, n -> n to Category(i + 1, 10, "fp$i") }
+        val d = Summary(cats.toMap())
+        val x = Summary(cats.associate { (n, c) -> n to c.copy(updatedAt = 99) })
+        assertEquals(Decision.UseDispatcharr, SetupSourceChoice.decide(d, x))
+    }
+
+    @Test fun oneUnresolvedCategoryStillAsks() {
+        val cats = SetupSourceChoice.SHARED.mapIndexed { i, n -> n to Category(i + 1, 10, "fp$i") }.toMap()
+        val d = Summary(cats + ("favorites" to Category(1, 10, null)))
+        assertTrue(SetupSourceChoice.decide(d, Summary(cats)) is Decision.Ask)
+    }
+
+    @Test fun backupUpdateCopy() {
+        assertEquals("Your backup needs an update", SetupSourceChoice.UPDATE_TITLE)
+        assertEquals("Update backup", SetupSourceChoice.UPDATE_ACCEPT)
+        assertEquals("Not now", SetupSourceChoice.UPDATE_NOT_NOW)
+        assertTrue(SetupSourceChoice.UPDATE_BODY.startsWith("AerioTV backups changed format."))
+        assertTrue(SetupSourceChoice.UPDATE_BODY.endsWith("does not change your favorites, progress, or settings."))
+    }
+
+    @Test fun backupUpdateOfferDeclineAndSettingsOncePerSession() {
+        BackupUpdateOffer.resetForTest()
+        assertTrue(BackupUpdateOffer.shouldOffer(true, true, accepted = false, playlistId = "p"))
+        assertTrue(!BackupUpdateOffer.shouldOffer(false, true, false, "p"))
+        assertTrue(!BackupUpdateOffer.shouldOffer(true, false, false, "p"))
+        assertTrue(!BackupUpdateOffer.shouldOffer(true, true, accepted = true, playlistId = "p"))
+        assertTrue(!BackupUpdateOffer.shouldOfferInSettings(driveOn = false, true, true, false, "p"))
+        assertTrue(BackupUpdateOffer.shouldOfferInSettings(true, true, true, false, "p"))
+        BackupUpdateOffer.markSettingsShown("p")
+        assertTrue(!BackupUpdateOffer.shouldOfferInSettings(true, true, true, false, "p"))
+        BackupUpdateOffer.decline("q")
+        assertTrue(!BackupUpdateOffer.shouldOffer(true, true, false, "q"))
+        BackupUpdateOffer.resetForTest()
+    }
+
     @Test fun copyHasNoEmDash() {
-        listOf(SetupSourceChoice.TITLE, SetupSourceChoice.FOOTER).forEach { assertTrue(!it.contains('\u2014')) }
+        listOf(SetupSourceChoice.TITLE, SetupSourceChoice.FOOTER, SetupSourceChoice.UPDATE_TITLE, SetupSourceChoice.UPDATE_BODY).forEach { assertTrue(!it.contains('\u2014')) }
     }
 }

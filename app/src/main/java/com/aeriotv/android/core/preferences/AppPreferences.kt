@@ -2088,6 +2088,34 @@ class AppPreferences @Inject constructor(
         )
     }
 
+    /**
+     * Rule 4 setup probe: Drive preference lanes in Dispatcharr Sync form
+     * (schema names, per-playlist values for [playlistId] only). Channel and
+     * group data keys (recents, collections, hidden groups, group order,
+     * remote map, radio default) are compared as their own categories and
+     * left out here, as is tmdbApiKey. Unknown names pass through as is.
+     */
+    fun driveLanesAsDsync(lanes: Map<String, Map<String, String>>, playlistId: String?): Map<String, Map<String, String>> {
+        val byDrive = registry.associateBy { it.drive }
+        val skip = driveDataKeys.map { it.first }.toSet() + "tmdbApiKey"
+        val pp = perPlaylist.map { it.first }.toSet()
+        return lanes.mapValues { (_, m) ->
+            val out = LinkedHashMap<String, String>()
+            m.forEach { (k, v) ->
+                when {
+                    k in skip -> Unit
+                    k in pp -> {
+                        if (playlistId.isNullOrBlank()) return@forEach
+                        val o = runCatching { Json.parseToJsonElement(v) as? kotlinx.serialization.json.JsonObject }.getOrNull()
+                        (o?.get(playlistId) as? kotlinx.serialization.json.JsonPrimitive)?.content?.let { out[k] = it }
+                    }
+                    else -> out[byDrive[k]?.name ?: k] = v
+                }
+            }
+            out
+        }
+    }
+
     private fun lanesCache(p: Preferences): DriveLanes {
         val raw = p[KEY_DRIVE_PREFS_LANES] ?: return DriveLanes(emptyMap())
         return runCatching {

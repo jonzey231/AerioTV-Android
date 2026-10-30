@@ -15,10 +15,11 @@ object SetupSourceChoice {
 
     /**
      * One category on one side. [updatedAt] is Unix milliseconds. [fingerprint]
-     * is a content hash built from identifiers BOTH sides carry (for example
-     * reminders by channel name and start time); null when the two sides use
-     * different ids (Drive keeps local ids, Dispatcharr keeps server integer
-     * ids), so equal content cannot be proven from the data alone.
+     * is a content hash over canonical row identities (DriveCanon): the ids
+     * Dispatcharr Sync puts on the wire, which Drive snapshots also carry
+     * since the 2026-10-30 id migration (older Drive rows resolve their local
+     * ids at probe time). Null when any row cannot be resolved, so equal
+     * content is not claimed and the prompt still appears.
      */
     data class Category(val rows: Int, val updatedAt: Long, val fingerprint: String? = null)
 
@@ -75,6 +76,15 @@ object SetupSourceChoice {
     const val CANCEL = "Cancel"
     const val NOTHING = "Nothing saved yet"
 
+    // ---- "Your backup needs an update" (Drive canonical-id migration offer) ----
+
+    const val UPDATE_TITLE = "Your backup needs an update"
+    const val UPDATE_BODY = "AerioTV backups changed format. Updating lets this device compare your Google Drive backup " +
+        "with Dispatcharr Sync so you are only asked about real differences. This takes a moment and does not change " +
+        "your favorites, progress, or settings."
+    const val UPDATE_ACCEPT = "Update backup"
+    const val UPDATE_NOT_NOW = "Not now"
+
     private fun label(name: String, n: Int): String = when (name) {
         "favorites" -> if (n == 1) "favorite" else "favorites"
         "progress" -> "in progress"
@@ -118,4 +128,33 @@ object SetupSourceChoice {
     /** Order-independent fingerprint of comparable row identities. */
     fun fingerprint(items: Collection<String>): String =
         items.map { it.trim().lowercase() }.sorted().joinToString("\u0001").hashCode().toString(16)
+}
+
+/**
+ * When to offer the one-time Drive id migration (DriveCanon). Session flags
+ * live in process memory per base user (playlist id): "Not now" keeps the
+ * old format until the next app session; onboarding never shows it twice,
+ * and Settings offers it at most once per app session.
+ */
+object BackupUpdateOffer {
+    private val declined = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val settingsShown = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Restore found an old-format backup and the restored playlists include a Dispatcharr playlist. */
+    fun shouldOffer(backupPredatesIds: Boolean, restoredHasDispatcharr: Boolean, accepted: Boolean, playlistId: String): Boolean =
+        backupPredatesIds && restoredHasDispatcharr && !accepted && playlistId !in declined
+
+    /** Settings (Drive sync on): the same rule, once per app session. */
+    fun shouldOfferInSettings(
+        driveOn: Boolean,
+        backupPredatesIds: Boolean,
+        restoredHasDispatcharr: Boolean,
+        accepted: Boolean,
+        playlistId: String,
+    ): Boolean = driveOn && playlistId !in settingsShown &&
+        shouldOffer(backupPredatesIds, restoredHasDispatcharr, accepted, playlistId)
+
+    fun markSettingsShown(playlistId: String) { settingsShown.add(playlistId) }
+    fun decline(playlistId: String) { declined.add(playlistId) }
+    internal fun resetForTest() { declined.clear(); settingsShown.clear() }
 }

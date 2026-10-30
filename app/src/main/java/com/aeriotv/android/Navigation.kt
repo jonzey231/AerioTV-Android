@@ -1028,6 +1028,17 @@ fun AerioTVNavHost(
                 val cfgSyncVm: com.aeriotv.android.feature.settings.SyncSettingsViewModel = hiltViewModel(parent)
                 val cfgScope = androidx.compose.runtime.rememberCoroutineScope()
                 val cfgContext = androidx.compose.ui.platform.LocalContext.current
+                // "Your backup needs an update" before the sync step after a Drive
+                // restore of an old-format backup (WelcomeSyncChain.Step.BackupUpdate).
+                var backupUpdateFor by remember { mutableStateOf<String?>(null) }
+                var backupChecking by remember { mutableStateOf(fromRestore) }
+                var backupBusy by remember { mutableStateOf(false) }
+                LaunchedEffect(restorePid) {
+                    if (fromRestore) {
+                        backupUpdateFor = runCatching { cfgSyncVm.backupUpdateFor(restorePid) }.getOrNull()
+                        backupChecking = false
+                    }
+                }
                 val afterDriveOffer: () -> Unit = {
                     val pid = driveOfferFor
                     driveOfferFor = null
@@ -1123,6 +1134,28 @@ fun AerioTVNavHost(
                                     else -> driveOfferBusy = false
                                 }
                             }
+                        },
+                    )
+                } else if (backupChecking && syncStepFor != null) {
+                    androidx.compose.foundation.layout.Box(
+                        androidx.compose.ui.Modifier.fillMaxSize(),
+                        contentAlignment = androidx.compose.ui.Alignment.Center,
+                    ) { androidx.compose.material3.CircularProgressIndicator() }
+                } else if (backupUpdateFor != null && syncStepFor != null) {
+                    val bpid = backupUpdateFor!!
+                    com.aeriotv.android.feature.onboarding.BackupUpdateStepScreen(
+                        busy = backupBusy,
+                        onUpdate = {
+                            backupBusy = true
+                            cfgScope.launch {
+                                runCatching { cfgSyncVm.acceptBackupUpdate(bpid) }
+                                backupBusy = false
+                                backupUpdateFor = null
+                            }
+                        },
+                        onNotNow = {
+                            cfgSyncVm.declineBackupUpdate(bpid)
+                            backupUpdateFor = null
                         },
                     )
                 } else if (syncStepFor != null) {

@@ -856,26 +856,34 @@ object DsyncCoexistence {
         DsyncKey.Collections -> DsyncPayloads.decodeCollections(data)?.size ?: 0
         DsyncKey.HiddenGroups -> DsyncPayloads.decodeHiddenGroups(data)?.let { it.live.size + it.movies.size + it.series.size } ?: 0
         DsyncKey.GroupOrder -> DsyncPayloads.decodeGroupOrder(data)?.let { g ->
-            if (g.order.isNotEmpty()) g.order.size else if (g.mode != "default") 1 else 0
+            com.aeriotv.android.core.sync.DriveCanon.groupOrderRows(g.mode, g.order)
         } ?: 0
-        DsyncKey.Settings -> DsyncPayloads.decodeSettingsLanes(data)?.values?.sumOf { it.size } ?: 0
+        // Non-blank values only, the same count the Drive side reports (DriveCanon.settingsCategory).
+        DsyncKey.Settings -> DsyncPayloads.decodeSettingsLanes(data)?.let { com.aeriotv.android.core.sync.DriveCanon.dsyncSettings(it).first } ?: 0
         else -> if (isEmptyData(key, data)) 0 else 1
     }
 
     /**
-     * A content fingerprint built only from identifiers a Drive snapshot also
-     * carries (SetupSourceChoice): progress by title, reminders by channel name
-     * and start time. Null for categories whose rows use server integer ids
-     * (favorites, recents, collections, watchlist, hidden titles) or lane
-     * names (settings, hidden groups, group order), which Drive stores differently.
+     * A content fingerprint over the canonical row identities
+     * (com.aeriotv.android.core.sync.DriveCanon), which Drive snapshots carry
+     * too since the 2026-10-30 id migration: server channel ids, "m"/"e"/"s"
+     * plus server VOD ids, reminders by channel name and start, group names,
+     * and setting names with values. Null only for keys outside the prompt.
      */
-    fun fingerprint(key: DsyncKey, data: JsonObject): String? = when (key) {
-        DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)
-            ?.takeIf { rows -> rows.all { it.title.isNotBlank() } }
-            ?.let { rows -> com.aeriotv.android.core.sync.SetupSourceChoice.fingerprint(rows.map { it.title }) }
-        DsyncKey.Reminders -> DsyncPayloads.decodeReminders(data)
-            ?.let { rows -> com.aeriotv.android.core.sync.SetupSourceChoice.fingerprint(rows.map { "${it.channelName}|${it.start}" }) }
-        else -> null
+    fun fingerprint(key: DsyncKey, data: JsonObject): String? {
+        val c = com.aeriotv.android.core.sync.DriveCanon
+        return when (key) {
+            DsyncKey.Favorites -> DsyncPayloads.decodeFavorites(data)?.let(c::dsyncFavorites)
+            DsyncKey.Recents -> DsyncPayloads.decodeRecents(data)?.let(c::dsyncRecents)
+            DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)?.let(c::dsyncProgress)
+            DsyncKey.Reminders -> DsyncPayloads.decodeReminders(data)?.let(c::dsyncReminders)
+            DsyncKey.Watchlist, DsyncKey.HiddenTitles -> DsyncPayloads.decodeVodMarks(data)?.let(c::dsyncMarks)
+            DsyncKey.Collections -> DsyncPayloads.decodeCollections(data)?.let(c::dsyncCollections)
+            DsyncKey.HiddenGroups -> DsyncPayloads.decodeHiddenGroups(data)?.let(c::dsyncHiddenGroups)
+            DsyncKey.GroupOrder -> DsyncPayloads.decodeGroupOrder(data)?.let(c::dsyncGroupOrder)
+            DsyncKey.Settings -> DsyncPayloads.decodeSettingsLanes(data)?.let { c.dsyncSettings(it).second }
+            else -> null
+        }
     }
 
     private fun emptyElement(e: JsonElement): Boolean = when (e) {
