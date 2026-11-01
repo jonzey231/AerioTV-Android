@@ -737,6 +737,22 @@ sync. Any other playlist type rewrites at once with the ids left null.
 onboarding does not show the offer again that app session, and Settings
 offers it at most once per app session.
 
+Format rule (2026-11-01). Every Drive write of every shared file carries
+envelope `format` 2: each push builds its envelope in one place
+(`DriveCanon.writerEnvelope`), and the accepted update rewrites every
+shared file (favorites, progress, reminders, watchlist, preferences) whether
+or not its Sync Category is on and whatever its row count. When the id
+fill has to wait (channel list or movie catalog) or the file does not
+decode as a current snapshot, the update still stamps `format` 2 at once,
+keeping every other field as written, logged `[DRIVE] id migration:
+<category> format stamped ok=<bool> (<why>)`; its flag stays unset and the
+ids fill on a later sync. The update is not held by the setup-choice hold
+(it carries the Drive file's own rows, never this device's data), so
+"Update backup" on the welcome flow takes effect at once. The offer check
+logs which files are old format: `[DRIVE] backup update needed:
+categories=<names>`. A device on a build older than format 2 can still
+write an old file; the offer then returns, which is the intended signal.
+
 | Drive | Dispatcharr | Result |
 | --- | --- | --- |
 | empty | empty | Dispatcharr (nothing to replace) |
@@ -777,11 +793,25 @@ clears per key on a successful PUT. Log lines:
 empty key, `[DSYNC] force push <key> rows=0 (empty, mirrors Google Drive)`.
 Profiles, remoteMap, and radioDefault are not forced.
 
-Mirror details (2026-11-01). The Preferences file applies with replace
-semantics for this choice (a setting, recents list, collection, hidden
-group, or group order the Drive copy does not carry goes back to its
-default), so local holds the Drive key set; the row files (progress,
-favorites, reminders, watchlist) apply additively as on every pull. The
+Mirror details (2026-11-01). Every shared Drive file applies with replace
+semantics for this choice. Preferences: a setting, recents list,
+collection, hidden group, or group order the Drive copy does not carry
+goes back to its default, so local holds the Drive key set. Row files:
+the backup rows apply, then a local row the backup does not carry is
+removed (favorites and progress rows deleted, reminders deleted with their
+alarm cancelled, watchlist and hidden title rows tombstoned so the removal
+travels; a watchlist or hidden title identity the backup carries takes the
+backup row, its tombstone included). Only rows inside the comparison the
+setup probe makes are candidates; rows its filters exclude are counted by
+neither side and are kept: progress rows that are URL keyed, not a movie
+or episode, finished more than 30 days ago, or beyond the 300 newest;
+reminders that already ended; watchlist and hidden title rows of another
+playlist scope (a host other than the active playlist's). Hidden titles
+follow only while their Sync Categories item is on. A missing Drive file
+replaces nothing (local rows stay; the next Drive push writes them). One
+counts-only line per category: `[DRIVE] replace <category> local=<n>
+backup=<m> removed=<k>` (local and backup counted with the probe filters;
+preferences counts keys across lanes with removed 0). The
 forced `settings` push sends exactly the Drive lanes just applied (`v`,
 `tv`, and `mobile`, the same names and non-blank count the setup probe
 reads from Drive); the server's previous lanes are not merged in. Log

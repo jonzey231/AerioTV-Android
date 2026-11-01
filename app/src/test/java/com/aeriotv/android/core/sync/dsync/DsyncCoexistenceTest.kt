@@ -51,9 +51,10 @@ class DsyncCoexistenceTest {
 
     // ---- 2026-11-01 field run: forced replace must mirror Google Drive ----
 
-    @Test fun forcedApplyReplacesPreferencesOnly() {
-        assertTrue(DsyncCoexistence.replaceOnForcedApply(SyncCategory.Preferences))
-        listOf(SyncCategory.Favorites, SyncCategory.WatchProgress, SyncCategory.Reminders, SyncCategory.Watchlist, SyncCategory.Playlists)
+    @Test fun forcedApplyReplacesEverySharedCategory() {
+        listOf(SyncCategory.Preferences, SyncCategory.Favorites, SyncCategory.WatchProgress, SyncCategory.Reminders, SyncCategory.Watchlist)
+            .forEach { assertTrue(it.name, DsyncCoexistence.replaceOnForcedApply(it)) }
+        listOf(SyncCategory.Playlists, SyncCategory.Credentials)
             .forEach { assertFalse(it.name, DsyncCoexistence.replaceOnForcedApply(it)) }
     }
 

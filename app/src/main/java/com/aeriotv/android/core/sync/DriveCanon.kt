@@ -9,7 +9,9 @@ import com.aeriotv.android.core.sync.dsync.RecentRow
 import com.aeriotv.android.core.sync.dsync.ReminderRow
 import com.aeriotv.android.core.sync.dsync.VodMarkRow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 /**
  * Canonical row identities shared by Google Drive snapshots and Dispatcharr
@@ -247,11 +249,103 @@ object DriveCanon {
     /** The backup format this build writes on every Drive file (SyncEnvelope.format). */
     const val FORMAT = 2
 
+    /** The envelope every Drive write carries: always [FORMAT]. */
+    fun writerEnvelope(nowMs: Long, device: String, providers: SyncProvidersRecord?) =
+        SyncEnvelope(lastModified = nowMs, device = device, syncProviders = providers, format = FORMAT)
+
     /** A file is old format when its envelope format is missing or below [FORMAT]. */
     fun isOldFormat(format: Int?): Boolean = format == null || format < FORMAT
 
     /** Old format backup: any shared file present (non-null entry) is old format. Absent files do not count. */
     fun backupOutdated(fileFormats: List<Int?>): Boolean = fileFormats.any(::isOldFormat)
+
+    /**
+     * The format stamp alone: [body] with envelope.format set to [FORMAT] and
+     * every other field kept as written (unknown fields included). Used when
+     * the id fill has to wait (channel list, movie catalog) or the body does
+     * not decode as this build's snapshot, so no old-format file survives an
+     * accepted backup update. Null when [body] has no envelope object.
+     */
+    fun stampFormat(body: String): String? = runCatching {
+        val o = Json.parseToJsonElement(body).jsonObject
+        val env = o["envelope"]?.jsonObject ?: return null
+        JsonObject(o + ("envelope" to JsonObject(env + ("format" to JsonPrimitive(FORMAT))))).toString()
+    }.getOrNull()
+
+    /** Names of the files (category to envelope format) that are old format, for the counts-only offer log. */
+    fun oldFormatNames(formats: Map<String, Int?>): List<String> = formats.filterValues(::isOldFormat).keys.toList()
+
+    // ---- Rule 4 replace (the user chose Google Drive) ----
+    //
+    // The device starts from the Drive copy: a local row the backup does not
+    // carry is removed. Only rows inside the comparison the setup probe makes
+    // are candidates (same filters as [progress], [reminders], [watchlist],
+    // [hiddenTitles]); a row those filters exclude is counted by neither side
+    // and is kept (docs/DispatcharrSyncSchema.md 10a).
+
+    /** Local progress rows the probe counts: movie and episode ids, finished rows within 30 days, the 300 newest. */
+    fun progressCounted(local: List<WatchProgressSnapshotEntry>, nowMs: Long): List<WatchProgressSnapshotEntry> {
+        val nowS = nowMs / 1000
+        return local.filter { !it.videoId.contains("://") && (it.vodType == "movie" || it.vodType == "episode") }
+            .filterNot { it.isFinished && nowS - it.updatedAt / 1000 > DsyncLimits.FINISHED_MAX_AGE_S }
+            .sortedByDescending { it.updatedAt }.take(DsyncLimits.PROGRESS)
+    }
+
+    /** Progress video ids to delete: counted locally and absent from the backup. */
+    fun progressReplaceDeletes(local: List<WatchProgressSnapshotEntry>, backup: WatchProgressSnapshot, nowMs: Long): List<String> {
+        val keep = backup.entries.map { it.videoId }.toSet()
+        return progressCounted(local, nowMs).map { it.videoId }.filter { it !in keep }.distinct()
+    }
+
+    /** Future reminders only (past ones are not compared). Matched by key, or by channel name and start second. */
+    fun reminderReplaceDeletes(local: List<ReminderSnapshotEntry>, backup: RemindersSnapshot, nowMs: Long): List<String> {
+        val keys = backup.entries.map { it.reminderKey }.toSet()
+        val ids = backup.entries.map { reminderItem(it.channelName, it.startMillis / 1000) }.toSet()
+        return local.filter { it.endMillis >= nowMs }
+            .filter { it.reminderKey !in keys && reminderItem(it.channelName, it.startMillis / 1000) !in ids }
+            .map { it.reminderKey }
+    }
+
+    /** Favorites carry no scope: every local favorite the backup lacks goes. */
+    fun favoriteReplaceDeletes(local: List<String>, backup: FavoritesSnapshot): List<String> {
+        val keep = backup.entries.map { it.channelId }.toSet()
+        return local.filter { it !in keep }.distinct()
+    }
+
+    /**
+     * Watchlist and hidden titles (tombstoned stores): a row whose identity
+     * the backup carries becomes the backup row (tombstone included); a live
+     * local row in scope ([inScope]) the backup lacks is tombstoned via
+     * [tombstone]; every other row is kept; backup rows new here are added.
+     */
+    fun <E> replaceMarks(
+        local: List<E>,
+        remote: List<E>,
+        identity: (E) -> Pair<String, String?>,
+        live: (E) -> Boolean,
+        inScope: (E) -> Boolean,
+        tombstone: (E) -> E,
+    ): List<E> {
+        val byId = remote.associateBy(identity)
+        val seen = HashSet<Pair<String, String?>>()
+        val out = local.map { l ->
+            val id = identity(l)
+            val r = byId[id]
+            when {
+                r != null -> { seen += id; r }
+                live(l) && inScope(l) -> tombstone(l)
+                else -> l
+            }
+        }
+        return out + remote.filter { identity(it) !in seen && seen.add(identity(it)) }
+    }
+
+    /** Live rows in [inScope], for the counts line. */
+    fun <E> liveInScope(rows: List<E>, live: (E) -> Boolean, inScope: (E) -> Boolean) = rows.count { live(it) && inScope(it) }
+
+    /** The counts-only replace line. */
+    fun replaceLine(category: String, local: Int, backup: Int, removed: Int) =
+        "[DRIVE] replace $category local=$local backup=$backup removed=$removed"
 
     /** The single migration log line: counts only, never ids. */
     fun migrationLine(category: String, rows: Int) = "[DRIVE] id migration: $category $rows rows enriched"

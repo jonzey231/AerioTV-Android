@@ -338,6 +338,8 @@ class DriveSyncManager @Inject constructor(
         category: SyncCategory,
         replace: Boolean = false,
         ignoreOwnership: Boolean = false,
+        /** Rule 4 replace (the user chose Google Drive): the row categories drop local rows the backup lacks. */
+        forcedReplace: Boolean = false,
     ): PullOutcome {
         // Rule 4: a shared category waits while the setup choice is pending.
         if (sharedHeld() && category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES) {
@@ -360,18 +362,27 @@ class DriveSyncManager @Inject constructor(
                 // cache gate is needed; the counts measure what each apply carried.
                 SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(body).let {
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyWatchProgressSnapshot(it)
+                    if (forcedReplace) replaceProgress(it)
                 }
                 SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(body).let {
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyRemindersSnapshot(it)
+                    if (forcedReplace) replaceReminders(it)
                 }
                 SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(body).let {
                     applyFavoritesSnapshot(it)
+                    if (forcedReplace) replaceFavorites(it)
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} local now=${favoriteChannelDao.allOnce().size}")
                 }
                 SyncCategory.Watchlist -> json.decodeFromString<WatchlistSnapshot>(body).let {
-                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} hidden=${it.hidden.size}"); applyWatchlistSnapshot(it)
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} hidden=${it.hidden.size}"); if (forcedReplace) replaceWatchlist(it) else applyWatchlistSnapshot(it)
                 }
-                SyncCategory.Preferences -> applyPreferencesSnapshot(json.decodeFromString(body), replace)
+                SyncCategory.Preferences -> json.decodeFromString<PreferencesSnapshot>(body).let {
+                    if (forcedReplace) {
+                        val local = appPreferences.snapshotSyncablePreferences().let { l -> l.v.size + l.tv.size + l.mobile.size }
+                        Log.i(TAG, DriveCanon.replaceLine("preferences", local, it.keys.size + it.tv.size + it.mobile.size, 0))
+                    }
+                    applyPreferencesSnapshot(it, replace || forcedReplace)
+                }
                 SyncCategory.Credentials -> applyCredentialsSnapshot(json.decodeFromString(body))
             }
             PullOutcome.Applied
@@ -435,7 +446,11 @@ class DriveSyncManager @Inject constructor(
             // groups, group order), so the forced push sends exactly the Drive
             // key set. A merge kept local settings the backup did not carry
             // (field run 2026-11-01: Drive settings=7, forced push rows=11).
-            val r = runCatching { pullCategoryDetailed(token, c, replace = com.aeriotv.android.core.sync.dsync.DsyncCoexistence.replaceOnForcedApply(c), ignoreOwnership = ignoreOwnership) }
+            // Every shared category replaces (DriveSyncManager.replace*): local
+            // rows the backup lacks are removed, so the forced push carries the
+            // Drive rows only and both sides converge (no prompt on the next
+            // Drive off/on).
+            val r = runCatching { pullCategoryDetailed(token, c, ignoreOwnership = ignoreOwnership, forcedReplace = com.aeriotv.android.core.sync.dsync.DsyncCoexistence.replaceOnForcedApply(c)) }
                 .onFailure { Log.w(TAG, "pull ${c.name} failed", it) }
                 .getOrDefault(PullOutcome.Failed)
             r == PullOutcome.Applied || r == PullOutcome.NoRemote
@@ -555,11 +570,16 @@ class DriveSyncManager @Inject constructor(
      */
     suspend fun migrateCanonicalIds(token: String, enabled: Set<SyncCategory>) =
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
-            if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty() || sharedHeld()) return@withContext
+            // Not gated on the Rule 4 hold: the rewrite carries the Drive file's
+            // own rows (format stamp and ids only), never this device's data, and
+            // the welcome flow offers "Update backup" while the hold is on.
+            if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty()) return@withContext
             val key = idLookup.activeKey()
             if (!idUpdateAccepted(key)) return@withContext
             val row = idLookup.activeDispatcharr()
-            val cats = DriveCanon.pendingCategories(true, updateFiles, enabled) { idMigration.getBoolean(migrationKey(key, it), false) }
+            // Every shared file, Sync Category on or off: the offer reads all of
+            // them (backupOutdated), so a skipped file would bring it back.
+            val cats = DriveCanon.pendingCategories(true, updateFiles, updateFiles.toSet()) { idMigration.getBoolean(migrationKey(key, it), false) }
             if (cats.isEmpty()) return@withContext
             val files = driveClient.listAll(token).associate { (id, name) -> name to id }
             cats.forEach { c ->
@@ -575,8 +595,7 @@ class DriveSyncManager @Inject constructor(
     private suspend fun pendingIdUpdate(): List<SyncCategory> =
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val key = idLookup.activeKey()
-            val enabled = SyncCategory.entries.filter { appPreferences.syncCategoryEnabled(it).first() }.toSet()
-            DriveCanon.pendingCategories(idUpdateAccepted(key), updateFiles, enabled) { idMigration.getBoolean(migrationKey(key, it), false) }
+            DriveCanon.pendingCategories(idUpdateAccepted(key), updateFiles, updateFiles.toSet()) { idMigration.getBoolean(migrationKey(key, it), false) }
         }
 
     private suspend fun retryIdUpdate(reason: String) {
@@ -616,12 +635,15 @@ class DriveSyncManager @Inject constructor(
     /** Whether any shared Drive file is old format (DriveCanon.backupOutdated). Read only; false when Drive cannot be read. */
     suspend fun backupOutdated(token: String): Boolean = runCatching {
         val files = driveClient.listAll(token).associate { (id, name) -> name to id }
-        val formats = updateFiles.mapNotNull { c ->
-            val id = files[c.fileName] ?: return@mapNotNull null
-            val body = driveClient.download(token, id) ?: return@mapNotNull null
-            listOf(envelopeFormat(body))
-        }.flatten()
-        DriveCanon.backupOutdated(formats)
+        val formats = LinkedHashMap<String, Int?>()
+        updateFiles.forEach { c ->
+            val id = files[c.fileName] ?: return@forEach
+            val body = driveClient.download(token, id) ?: return@forEach
+            formats[c.name] = envelopeFormat(body)
+        }
+        val old = DriveCanon.oldFormatNames(formats)
+        if (old.isNotEmpty()) Log.i(TAG, "[DRIVE] backup update needed: categories=${old.joinToString(",")}")
+        DriveCanon.backupOutdated(formats.values.toList())
     }.getOrDefault(false)
 
     @kotlinx.serialization.Serializable
@@ -654,15 +676,42 @@ class DriveSyncManager @Inject constructor(
         fileId: String?,
     ): Boolean {
         fileId ?: return true
+        if (c !in updateFiles) return true
         val body = driveClient.download(token, fileId) ?: return false
         val wasOld = DriveCanon.isOldFormat(envelopeFormat(body))
         fun SyncEnvelope.v2() = copy(format = DriveCanon.FORMAT)
-        val (payload: String, filled: Int) = when (c) {
+        // The id fill waits (channel list, movie catalog) or the body does not
+        // decode: still stamp format 2 now so no old-format file remains after
+        // "Update backup"; the done flag stays unset and the ids fill later.
+        suspend fun stampOnly(why: String): Boolean {
+            if (wasOld) {
+                val stamped = DriveCanon.stampFormat(body)
+                val ok = stamped != null && driveClient.upload(token, c.fileName, stamped).isSuccess
+                Log.i(TAG, "[DRIVE] id migration: ${c.name} format stamped ok=$ok ($why)")
+            }
+            return false
+        }
+        val (payload: String, filled: Int) = runCatching { migratedPayload(c, body, row) { it.v2() } }
+            .getOrElse { return stampOnly("decode ${it.javaClass.simpleName}") }
+            ?: return stampOnly("ids waiting")
+        if (!wasOld && filled == 0) return true
+        return driveClient.upload(token, c.fileName, payload).isSuccess
+    }
+
+    /** The rewritten file and rows filled; null when the id fill has to wait. */
+    private suspend fun migratedPayload(
+        c: SyncCategory,
+        body: String,
+        row: PlaylistEntity?,
+        v2: (SyncEnvelope) -> SyncEnvelope,
+    ): Pair<String, Int>? {
+        fun SyncEnvelope.v2() = v2(this)
+        return when (c) {
             SyncCategory.Favorites -> {
                 val f = json.decodeFromString<FavoritesSnapshot>(body)
                 val ch = row?.let { idLookup.channels(it) }.orEmpty()
                 // Channel ids wait for the channel list, as Dispatcharr Sync does.
-                if (row != null && ch.isEmpty() && f.entries.isNotEmpty()) return false
+                if (row != null && ch.isEmpty() && f.entries.isNotEmpty()) return null
                 val (s, n) = DriveCanon.enrichFavorites(f, DriveCanon.Ids(channels = ch))
                 if (row != null) Log.i(TAG, DriveCanon.migrationLine("favorites", n))
                 json.encodeToString(s.copy(envelope = s.envelope.v2())) to n
@@ -678,7 +727,7 @@ class DriveSyncManager @Inject constructor(
                         ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
                     ) {
                         Log.i(TAG, "[DRIVE] id migration: progress waiting for the VOD catalog")
-                        return false
+                        return null
                     }
                 }
                 val (s, n) = DriveCanon.enrichProgress(w, ids)
@@ -700,7 +749,7 @@ class DriveSyncManager @Inject constructor(
                         ) == com.aeriotv.android.core.sync.dsync.DsyncReadiness.Decision.Defer
                     ) {
                         Log.i(TAG, "[DRIVE] id migration: watchlist waiting for the VOD catalog")
-                        return false
+                        return null
                     }
                 }
                 val (s, nw, nh) = DriveCanon.enrichWatchlist(w, ids)
@@ -713,24 +762,20 @@ class DriveSyncManager @Inject constructor(
             SyncCategory.Preferences -> {
                 val p = json.decodeFromString<PreferencesSnapshot>(body)
                 val ch = row?.let { idLookup.channels(it) }.orEmpty()
-                if (row != null && ch.isEmpty() && DriveCanon.referencedChannels(p).isNotEmpty()) return false
+                if (row != null && ch.isEmpty() && DriveCanon.referencedChannels(p).isNotEmpty()) return null
                 val (s, n) = DriveCanon.enrichPreferences(p, DriveCanon.Ids(channels = ch))
                 if (row != null) Log.i(TAG, DriveCanon.migrationLine("recents and collections", n))
                 json.encodeToString(s.copy(envelope = s.envelope.v2())) to n
             }
-            else -> return true
+            else -> null
         }
-        if (!wasOld && filled == 0) return true
-        return driveClient.upload(token, c.fileName, payload).isSuccess
     }
 
     // ── Snapshot builders ─────────────────────────────────────────────────
 
-    private fun envelope() = SyncEnvelope(
-        lastModified = System.currentTimeMillis(),
-        device = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
-        syncProviders = pushProviders,
-        format = DriveCanon.FORMAT,
+    /** The one envelope every push of every file carries (format 2, DriveCanon.writerEnvelope). */
+    private fun envelope() = DriveCanon.writerEnvelope(
+        System.currentTimeMillis(), "${Build.MANUFACTURER} ${Build.MODEL}".trim(), pushProviders,
     )
 
     private suspend fun buildPlaylistsSnapshot(): PlaylistsSnapshot {
@@ -1081,6 +1126,93 @@ class DriveSyncManager @Inject constructor(
             com.aeriotv.android.core.preferences.AppPreferences.DriveLanes(snapshot.keys, snapshot.tv, snapshot.mobile),
             replace,
         )
+    }
+
+    // ── Rule 4 replace (the user chose Google Drive; DriveCanon.replace*) ──
+
+    private suspend fun replaceProgress(s: WatchProgressSnapshot) {
+        val now = System.currentTimeMillis()
+        val local = watchProgressDao.allOnce().map { r ->
+            WatchProgressSnapshotEntry(
+                videoId = r.videoId, title = r.title, posterUrl = r.posterUrl, positionMs = r.positionMs,
+                durationMs = r.durationMs, updatedAt = r.updatedAt, vodType = r.vodType, seriesId = r.seriesId,
+                seasonNumber = r.seasonNumber, episodeNumber = r.episodeNumber, isFinished = r.isFinished,
+            )
+        }
+        val gone = DriveCanon.progressReplaceDeletes(local, s, now)
+        gone.forEach { watchProgressDao.delete(it) }
+        Log.i(TAG, DriveCanon.replaceLine("progress", DriveCanon.progressCounted(local, now).size, DriveCanon.progress(s, DriveCanon.Ids(), now).rows, gone.size))
+    }
+
+    private suspend fun replaceReminders(s: RemindersSnapshot) {
+        val now = System.currentTimeMillis()
+        val rows = reminderDao.allOnce()
+        val local = rows.map { ReminderSnapshotEntry(it.reminderKey, it.channelName, it.programTitle, it.startMillis, it.endMillis) }
+        val gone = DriveCanon.reminderReplaceDeletes(local, s, now).toSet()
+        rows.filter { it.reminderKey in gone }.forEach { r ->
+            cancelReminderAlarm(r.alarmRequestCode)
+            reminderDao.delete(r.reminderKey)
+        }
+        Log.i(TAG, DriveCanon.replaceLine("reminders", local.count { it.endMillis >= now }, DriveCanon.reminders(s, now).rows, gone.size))
+    }
+
+    /** Same PendingIntent identity the reminder scheduler uses (DispatcharrSyncManager.cancelAlarm). */
+    private fun cancelReminderAlarm(requestCode: Int) {
+        val mgr = context.getSystemService(android.app.AlarmManager::class.java) ?: return
+        val pi = android.app.PendingIntent.getBroadcast(
+            context, requestCode,
+            android.content.Intent(context, com.aeriotv.android.feature.reminders.ReminderBroadcastReceiver::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        runCatching { mgr.cancel(pi) }
+    }
+
+    private suspend fun replaceFavorites(s: FavoritesSnapshot) {
+        val local = favoriteChannelDao.allOnce().map { it.channelId }
+        val gone = DriveCanon.favoriteReplaceDeletes(local, s)
+        gone.forEach { favoriteChannelDao.delete(it) }
+        Log.i(TAG, DriveCanon.replaceLine("favorites", local.size, s.entries.size, gone.size))
+    }
+
+    /** Watchlist and hidden titles: the active playlist's scope (or unscoped rows) become the backup rows. */
+    private suspend fun replaceWatchlist(s: WatchlistSnapshot) {
+        val host = playlistDao.allOnce().firstOrNull { it.isActive }?.let { com.aeriotv.android.core.preferences.WatchlistStore.scopeFor(it) }
+        val now = System.currentTimeMillis()
+        val remote = s.entries.map { r ->
+            val movie = r.vodType != "series"
+            com.aeriotv.android.core.preferences.WatchlistStore.Entry(
+                key = (if (movie) "m:" else "s:") + r.vodId, title = r.title, posterUrl = r.posterUrl,
+                year = r.releaseYear.toIntOrNull(), rating = r.rating.ifBlank { null }, isMovie = movie,
+                playlistId = r.serverId, addedAt = r.addedAt, removedAt = r.removedAt,
+            )
+        }
+        var localLive = 0
+        var removed = 0
+        watchlistStore.rewrite { cur ->
+            val inScope = { e: com.aeriotv.android.core.preferences.WatchlistStore.Entry -> e.playlistId == null || e.playlistId == host }
+            localLive = DriveCanon.liveInScope(cur, { it.isLive }, inScope)
+            val ids = remote.map { it.key to it.playlistId }.toSet()
+            removed = cur.count { it.isLive && inScope(it) && (it.key to it.playlistId) !in ids }
+            DriveCanon.replaceMarks(cur, remote, { it.key to it.playlistId }, { it.isLive }, inScope, { it.copy(removedAt = now) })
+        }
+        Log.i(TAG, DriveCanon.replaceLine("watchlist", localLive, DriveCanon.watchlist(s, DriveCanon.Ids(), host).rows, removed))
+        if (!appPreferences.syncItemOnOnce("hiddenTitles")) return
+        val hidden = s.hidden.map { r ->
+            com.aeriotv.android.core.preferences.HiddenTitlesStore.Entry(
+                key = (if (r.vodType == "series") "s:" else "m:") + r.vodId, playlistId = r.serverId,
+                hiddenAt = r.hiddenAt, unhiddenAt = r.unhiddenAt,
+            )
+        }
+        var hLocal = 0
+        var hRemoved = 0
+        hiddenTitlesStore.rewrite { cur ->
+            val inScope = { e: com.aeriotv.android.core.preferences.HiddenTitlesStore.Entry -> e.playlistId == null || e.playlistId == host }
+            hLocal = DriveCanon.liveInScope(cur, { it.isLive }, inScope)
+            val ids = hidden.map { it.key to it.playlistId }.toSet()
+            hRemoved = cur.count { it.isLive && inScope(it) && (it.key to it.playlistId) !in ids }
+            DriveCanon.replaceMarks(cur, hidden, { it.key to it.playlistId }, { it.isLive }, inScope, { it.copy(unhiddenAt = now) })
+        }
+        Log.i(TAG, DriveCanon.replaceLine("hiddenTitles", hLocal, DriveCanon.hiddenTitles(s, DriveCanon.Ids(), host).rows, hRemoved))
     }
 
     private suspend fun applyCredentialsSnapshot(snapshot: CredentialsSnapshot) {

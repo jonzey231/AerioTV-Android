@@ -859,12 +859,14 @@ object DsyncCoexistence {
 
     /**
      * Rule 4 mirror: whether the Drive apply for the setup choice replaces
-     * local instead of merging. Preferences carries settings, recents,
-     * collections, hidden groups, and group order; replacing it makes the
-     * forced push send exactly the Drive key set. The row files (progress,
-     * favorites, reminders, watchlist) apply additively as on every pull.
+     * local instead of merging. Every shared category does: Preferences
+     * (settings, recents, collections, hidden groups, group order) and the
+     * row files (progress, favorites, reminders, watchlist with hidden
+     * titles). A local row the backup lacks is removed, except rows the
+     * Drive count filters exclude (DriveCanon replace section), so the forced
+     * push sends exactly the Drive rows and both sides converge.
      */
-    fun replaceOnForcedApply(category: SyncCategory): Boolean = category == SyncCategory.Preferences
+    fun replaceOnForcedApply(category: SyncCategory): Boolean = category in SHARED_CATEGORIES
 
     /** Rule 4: retry a deferred forced key now (it is armed, waiting, and its id cache is built). */
     fun forcedRetryDue(armed: Boolean, awaiting: Boolean, cacheReady: Boolean): Boolean = armed && awaiting && cacheReady

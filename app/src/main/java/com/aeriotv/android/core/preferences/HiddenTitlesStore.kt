@@ -175,6 +175,12 @@ class HiddenTitlesStore @Inject constructor(
         }
     }
 
+    /** Rule 4 replace (DriveCanon.replaceMarks): every row, tombstones included, becomes [transform] of the current rows. */
+    suspend fun rewrite(transform: (List<Entry>) -> List<Entry>) {
+        val k = skey()
+        store.edit { prefs -> prefs[k] = json.encodeToString(transform(decode(prefs[k]))) }
+    }
+
     /** Remove Profile cleanup. */
     suspend fun deleteScope(profileId: String) {
         store.edit { it.remove(stringPreferencesKey(com.aeriotv.android.core.profiles.ProfileScope.keyName("entries", profileId))) }
