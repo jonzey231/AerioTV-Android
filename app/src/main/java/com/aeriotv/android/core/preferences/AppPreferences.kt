@@ -2116,6 +2116,30 @@ class AppPreferences @Inject constructor(
         }
     }
 
+    /**
+     * Rule 4 mirror (docs/DispatcharrSyncSchema.md 10a): the Drive settings
+     * lanes last applied here, as Dispatcharr Sync wire lanes for
+     * [playlistId], typed by the registry. Same name set the Drive setup
+     * probe counts ([driveLanesAsDsync]), so a forced push of it leaves the
+     * server equal to the Drive copy. A value that does not decode for its
+     * type is left out.
+     */
+    suspend fun driveMirrorDsyncLanes(playlistId: String?): Map<String, Map<String, kotlinx.serialization.json.JsonPrimitive>> {
+        val c = lanesCache(store.data.first())
+        val names = driveLanesAsDsync(mapOf(SyncScope.LANE_ALL to c.v, SyncScope.LANE_TV to c.tv, SyncScope.LANE_MOBILE to c.mobile), playlistId)
+        val byName = registry.associateBy { it.name }
+        val kinds = perPlaylist.associate { it.first to it.third }
+        return names.mapValues { (_, m) ->
+            m.mapNotNull { (n, v) ->
+                val w = byName[n]?.driveToWire(v) ?: when (kinds[n]) {
+                    SKind.B -> v.toBooleanStrictOrNull()?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+                    else -> if (n in byName) null else kotlinx.serialization.json.JsonPrimitive(v)
+                }
+                w?.let { n to it }
+            }.toMap()
+        }.filterValues { it.isNotEmpty() }
+    }
+
     private fun lanesCache(p: Preferences): DriveLanes {
         val raw = p[KEY_DRIVE_PREFS_LANES] ?: return DriveLanes(emptyMap())
         return runCatching {

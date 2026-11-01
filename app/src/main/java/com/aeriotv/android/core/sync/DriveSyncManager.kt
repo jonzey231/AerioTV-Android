@@ -430,7 +430,12 @@ class DriveSyncManager @Inject constructor(
             .filter { appPreferences.syncCategoryEnabled(it).first() }
         Log.i(TAG, "[DRIVE] applying backup (user chose Google Drive) categories=${wanted.map { it.name }}")
         val out = wanted.associateWith { c ->
-            val r = runCatching { pullCategoryDetailed(token, c, replace = false, ignoreOwnership = ignoreOwnership) }
+            // Rule 4 mirror: the Drive copy REPLACES local where the apply can
+            // replace (Preferences: settings, recents, collections, hidden
+            // groups, group order), so the forced push sends exactly the Drive
+            // key set. A merge kept local settings the backup did not carry
+            // (field run 2026-11-01: Drive settings=7, forced push rows=11).
+            val r = runCatching { pullCategoryDetailed(token, c, replace = com.aeriotv.android.core.sync.dsync.DsyncCoexistence.replaceOnForcedApply(c), ignoreOwnership = ignoreOwnership) }
                 .onFailure { Log.w(TAG, "pull ${c.name} failed", it) }
                 .getOrDefault(PullOutcome.Failed)
             r == PullOutcome.Applied || r == PullOutcome.NoRemote

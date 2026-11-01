@@ -777,6 +777,27 @@ clears per key on a successful PUT. Log lines:
 empty key, `[DSYNC] force push <key> rows=0 (empty, mirrors Google Drive)`.
 Profiles, remoteMap, and radioDefault are not forced.
 
+Mirror details (2026-11-01). The Preferences file applies with replace
+semantics for this choice (a setting, recents list, collection, hidden
+group, or group order the Drive copy does not carry goes back to its
+default), so local holds the Drive key set; the row files (progress,
+favorites, reminders, watchlist) apply additively as on every pull. The
+forced `settings` push sends exactly the Drive lanes just applied (`v`,
+`tv`, and `mobile`, the same names and non-blank count the setup probe
+reads from Drive); the server's previous lanes are not merged in. Log
+line: `[DSYNC] force push settings rows=<n> (mirrors Google Drive)`. A
+forced key that defers on its id cache (Rule 3, for example progress while
+the movie catalog sweep runs) stays armed and dirty until a PUT succeeds,
+and a pull keeps skipping it meanwhile. It is retried when the catalog is
+ready (the 5 s cache poll, and the catalog page signal after a quiet
+period of `PAGE_RECHECK_MS`, the hook the Drive id migration retry uses)
+and on every regular sync cycle, logged as `[DSYNC] force push <key> retry
+(catalog|cycle) rows=<n>`. The choice hold may expire first; the armed flag
+is what protects the key. Rows still untranslated once the catalog is built
+are left out of the push, logged once with counts only: `[DSYNC] force push
+<key> drops untranslated=<n> sent=<m> (not in this catalog)`. The Apple
+copy of this document and the Apple app must mirror these rules.
+
 Dispatcharr chosen: the held Drive categories are never applied; the normal
 first pull applies the server copy; then Drive's next push replaces the
 backup. Log line: `[DRIVE] next push replaces backup (user chose

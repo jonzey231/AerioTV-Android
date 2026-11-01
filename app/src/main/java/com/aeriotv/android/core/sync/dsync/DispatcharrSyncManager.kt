@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.FlowPreview::class)
+
 package com.aeriotv.android.core.sync.dsync
 
 import android.app.AlarmManager
@@ -50,6 +52,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
@@ -635,7 +638,8 @@ class DispatcharrSyncManager @Inject constructor(
                     delay(CACHE_POLL_MS)
                     if (s.awaitingCache.isEmpty()) continue
                     for (key in s.awaitingCache.keys.toList()) {
-                        if (cacheReady(s, key)) schedule(s, key, 0L)
+                        if (!cacheReady(s, key)) continue
+                        if (isForced(s, key)) retryForced(s, key, "catalog") else schedule(s, key, 0L)
                     }
                 }
             }
@@ -654,7 +658,31 @@ class DispatcharrSyncManager @Inject constructor(
                     delay(DsyncReadiness.PAGE_RECHECK_MS)
                 }
             }
+            // Rule 4: a forced key deferred on the id cache goes out seconds
+            // after the catalog sweep ends (the same quiet-period hook the
+            // Drive id migration retry uses), not only on the 5 s cache poll.
+            launch {
+                VodIdSink.pageWritten.debounce(DsyncReadiness.PAGE_RECHECK_MS).collect {
+                    for (key in s.awaitingCache.keys.toList()) {
+                        if (isForced(s, key)) retryForced(s, key, "catalog", cacheReady(s, key))
+                    }
+                }
+            }
         }
+    }
+
+    /**
+     * Rule 4: re-send an armed key that deferred on its id cache. The armed
+     * flag (persisted) stays set until a send succeeds, so a pull keeps
+     * skipping the key meanwhile (processCategory).
+     */
+    private fun retryForced(s: Session, key: DsyncKey, why: String, ready: Boolean = true) {
+        // The cycle retry passes ready=true even before the cache is built: the
+        // build re-decides and defers again quietly while the catalog is missing.
+        if (!DsyncCoexistence.forcedRetryDue(isForced(s, key), s.awaitingCache.containsKey(key), ready)) return
+        if (synchronized(s.pending) { s.pending.containsKey(key) }) return
+        Log.i(TAG, "[DSYNC] force push ${key.suffix} retry ($why) rows=${s.awaitingCache[key] ?: 0}")
+        schedule(s, key, 0L)
     }
 
     /**
@@ -948,7 +976,8 @@ class DispatcharrSyncManager @Inject constructor(
             for (key in s.read.toList()) {
                 val dirty = isDirty(s, key)
                 if (dirty && (reason == "reconnect" || reason == "launch" || reason == "profile")) s.resend += key
-                if (dirty || key !in s.present) schedule(s, key, 0L)
+                if (isForced(s, key) && s.awaitingCache.containsKey(key)) retryForced(s, key, "cycle")
+                else if (dirty || key !in s.present) schedule(s, key, 0L)
             }
         } finally {
             _ui.value = _ui.value.copy(running = false)
@@ -1358,6 +1387,10 @@ class DispatcharrSyncManager @Inject constructor(
         // so the server mirrors the chosen Google Drive setup exactly.
         if (DsyncCoexistence.forcedWritesEmpty(force, key) && DsyncCoexistence.isEmptyData(key, data)) {
             Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=0 (empty, mirrors Google Drive)")
+        } else if (force && key == DsyncKey.Settings) {
+            // Non-blank values across the v, tv, and mobile lanes this device
+            // writes: the same count the Drive probe reports for settings.
+            Log.i(TAG, "[DSYNC] force push settings rows=${DsyncCoexistence.rowCount(key, data)} (mirrors Google Drive)")
         } else if (force) Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)} (user chose Google Drive)")
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
             if (force) clearForced(s, key)
@@ -1637,7 +1670,13 @@ class DispatcharrSyncManager @Inject constructor(
         val decision = DsyncReadiness.decide(key, isReady, unresolvedRows)
         if (decision == DsyncReadiness.Decision.PushPartial) {
             if (s.partial.add(key)) {
-                Log.i(TAG, "[DSYNC] push ${key.suffix} partial after sweep: translated=${localRows - unresolvedRows} untranslated=$unresolvedRows (kept local; key stays dirty)")
+                if (isForced(s, key)) {
+                    // Rule 4: the catalog is built and these rows are not in it;
+                    // the forced push goes without them (counts only).
+                    Log.i(TAG, "[DSYNC] force push ${key.suffix} drops untranslated=$unresolvedRows sent=${localRows - unresolvedRows} (not in this catalog)")
+                } else {
+                    Log.i(TAG, "[DSYNC] push ${key.suffix} partial after sweep: translated=${localRows - unresolvedRows} untranslated=$unresolvedRows (kept local; key stays dirty)")
+                }
             }
         } else s.partial -= key
         if (decision != DsyncReadiness.Decision.Defer) {
@@ -1790,7 +1829,14 @@ class DispatcharrSyncManager @Inject constructor(
             val mode = prefs.groupSortModeIn(s.token).lowercase().takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
             DsyncPayloads.encodeGroupOrder(base, DsyncPayloads.GroupOrder(mode, prefs.groupOrderIn(s.token)))
         }
-        DsyncKey.Settings -> {
+        DsyncKey.Settings -> if (isForced(s, key)) {
+            // Rule 4 mirror: the forced push sends exactly the Drive copy just
+            // applied (its v, tv, and mobile lanes), not local values over the
+            // server's previous lanes (field run 2026-11-01: Drive 7, sent 11).
+            val mirror = prefs.driveMirrorDsyncLanes(s.playlistId)
+            Log.i(TAG, "[DSYNC] settings: mirror lanes ${mirror.entries.joinToString { "${it.key}=${it.value.size}" }.ifEmpty { "none" }}")
+            DsyncPayloads.encodeSettingsLanes(base?.let { b -> JsonObject(b.filterKeys { it !in DsyncPayloads.SETTINGS_LANES }) }, mirror)
+        } else {
             val v = prefs.dsyncSettingsOnce(s.playlistId, s.token)
             Log.i(TAG, "[DSYNC] settings: defaultGroup=${v["defaultGroup"]?.content ?: ""}")
             // Each name goes to the lane its item's scope picks on this device

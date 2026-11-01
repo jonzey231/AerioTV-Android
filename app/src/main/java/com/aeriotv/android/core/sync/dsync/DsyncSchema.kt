@@ -857,6 +857,18 @@ object DsyncCoexistence {
     /** The forced keys to arm after the Drive apply: those whose Sync Category applied. */
     fun armedForceKeys(applied: Map<SyncCategory, Boolean>): List<DsyncKey> = FORCE_KEYS - cancelledForceKeys(applied).toSet()
 
+    /**
+     * Rule 4 mirror: whether the Drive apply for the setup choice replaces
+     * local instead of merging. Preferences carries settings, recents,
+     * collections, hidden groups, and group order; replacing it makes the
+     * forced push send exactly the Drive key set. The row files (progress,
+     * favorites, reminders, watchlist) apply additively as on every pull.
+     */
+    fun replaceOnForcedApply(category: SyncCategory): Boolean = category == SyncCategory.Preferences
+
+    /** Rule 4: retry a deferred forced key now (it is armed, waiting, and its id cache is built). */
+    fun forcedRetryDue(armed: Boolean, awaiting: Boolean, cacheReady: Boolean): Boolean = armed && awaiting && cacheReady
+
     /** The Rule 4 apply hold is on until [until] (0 = off). */
     fun choiceHeld(until: Long, now: Long): Boolean = until > 0L && now < until
 
