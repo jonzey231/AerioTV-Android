@@ -69,6 +69,18 @@ class VodIdResolver @Inject constructor(
         e.apply()
     }
 
+    /**
+     * Canonical ids a Google Drive snapshot carries (format 2, docs section
+     * 10a): the Dispatcharr id a push resolved for a movie or episode uuid.
+     * Recorded on every Drive apply so a forced push translates those rows
+     * without the movie catalog or an episode list (field run 2026-11-01:
+     * 7 of 8 restored rows waited on a sweep that never covered them).
+     */
+    fun recordCanonical(movies: Map<String, Int>, episodes: Map<String, Int>) {
+        record("m", movies.toList())
+        record("e", episodes.toList())
+    }
+
     fun catalogKey(row: PlaylistEntity): String = snapshots.identity(row)
 
     /**
@@ -139,7 +151,12 @@ class VodIdResolver @Inject constructor(
             val page = client.getSeriesEpisodesFirstPage(base, apiKey, seriesId)
             record("e", page.results.map { it.uuid to it.id })
             true
-        }.onFailure { Log.w("AerioDsync", "[DSYNC] episode ids for series $seriesId: ${it.javaClass.simpleName}") }
+        }.onFailure {
+            // A failed load (offline at the first push) must not block this
+            // series for the rest of the process: the next build tries again.
+            fetchedSeries.remove(seriesId)
+            Log.w("AerioDsync", "[DSYNC] episode ids for series $seriesId: ${it.javaClass.simpleName}")
+        }
             .getOrDefault(false)
     }
 }

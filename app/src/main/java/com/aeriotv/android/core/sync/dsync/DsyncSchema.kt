@@ -884,9 +884,10 @@ object DsyncCoexistence {
     fun rowCount(key: DsyncKey, data: JsonObject): Int = when (key) {
         DsyncKey.Favorites -> DsyncPayloads.decodeFavorites(data)?.size ?: 0
         DsyncKey.Recents -> DsyncPayloads.decodeRecents(data)?.size ?: 0
-        DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)?.size ?: 0
+        // Distinct canonical ids, the same count the Drive side reports (DriveCanon.progress).
+        DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)?.distinctBy { it.type to it.vodId }?.size ?: 0
         DsyncKey.Reminders -> DsyncPayloads.decodeReminders(data)?.size ?: 0
-        DsyncKey.Watchlist, DsyncKey.HiddenTitles -> DsyncPayloads.decodeVodMarks(data)?.size ?: 0
+        DsyncKey.Watchlist, DsyncKey.HiddenTitles -> DsyncPayloads.decodeVodMarks(data)?.distinctBy { it.type to it.vodId }?.size ?: 0
         DsyncKey.Collections -> DsyncPayloads.decodeCollections(data)?.size ?: 0
         DsyncKey.HiddenGroups -> DsyncPayloads.decodeHiddenGroups(data)?.let { it.live.size + it.movies.size + it.series.size } ?: 0
         DsyncKey.GroupOrder -> DsyncPayloads.decodeGroupOrder(data)?.let { g ->

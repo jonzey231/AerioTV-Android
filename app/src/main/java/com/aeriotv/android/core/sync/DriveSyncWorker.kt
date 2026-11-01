@@ -112,6 +112,16 @@ class DriveSyncWorker @AssistedInject constructor(
          * into one run. */
         private const val ONESHOT_NAME = "aeriotv-drive-sync-oneshot"
 
+        private val follows = HashMap<SyncCategory, LinkedHashSet<String>>()
+
+        /** Dispatcharr Sync follow (Rule 5): remembered until the next push of [category] logs it. */
+        fun noteFollow(category: SyncCategory, why: String) {
+            synchronized(follows) { follows.getOrPut(category) { LinkedHashSet() } += why }
+        }
+
+        fun takeFollows(category: SyncCategory): List<String> =
+            synchronized(follows) { follows.remove(category)?.toList().orEmpty() }
+
         fun enqueueOneShotPush(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)

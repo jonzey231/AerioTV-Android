@@ -324,8 +324,24 @@ class DriveSyncManager @Inject constructor(
             SyncCategory.Preferences -> json.encodeToString(withCanonicalIds(buildPreferencesSnapshot()))
             SyncCategory.Credentials -> json.encodeToString(buildCredentialsSnapshot())
         }
-        return driveClient.upload(token, category.fileName, payload).isSuccess
+        val ok = driveClient.upload(token, category.fileName, payload).isSuccess
+        DriveSyncWorker.takeFollows(category).takeIf { it.isNotEmpty() }?.let { why ->
+            Log.i(TAG, "[DRIVE] push ${category.name} rows=${snapshotRows(category, payload)} (follow ${why.joinToString(", ")})${if (ok) "" else " failed"}")
+        }
+        return ok
     }
+
+    /** Rows in a pushed snapshot, for the follow line (counts only). */
+    private fun snapshotRows(category: SyncCategory, payload: String): Int = runCatching {
+        when (category) {
+            SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(payload).entries.size
+            SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(payload).entries.size
+            SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(payload).entries.size
+            SyncCategory.Watchlist -> json.decodeFromString<WatchlistSnapshot>(payload).let { it.entries.size + it.hidden.size }
+            SyncCategory.Preferences -> json.decodeFromString<PreferencesSnapshot>(payload).let { it.keys.size + it.tv.size + it.mobile.size }
+            else -> -1
+        }
+    }.getOrDefault(-1)
 
     private suspend fun pullCategory(token: String, category: SyncCategory, replace: Boolean = false, ignoreOwnership: Boolean = false): Boolean =
         pullCategoryDetailed(token, category, replace, ignoreOwnership).let { it == PullOutcome.Applied || it == PullOutcome.Owned }
@@ -362,6 +378,7 @@ class DriveSyncManager @Inject constructor(
                 // cache gate is needed; the counts measure what each apply carried.
                 SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(body).let {
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyWatchProgressSnapshot(it)
+                    recordCanonicalIds(it)
                     if (forcedReplace) replaceProgress(it)
                 }
                 SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(body).let {
@@ -374,6 +391,7 @@ class DriveSyncManager @Inject constructor(
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} local now=${favoriteChannelDao.allOnce().size}")
                 }
                 SyncCategory.Watchlist -> json.decodeFromString<WatchlistSnapshot>(body).let {
+                    recordCanonicalIds(it)
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} hidden=${it.hidden.size}"); if (forcedReplace) replaceWatchlist(it) else applyWatchlistSnapshot(it)
                 }
                 SyncCategory.Preferences -> json.decodeFromString<PreferencesSnapshot>(body).let {
@@ -388,6 +406,26 @@ class DriveSyncManager @Inject constructor(
             PullOutcome.Applied
         }.onFailure { Log.w(TAG, "decode ${category.name} failed", it) }
             .getOrDefault(PullOutcome.Failed) }
+    }
+
+    /**
+     * Section 10a: the canonical ids a format 2 snapshot carries go into the
+     * Dispatcharr Sync id map (active Dispatcharr playlist only), so the
+     * forced push after "Google Drive" translates those rows from the
+     * snapshot first and the local catalog second. Counts only.
+     */
+    private suspend fun recordCanonicalIds(w: WatchProgressSnapshot) {
+        if (idLookup.activeDispatcharr() == null) return
+        val (m, e) = DriveCanon.progressCanonical(w)
+        idLookup.recordCanonical(m, e)
+        Log.i(TAG, "[DRIVE] canonical ids progress movies=${m.size} episodes=${e.size} without=${w.entries.size - m.size - e.size}")
+    }
+
+    private suspend fun recordCanonicalIds(w: WatchlistSnapshot) {
+        if (idLookup.activeDispatcharr() == null) return
+        val m = DriveCanon.watchlistCanonical(w)
+        idLookup.recordCanonical(m, emptyMap())
+        Log.i(TAG, "[DRIVE] canonical ids watchlist movies=${m.size}")
     }
 
     private enum class PullOutcome { Applied, NoRemote, Failed, Owned }
@@ -548,7 +586,8 @@ class DriveSyncManager @Inject constructor(
      * Dispatcharr state is not pushed again until that state changes, so it
      * cannot ping-pong. Returns the categories pushed.
      */
-    suspend fun converge(playlistId: String, dsync: SetupSourceChoice.Summary, skip: Set<String>): List<String> {
+    suspend fun converge(playlistId: String, dsync: SetupSourceChoice.Summary, skipReasons: Map<String, String>): List<String> {
+        val skip = skipReasons.keys
         if (setupChoicePending || sharedHeld()) return emptyList()
         if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty()) return emptyList()
         val gates = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
@@ -560,8 +599,12 @@ class DriveSyncManager @Inject constructor(
         val d = readSharedSummary(token) ?: return emptyList()
         val last = SetupSourceChoice.SHARED.mapNotNull { n -> convergeState.getString(convergeKey(playlistId, n), null)?.let { n to it } }.toMap()
         val plan = SetupSourceChoice.convergePlan(d, dsync, skip, last)
+        val skipped = SetupSourceChoice.convergeSkips(d, dsync, skipReasons, last)
+        skipped.forEach { (n, why) -> Log.i(TAG, SetupSourceChoice.convergeSkipLine(n, why, d.categories[n], dsync.categories[n])) }
         if (plan.isEmpty()) {
-            Log.i(TAG, "[SYNC] converge equal categories=${SetupSourceChoice.SHARED.count { it in d.categories || it in dsync.categories }} skipped=${skip.size}")
+            val n = SetupSourceChoice.SHARED.count { it in d.categories || it in dsync.categories }
+            if (skipped.isEmpty()) Log.i(TAG, "[SYNC] converge equal categories=$n skipped=${skip.size}")
+            else Log.i(TAG, "[SYNC] converge nothing pushed categories=$n differing=${skipped.size}")
             return emptyList()
         }
         plan.forEach { Log.i(TAG, SetupSourceChoice.convergeLine(it, d.categories[it], dsync.categories[it])) }

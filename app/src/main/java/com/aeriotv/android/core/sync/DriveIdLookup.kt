@@ -38,6 +38,9 @@ class DriveIdLookup @Inject constructor(
     suspend fun channels(row: PlaylistEntity): Map<String, Int> =
         channelSnapshotDao.forPlaylistKey(row.id).mapNotNull { r -> r.dispatcharrChannelId?.let { r.channelId to it } }.toMap()
 
+    /** Drive snapshot canonical ids (format 2) into the shared id map, so pushes need no catalog for them. */
+    fun recordCanonical(movies: Map<String, Int>, episodes: Map<String, Int>) = vodIds.recordCanonical(movies, episodes)
+
     suspend fun movies(row: PlaylistEntity, uuids: Collection<String>): Map<String, Int> =
         uuids.mapNotNull { u -> vodIds.movieId(row, u)?.let { u to it } }.toMap()
 

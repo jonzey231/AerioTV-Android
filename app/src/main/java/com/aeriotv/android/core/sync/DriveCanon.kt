@@ -161,6 +161,18 @@ object DriveCanon {
     private fun markId(vodType: String, vodId: String, ids: Ids): Int? =
         if (vodType == "series") vodId.toIntOrNull() else ids.movies[vodId]
 
+    /** Movie and episode uuid to canonical id, from the rows that carry one (format 2). */
+    fun progressCanonical(s: WatchProgressSnapshot): Pair<Map<String, Int>, Map<String, Int>> {
+        val rows = progressCandidates(s).filter { it.dispatcharrVodId != null }
+        return rows.filter { it.vodType == "movie" }.associate { it.videoId to it.dispatcharrVodId!! } to
+            rows.filter { it.vodType == "episode" }.associate { it.videoId to it.dispatcharrVodId!! }
+    }
+
+    /** Movie uuid to canonical id for the watchlist and hidden rows that carry one. */
+    fun watchlistCanonical(s: WatchlistSnapshot): Map<String, Int> =
+        (s.entries.filter { it.vodType != "series" && it.dispatcharrVodId != null }.map { it.vodId to it.dispatcharrVodId!! } +
+            s.hidden.filter { it.vodType != "series" && it.dispatcharrVodId != null }.map { it.vodId to it.dispatcharrVodId!! }).toMap()
+
     // ---- Drive side: summary categories (what Dispatcharr Sync would carry) ----
 
     private fun progressCandidates(s: WatchProgressSnapshot) =
@@ -178,9 +190,10 @@ object DriveCanon {
         val rows = progressCandidates(s)
             .filterNot { it.isFinished && nowS - it.updatedAt / 1000 > DsyncLimits.FINISHED_MAX_AGE_S }
             .sortedByDescending { it.updatedAt }.take(DsyncLimits.PROGRESS)
-        val items = rows.map { r -> (r.dispatcharrVodId ?: progressId(r, ids))?.let { vodItem(if (r.vodType == "episode") "e" else "m", it) } }
-        val f = if (items.any { it == null }) null else fp(items.filterNotNull().distinct())
-        return SetupSourceChoice.Category(rows.size, s.envelope.lastModified, f)
+        // Canonical-id rows only (section 10a): a row with no Dispatcharr id can
+        // never live on Dispatcharr, so it is neither counted nor compared.
+        val items = rows.mapNotNull { r -> (r.dispatcharrVodId ?: progressId(r, ids))?.let { vodItem(if (r.vodType == "episode") "e" else "m", it) } }.distinct()
+        return SetupSourceChoice.Category(items.size, s.envelope.lastModified, fp(items))
     }
 
     /** Future reminders only, as Dispatcharr Sync carries. */
@@ -192,14 +205,14 @@ object DriveCanon {
     /** Live rows of this playlist's scope ([host], or unscoped). */
     fun watchlist(s: WatchlistSnapshot, ids: Ids, host: String?): SetupSourceChoice.Category {
         val rows = s.entries.filter { it.removedAt == null && (it.serverId == null || it.serverId == host) }
-        val items = rows.map { r -> (r.dispatcharrVodId ?: markId(r.vodType, r.vodId, ids))?.let { vodItem(if (r.vodType == "series") "s" else "m", it) } }
-        return SetupSourceChoice.Category(rows.size, s.envelope.lastModified, if (items.any { it == null }) null else fp(items.filterNotNull().distinct()))
+        val items = rows.mapNotNull { r -> (r.dispatcharrVodId ?: markId(r.vodType, r.vodId, ids))?.let { vodItem(if (r.vodType == "series") "s" else "m", it) } }.distinct()
+        return SetupSourceChoice.Category(items.size, s.envelope.lastModified, fp(items))
     }
 
     fun hiddenTitles(s: WatchlistSnapshot, ids: Ids, host: String?): SetupSourceChoice.Category {
         val rows = s.hidden.filter { it.unhiddenAt == null && (it.serverId == null || it.serverId == host) }
-        val items = rows.map { r -> (r.dispatcharrVodId ?: markId(r.vodType, r.vodId, ids))?.let { vodItem(if (r.vodType == "series") "s" else "m", it) } }
-        return SetupSourceChoice.Category(rows.size, s.envelope.lastModified, if (items.any { it == null }) null else fp(items.filterNotNull().distinct()))
+        val items = rows.mapNotNull { r -> (r.dispatcharrVodId ?: markId(r.vodType, r.vodId, ids))?.let { vodItem(if (r.vodType == "series") "s" else "m", it) } }.distinct()
+        return SetupSourceChoice.Category(items.size, s.envelope.lastModified, fp(items))
     }
 
     private fun lines(v: String?): List<String> = v.orEmpty().split('\n').map { it.trim() }.filter { it.isNotEmpty() }.distinct()

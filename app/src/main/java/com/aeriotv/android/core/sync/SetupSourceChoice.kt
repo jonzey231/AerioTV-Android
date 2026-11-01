@@ -108,6 +108,25 @@ object SetupSourceChoice {
             .filter { !categoryEqual(drive.categories[it], dsync.categories[it]) }
             .filter { lastPushed[it] != convergeMark(dsync.categories[it]) }
 
+    /**
+     * The differing categories converge does not push, each with its reason:
+     * the [skip] reason (armed, deferred, dirty, unread), or "untranslatable"
+     * when this exact Dispatcharr state was already pushed once and Drive
+     * still differs. Converge reports "equal" only when this and the plan are
+     * both empty, which is exactly when the setup probe ([decide]) would not ask.
+     */
+    fun convergeSkips(drive: Summary, dsync: Summary, skip: Map<String, String>, lastPushed: Map<String, String>): List<Pair<String, String>> =
+        SHARED.filter { it in drive.categories || it in dsync.categories }
+            .filter { !categoryEqual(drive.categories[it], dsync.categories[it]) }
+            .mapNotNull { n ->
+                skip[n]?.let { n to it }
+                    ?: if (lastPushed[n] == convergeMark(dsync.categories[n])) n to "untranslatable" else null
+            }
+
+    /** The counts-only skip line. */
+    fun convergeSkipLine(name: String, reason: String, drive: Category?, dsync: Category?) =
+        "[SYNC] converge skip $name reason=$reason drive=${drive?.rows ?: 0} dsync=${dsync?.rows ?: 0}"
+
     /** The Drive file that carries a shared category. */
     fun driveFile(name: String): SyncCategory? = when (name) {
         "favorites" -> SyncCategory.Favorites

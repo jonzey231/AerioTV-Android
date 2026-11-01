@@ -144,6 +144,8 @@ class DispatcharrSyncManager @Inject constructor(
         val sweepRetried = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
         /** Keys whose last build pushed with untranslated rows after the sweep (stay dirty). */
         val partial = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
+        /** Untranslated progress counts already broken down this session (one diagnostic line per count). */
+        val progressDiag = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
         /** Whether the cache was built when a deferred key's push finally went out. */
         val readyAtPush = java.util.concurrent.ConcurrentHashMap<DsyncKey, Boolean>()
         /** No key is written before this session's first complete pull. */
@@ -800,6 +802,7 @@ class DispatcharrSyncManager @Inject constructor(
         val on = runCatching { kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncMasterEnabled.first() } }.getOrDefault(false)
         if (!on) return
         Log.i(TAG, "[SYNC] drive follow ${key.suffix} ($why)")
+        key.category?.let { com.aeriotv.android.core.sync.DriveSyncWorker.noteFollow(it, "${key.suffix} $why") }
         com.aeriotv.android.core.sync.DriveSyncWorker.enqueueOneShotPush(context)
     }
 
@@ -819,8 +822,19 @@ class DispatcharrSyncManager @Inject constructor(
         val bucket = (DsyncV2.decode(raw) as? DsyncV2.Decode.Ok)?.bucket ?: return
         // A key with an unsent local change is on its way to the server; the
         // follow push carries it to Drive, so it is not compared now.
-        val skip = DsyncCoexistence.FORCE_KEYS.filter { isDirty(s, it) || it !in s.read || synchronized(s.pending) { s.pending.containsKey(it) } }
-            .map { it.suffix }.toSet()
+        // A key dirty only because untranslatable rows stayed local (PushPartial)
+        // is compared: both summaries count canonical-id rows only (section 10a).
+        val skip = DsyncCoexistence.FORCE_KEYS.mapNotNull { k ->
+            val pending = synchronized(s.pending) { s.pending.containsKey(k) }
+            when {
+                isForced(s, k) -> "armed"
+                s.awaitingCache.containsKey(k) -> "deferred"
+                pending -> "dirty"
+                k !in s.read -> "unread"
+                isDirty(s, k) && k !in s.partial -> "dirty"
+                else -> null
+            }?.let { k.suffix to it }
+        }.toMap()
         convergeRunning = true
         scope.launch {
             try {
@@ -1441,6 +1455,9 @@ class DispatcharrSyncManager @Inject constructor(
             Log.i(TAG, "[DSYNC] force push settings rows=${DsyncCoexistence.rowCount(key, data)} (mirrors Google Drive)")
         } else if (force) Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)} (user chose Google Drive)")
         if (data.toString() == lastDataOf(s, key) && key in s.present) {
+            // No PUT: the server already holds exactly this copy. Logged for a
+            // forced key so every force push ends in a status line.
+            if (force) Log.i(TAG, "[DSYNC] put ${b.wire} (${key.suffix}) status=unchanged rows=${DsyncCoexistence.rowCount(key, data)} (server already holds this copy)")
             if (force) clearForced(s, key)
             markSent(s, key)
             clearAwaiting(s, key)
@@ -1827,6 +1844,15 @@ class DispatcharrSyncManager @Inject constructor(
                         title = p.title,
                     )
                 }
+            if (candidates.size > local.size && s.progressDiag.add(candidates.size - local.size)) {
+                // Counts only: which kind of row did not translate (step 1 diagnostic, 2026-11-01).
+                val miss = candidates.filter { p ->
+                    if (p.vodType == "episode") vodIds.episodeIdCached(p.videoId) == null else vodIds.movieId(c.row, p.videoId) == null
+                }
+                val movies = miss.count { it.vodType == "movie" }
+                val eps = miss.count { it.vodType == "episode" && it.seriesId?.toIntOrNull() != null }
+                Log.i(TAG, "[DSYNC] progress drops untranslated: movies=$movies episodes=$eps other=${miss.size - movies - eps} catalogReady=${cacheReady(s, key)}")
+            }
             if (deferForCache(s, key, candidates.size, candidates.size - local.size)) return null
             val remote = base?.let(DsyncPayloads::decodeProgress).orEmpty()
             DsyncPayloads.encodeProgress(base, DsyncMerge.progress(local, remote), now)

@@ -703,8 +703,36 @@ app-data path, no new server path) without applying either, and summarizes
 per shared category (favorites, recents, collections, progress, reminders,
 watchlist, hiddenTitles, hiddenGroups, groupOrder, settings): row count,
 `updatedAt`, and a content fingerprint over canonical row identities. A
-category whose rows cannot all be resolved to canonical ids has no
-fingerprint and counts as different when non-empty on either side.
+channel category whose rows cannot all be resolved to canonical ids has no
+fingerprint and counts as different when non-empty on either side. The VOD
+categories (progress, watchlist, hidden titles) follow the canonical-id
+requirement below.
+
+Canonical-id requirement for VOD rows (2026-11-01). A progress, watchlist,
+or hidden title row counts only when it carries a canonical Dispatcharr VOD
+id: the snapshot's `dispatcharrVodId`, else the id resolved from the local
+catalog or episode map at probe time. Both summaries apply it (the Drive
+summary in `DriveCanon.progress`, `watchlist`, and `hiddenTitles`; the
+Dispatcharr rows always carry one, counted as distinct type plus id). A row
+with no canonical id (a title deleted from the server, a row from another
+server, a URL-keyed row) cannot live on Dispatcharr Sync: it stays in Drive
+and on the device, is never force pushed, never converged, and never
+counted, so the fingerprints agree on the rows both sides can hold. Field
+run 2026-11-01: Drive progress=8 against Dispatcharr progress=1 with seven
+untranslatable rows asked on every Drive off/on; both now read 1.
+
+Translation order for a forced push (2026-11-01). Every Drive apply of
+watch progress and watchlist records the snapshot's canonical ids into the
+Dispatcharr Sync id map (`[DRIVE] canonical ids progress movies=<n>
+episodes=<n> without=<n>`), so a forced push translates those rows from
+the snapshot first and the local catalog or episode list second, without
+waiting for the movie sweep or for the user to open Movies or TV Shows.
+Episode ids need no series catalog sweep: they come from the snapshot, the
+saved episode map, or one episode-list load per series (retried on a later
+build when it failed). A forced key that ends without a PUT, because the
+server already holds the same copy, logs `[DSYNC] put <bucket> (<key>)
+status=unchanged rows=<n>`. Rows still untranslated log `[DSYNC] progress
+drops untranslated: movies=<n> episodes=<n> other=<n>` (counts only).
 
 Canonical ids and the Drive id migration (2026-10-30). The canonical
 identity of each shared category is the one Dispatcharr Sync puts on the
@@ -862,7 +890,15 @@ found before the setup choice is settled is left to them.
    copy: Dispatcharr is the source of truth, Drive is never pulled over
    Dispatcharr-owned data. Log, counts only:
    `[SYNC] converge <category> drive=<fp>/<rows> dsync=<fp>/<rows> -> push drive`,
-   or `[SYNC] converge equal categories=<n> skipped=<n>`.
+   or `[SYNC] converge equal categories=<n> skipped=<n>`. Converge and the
+   Rule 4 probe use the same summaries (`DriveSyncManager.readSharedSummary`
+   and `DsyncCoexistence.summarize`), so "equal" is logged only when the
+   probe would not ask. Every differing category it does not push is named:
+   `[SYNC] converge skip <category> reason=<armed|deferred|dirty|unread|untranslatable> drive=<n> dsync=<n>`,
+   then `[SYNC] converge nothing pushed categories=<n> differing=<n>`. A key
+   dirty only because untranslatable rows stayed local is compared, not
+   skipped. The follow push logs each followed file:
+   `[DRIVE] push <Category> rows=<n> (follow <key> <reason>)`.
 3. No ping-pong: a category pushed once for a given Dispatcharr state
    (rows plus fingerprint, saved per playlist) is not pushed again until
    the Dispatcharr copy changes, even when the next compare still differs
@@ -878,7 +914,8 @@ found before the setup choice is settled is left to them.
    sides.
 
 Apple mirrors Rule 5 with iCloud in place of Drive (pending in the Apple
-copy of this document).
+copy of this document). The Apple copy must also mirror the canonical-id
+requirement for VOD rows and the forced-push translation order above.
 
 ## 10b. Sync providers record (`syncProviders`)
 
