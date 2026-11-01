@@ -93,6 +93,7 @@ class DispatcharrSyncManager @Inject constructor(
     private val pinStore: ProfilePinStore,
     private val profileManager: Provider<ProfileManager>,
     private val vodIds: VodIdResolver,
+    private val held: DsyncHeldStore,
     private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
     /** Rule 5: Drive follows and converges with Dispatcharr Sync (Provider: the two reference each other). */
     private val drive: Provider<com.aeriotv.android.core.sync.DriveSyncManager>,
@@ -784,7 +785,7 @@ class DispatcharrSyncManager @Inject constructor(
             val root = runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull()
             val bucket = (root?.let { DsyncV2.decode(it) } as? DsyncV2.Decode.Ok)?.bucket
                 ?: return@withContext com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
-            val out = DsyncCoexistence.summarize(bucket, prefs.syncScopesOnce())
+            val out = deviceSummary(row, bucket)
             Log.i(TAG, "[DSYNC] setup probe ${out.categories.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
             out
         }
@@ -826,8 +827,8 @@ class DispatcharrSyncManager @Inject constructor(
         if (!s.firstPullDone) return DriveOrderState(null, com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY)
         val read = synchronized(s.read) { s.read.toSet() }.filter { it in DsyncCoexistence.FORCE_KEYS }.map { it.suffix }.toSet()
         val bucket = bucketRaw(s, DsyncBucket.Main)?.let { (DsyncV2.decode(it) as? DsyncV2.Decode.Ok)?.bucket }
-        val scopes = kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncScopesOnce() }
-        val server = bucket?.let { DsyncCoexistence.summarize(it, scopes) } ?: com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
+        val row = playlistDao.byId(s.playlistId)
+        val server = bucket?.let { b -> row?.let { deviceSummary(it, b) } } ?: com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
         return DriveOrderState(read, server)
     }
 
@@ -875,7 +876,7 @@ class DispatcharrSyncManager @Inject constructor(
         convergeRunning = true
         scope.launch {
             try {
-                val x = DsyncCoexistence.summarize(bucket, kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncScopesOnce() })
+                val x = deviceSummary(playlistDao.byId(s.playlistId) ?: return@launch, bucket)
                 drive.get().converge(s.playlistId, x, skip)
             } catch (t: Throwable) {
                 Log.w(TAG, "[SYNC] converge failed: ${t.javaClass.simpleName}")
@@ -1318,6 +1319,7 @@ class DispatcharrSyncManager @Inject constructor(
             // Keep the newest raw for round-trip and the row merges.
             state.edit().putString(k("raw", s, key), raw.toString()).apply()
             Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes not newer")
+            if (key == DsyncKey.Progress) runCatching { retryHeldProgress(s, env) }
             if (healIfLocalDiffers(s, key, env) == ApplyResult.NotReady) return
         }
         s.read += key
@@ -1905,7 +1907,10 @@ class DispatcharrSyncManager @Inject constructor(
             }
             if (deferForCache(s, key, candidates.size, candidates.size - local.size)) return null
             val remote = base?.let(DsyncPayloads::decodeProgress).orEmpty()
-            DsyncPayloads.encodeProgress(base, DsyncMerge.progress(local, remote), now)
+            // Held rows (section 10a) carry their canonical id: a forced push keeps them too.
+            val have = local.map { it.type to it.vodId }.toSet()
+            val heldRows = if (isBase(s)) held.progress(s.playlistId).filter { (it.type to it.vodId) !in have } else emptyList()
+            DsyncPayloads.encodeProgress(base, DsyncMerge.progress(local + heldRows, remote), now)
         }
         DsyncKey.Reminders -> {
             val m = channelMap(s)
@@ -2001,6 +2006,109 @@ class DispatcharrSyncManager @Inject constructor(
             }
         }
         DsyncKey.Profiles -> buildProfiles(s, base)
+    }
+
+    /**
+     * Server progress rows into the local store. Returns the rows this device
+     * cannot map to a local uuid yet (section 10a: held by canonical id, not dropped).
+     */
+    private suspend fun applyProgressRows(s: Session, c: Conn, rows: List<ProgressRow>): List<ProgressRow> {
+        val unresolved = ArrayList<ProgressRow>()
+        val movieUuids = vodIds.movieUuids(c.row, rows.filter { it.type == "m" }.map { it.vodId }.toSet())
+        rows.forEach { r ->
+            // Integer id back to the local uuid; a row this device cannot map is held.
+            val uuid = if (r.type == "e") vodIds.episodeUuid(c.base, c.apiKey, r.vodId, r.seriesId) else movieUuids[r.vodId]
+            if (uuid == null) { unresolved += r; unresolvedOnce(s, "progress in", "${r.type}${r.vodId}"); return@forEach }
+            val local = watchProgressDao.getOnce(uuid)
+            if (local != null && r.updatedAt * 1000 <= local.updatedAt) return@forEach
+            val ep = r.type == "e"
+            val baseRow = local ?: WatchProgressEntity(
+                videoId = uuid, title = r.title, posterUrl = null,
+                positionMs = 0, durationMs = 0, updatedAt = 0, playlistId = s.playlistId,
+            )
+            watchProgressDao.upsert(
+                baseRow.copy(
+                    title = if (local != null && local.title.length > r.title.length && local.title.startsWith(r.title)) local.title else r.title,
+                    positionMs = r.position * 1000,
+                    durationMs = if (r.duration > 0) r.duration * 1000 else baseRow.durationMs,
+                    updatedAt = r.updatedAt * 1000,
+                    vodType = if (ep) "episode" else "movie",
+                    seriesId = r.seriesId?.toString() ?: baseRow.seriesId,
+                    seasonNumber = if (r.season > 0) r.season else baseRow.seasonNumber,
+                    episodeNumber = if (r.episode > 0) r.episode else baseRow.episodeNumber,
+                    isFinished = r.finished,
+                ),
+            )
+        }
+        return unresolved
+    }
+
+    /**
+     * Base user only (the Drive backup is the base profile's): the rows that
+     * did not map are held by canonical id, so the Drive snapshot and summary
+     * carry them (section 10a). Counts only.
+     */
+    private suspend fun holdProgress(s: Session, c: Conn, unresolved: List<ProgressRow>, why: String) {
+        if (!isBase(s)) return
+        held.setProgress(s.playlistId, unresolved)
+        if (unresolved.isNotEmpty() || why == "in") {
+            Log.i(TAG, "[DSYNC] progress $why held=${unresolved.size} movies=${unresolved.count { it.type == "m" }} " +
+                "episodes=${unresolved.count { it.type == "e" }} catalogReady=${vodIds.moviesReady(c.row)}")
+        }
+    }
+
+    /** Held rows a newer catalog or episode map now resolves become local rows (no server read). */
+    private suspend fun retryHeldProgress(s: Session, env: DsyncEnvelope) {
+        if (!isBase(s)) return
+        val c = conn(s) ?: return
+        if (!held.has(s.playlistId)) {
+            // First run of this build: the stamp was consumed before rows were held.
+            val rows = DsyncPayloads.decodeProgress(env.data) ?: return
+            holdProgress(s, c, applyProgressRows(s, c, rows), "in (held set rebuilt)")
+            return
+        }
+        val before = held.progress(s.playlistId)
+        if (before.isEmpty()) return
+        val left = applyProgressRows(s, c, before)
+        if (left.size != before.size) holdProgress(s, c, left, "retry")
+    }
+
+    /**
+     * The representable filter for the setup probe and converge (section
+     * 10a): a Dispatcharr VOD row counts only when this device resolves it,
+     * holds it, or the Drive copy carries it with a canonical id.
+     */
+    private suspend fun representable(row: PlaylistEntity, bucket: DsyncV2.Bucket): (String, Int) -> Boolean {
+        fun data(k: DsyncKey) = (DsyncV2.category(bucket, k) as? DsyncDecode.Ok)?.envelope?.data
+        val prog = data(DsyncKey.Progress)?.let { DsyncPayloads.decodeProgress(it) }.orEmpty()
+        val marks = listOf(DsyncKey.Watchlist, DsyncKey.HiddenTitles).flatMap { k -> data(k)?.let { DsyncPayloads.decodeVodMarks(it) }.orEmpty() }
+        val movieIds = (prog.filter { it.type == "m" }.map { it.vodId } + marks.filter { it.type == "m" }.map { it.vodId }).toSet()
+        val movies = runCatching { vodIds.movieUuids(row, movieIds).keys }.getOrDefault(emptySet())
+        val episodes = prog.filter { it.type == "e" && vodIds.episodeUuidCached(it.vodId) != null }.map { it.vodId }.toSet()
+        val h = held.items(row.id)
+        val drive = held.driveItems(row.id)
+        return { t, id -> DsyncHeld.representable(t, id, movies, episodes, h, drive) }
+    }
+
+    /** Summary of the Dispatcharr copy restricted to representable rows, with the exclusion lines. */
+    private suspend fun deviceSummary(row: PlaylistEntity, bucket: DsyncV2.Bucket): com.aeriotv.android.core.sync.SetupSourceChoice.Summary {
+        val scopes = kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncScopesOnce() }
+        val gone = LinkedHashMap<String, Int>()
+        val out = DsyncCoexistence.summarize(bucket, scopes, representable(row, bucket), gone)
+        gone.filterKeys { it in out.categories }.forEach { (n, c) -> Log.i(TAG, DsyncHeld.excludeLine(n, c)) }
+        return out
+    }
+
+    /** The canonical VOD items the Drive copy carries (setup probe), for the representable filter. */
+    fun noteDriveItems(playlistId: String, items: Set<String>) = held.noteDriveItems(playlistId, items)
+
+    /** Held progress rows for the Drive snapshot of [playlistId] (base user). */
+    fun heldProgress(playlistId: String): List<ProgressRow> = held.progress(playlistId)
+
+    /** A Drive apply carried placeholder rows: hold them (replace when the user chose Google Drive). */
+    fun holdFromDrive(playlistId: String, rows: List<ProgressRow>, replace: Boolean) {
+        val next = if (replace) rows else DsyncHeld.merge(held.progress(playlistId), rows)
+        held.setProgress(playlistId, next)
     }
 
     /** A local "m:<uuid>" / "s:<id>" key as a row with the integer id, or null (kept local, logged once). */
@@ -2213,32 +2321,8 @@ class DispatcharrSyncManager @Inject constructor(
             DsyncKey.Progress -> {
                 val rows = DsyncPayloads.decodeProgress(d) ?: return ApplyResult.Malformed
                 val c = conn(s) ?: return ApplyResult.Failed
-                val movieUuids = vodIds.movieUuids(c.row, rows.filter { it.type == "m" }.map { it.vodId }.toSet())
-                rows.forEach { r ->
-                    // Integer id back to the local uuid; a row this device cannot map is skipped.
-                    val uuid = if (r.type == "e") vodIds.episodeUuid(c.base, c.apiKey, r.vodId, r.seriesId) else movieUuids[r.vodId]
-                    if (uuid == null) { unresolvedOnce(s, "progress in", "${r.type}${r.vodId}"); return@forEach }
-                    val local = watchProgressDao.getOnce(uuid)
-                    if (local != null && r.updatedAt * 1000 <= local.updatedAt) return@forEach
-                    val ep = r.type == "e"
-                    val baseRow = local ?: WatchProgressEntity(
-                        videoId = uuid, title = r.title, posterUrl = null,
-                        positionMs = 0, durationMs = 0, updatedAt = 0, playlistId = s.playlistId,
-                    )
-                    watchProgressDao.upsert(
-                        baseRow.copy(
-                            title = if (local != null && local.title.length > r.title.length && local.title.startsWith(r.title)) local.title else r.title,
-                            positionMs = r.position * 1000,
-                            durationMs = if (r.duration > 0) r.duration * 1000 else baseRow.durationMs,
-                            updatedAt = r.updatedAt * 1000,
-                            vodType = if (ep) "episode" else "movie",
-                            seriesId = r.seriesId?.toString() ?: baseRow.seriesId,
-                            seasonNumber = if (r.season > 0) r.season else baseRow.seasonNumber,
-                            episodeNumber = if (r.episode > 0) r.episode else baseRow.episodeNumber,
-                            isFinished = r.finished,
-                        ),
-                    )
-                }
+                val unresolved = applyProgressRows(s, c, rows)
+                holdProgress(s, c, unresolved, "in")
             }
             DsyncKey.Reminders -> {
                 val rows = DsyncPayloads.decodeReminders(d) ?: return ApplyResult.Malformed

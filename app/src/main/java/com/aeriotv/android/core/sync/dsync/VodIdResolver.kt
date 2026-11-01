@@ -63,7 +63,8 @@ class VodIdResolver @Inject constructor(
         if (pairs.isEmpty()) return
         val e = prefs.edit()
         pairs.forEach { (uuid, id) ->
-            if (uuid.isBlank()) return@forEach
+            // Held placeholders (DsyncHeld) are never a local uuid.
+            if (uuid.isBlank() || DsyncHeld.isPlaceholder(uuid)) return@forEach
             e.putInt("$kind:$uuid", id).putString("${kind.uppercase()}:$id", uuid)
         }
         e.apply()
@@ -137,6 +138,9 @@ class VodIdResolver @Inject constructor(
 
     /** Episode uuid -> id from the saved map only (no network): Drive pushes never wait on a fetch. */
     fun episodeIdCached(uuid: String): Int? = if (prefs.contains("e:$uuid")) prefs.getInt("e:$uuid", 0) else null
+
+    /** Episode id -> local uuid from the saved map only (no network): the setup probe filter. */
+    fun episodeUuidCached(id: Int): String? = prefs.getString("E:$id", null)
 
     /** Episode id -> local uuid; loads [seriesId]'s episode list once when unknown. */
     suspend fun episodeUuid(base: String, apiKey: String, id: Int, seriesId: Int?): String? {

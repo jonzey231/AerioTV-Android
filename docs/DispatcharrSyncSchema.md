@@ -697,7 +697,9 @@ Sync on) and in Settings > Sync when the second provider is turned on.
 Probe before apply: with both selected in onboarding, the Drive restore
 applies Playlists and Credentials only (Dispatcharr never holds them and the
 probe needs them); the shared categories are held, neither pulled nor
-pushed, until the choice (the hold expires after 30 minutes). The probe
+pushed, until the choice (the hold expires after 30 minutes). Each held
+pull or push logs `[DRIVE] pull <category> held: waiting for the setup
+choice` (or `push`); that line is the fresh-setup state before the choice. The probe
 reads the Drive files and the user's App Data key (`GET` on the existing
 app-data path, no new server path) without applying either, and summarizes
 per shared category (favorites, recents, collections, progress, reminders,
@@ -729,6 +731,32 @@ and on the device, is never force pushed, never converged, and never
 counted, so the fingerprints agree on the rows both sides can hold. Field
 run 2026-11-01: Drive progress=8 against Dispatcharr progress=1 with seven
 untranslatable rows asked on every Drive off/on; both now read 1.
+
+Representable rows and held rows (2026-11-01, second field run). The
+decision compares only rows this device can represent on both providers.
+A Dispatcharr progress row the pull cannot map to a local uuid (movie
+catalog sweep not there yet, episode not in the saved episode map) is no
+longer dropped: it is held by its canonical id (`DsyncHeldStore`, base user,
+per playlist) and logged counts only as `[DSYNC] progress in held=<n>
+movies=<n> episodes=<n> catalogReady=<bool>`. The Drive WatchProgress
+snapshot carries each held row as a placeholder row (`videoId`
+`dsync:<m|e>:<id>` with `dispatcharrVodId`), so the Drive summary and push
+count it by that id even when the local catalog cannot resolve it. A Drive
+apply never writes a placeholder as a local row; it holds it (replacing the
+held set when the user chose Google Drive), and the forced Dispatcharr push
+includes held rows. Every later progress pull ("not newer" included)
+retries the held rows against the catalog and episode map and turns the
+ones that resolve into local rows. Symmetrically, the Dispatcharr summary
+on this device (setup probe, fresh-device order, converge) keeps a
+progress, watchlist, or hidden title row only when it resolves here, is
+held, or the Drive copy carries it with a canonical id; the others are
+excluded with `[SYNC] probe excludes <category> rows=<n> (no local match)`.
+So `converge skip <category> reason=untranslatable` can only follow rows
+that cannot exist on this device, and those are in neither summary. Field
+run: `[DSYNC] setup probe progress=1` against `[DRIVE] setup probe
+progress=0` with `push WatchProgress rows=0` after a Dispatcharr choice,
+because the one server row was skipped by the pull
+(`HeldProgressTest`). The Apple copy of this section must mirror it.
 
 Translation order for a forced push (2026-11-01). Every Drive apply of
 watch progress and watchlist records the snapshot's canonical ids into the

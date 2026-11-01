@@ -397,7 +397,7 @@ class DriveSyncManager @Inject constructor(
         }
         val payload = when (category) {
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
-            SyncCategory.WatchProgress -> json.encodeToString(withCanonicalIds(buildWatchProgressSnapshot()))
+            SyncCategory.WatchProgress -> json.encodeToString(withHeld(withCanonicalIds(buildWatchProgressSnapshot())))
             SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
             SyncCategory.Favorites -> json.encodeToString(withCanonicalIds(buildFavoritesSnapshot()))
             SyncCategory.Watchlist -> json.encodeToString(withCanonicalIds(buildWatchlistSnapshot()))
@@ -534,6 +534,7 @@ class DriveSyncManager @Inject constructor(
                 SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(body).let {
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyWatchProgressSnapshot(it)
                     recordCanonicalIds(it)
+                    holdPlaceholders(it, forcedReplace)
                     if (forcedReplace) replaceProgress(it)
                 }
                 SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(body).let {
@@ -574,6 +575,15 @@ class DriveSyncManager @Inject constructor(
         val (m, e) = DriveCanon.progressCanonical(w)
         idLookup.recordCanonical(m, e)
         Log.i(TAG, "[DRIVE] canonical ids progress movies=${m.size} episodes=${e.size} without=${w.entries.size - m.size - e.size}")
+    }
+
+    /** Placeholder rows (held by canonical id on the writer) are held here too, never written as local rows. */
+    private suspend fun holdPlaceholders(w: WatchProgressSnapshot, replace: Boolean) {
+        val row = idLookup.activeDispatcharr() ?: return
+        val rows = w.entries.mapNotNull { com.aeriotv.android.core.sync.dsync.DsyncHeld.fromEntry(it) }
+        if (rows.isEmpty() && !replace) return
+        dispatcharrSync.get().holdFromDrive(row.id, rows, replace)
+        Log.i(TAG, "[DRIVE] held progress rows=${rows.size}${if (replace) " (replace)" else ""}")
     }
 
     private suspend fun recordCanonicalIds(w: WatchlistSnapshot) {
@@ -737,6 +747,9 @@ class DriveSyncManager @Inject constructor(
         }
         val out = LinkedHashMap<String, SetupSourceChoice.Category>()
         val now = System.currentTimeMillis()
+        var carriedP: WatchProgressSnapshot? = null
+        var carriedW: WatchlistSnapshot? = null
+        var carriedIds = DriveCanon.Ids()
         val scopes = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { appPreferences.syncScopesOnce() }
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val row = idLookup.activeDispatcharr()
@@ -754,6 +767,8 @@ class DriveSyncManager @Inject constructor(
                     runCatching { DriveCanon.Ids(movies = idLookup.movies(r, movies), episodes = idLookup.episodes(r, episodes, network = true)) }.getOrNull()
                 } ?: DriveCanon.Ids()
                 out["progress"] = DriveCanon.progress(w, ids, now)
+                carriedP = w
+                carriedIds = carriedIds.copy(movies = carriedIds.movies + ids.movies, episodes = ids.episodes)
             }
             body(SyncCategory.Reminders)?.let { json.decodeFromString<RemindersSnapshot>(it) }?.let { r ->
                 out["reminders"] = DriveCanon.reminders(r, now)
@@ -763,7 +778,12 @@ class DriveSyncManager @Inject constructor(
                     ?: DriveCanon.Ids()
                 out["watchlist"] = DriveCanon.watchlist(w, ids, host)
                 out["hiddenTitles"] = DriveCanon.hiddenTitles(w, ids, host)
+                carriedW = w
+                carriedIds = carriedIds.copy(movies = carriedIds.movies + ids.movies)
             }
+            // Section 10a: the rows the Drive copy carries with a canonical id are
+            // representable here, so the Dispatcharr probe keeps them.
+            row?.let { r -> dispatcharrSync.get().noteDriveItems(r.id, DriveCanon.carriedItems(carriedP, carriedW, carriedIds)) }
             body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) }?.let { p ->
                 val ids = DriveCanon.Ids(channels = channels)
                 out["recents"] = DriveCanon.recentsCategory(p, ids)
@@ -872,6 +892,16 @@ class DriveSyncManager @Inject constructor(
         val row = idLookup.activeDispatcharr() ?: return s
         val (movies, episodes) = DriveCanon.progressNeeds(s)
         DriveCanon.enrichProgress(s, DriveCanon.Ids(movies = idLookup.movies(row, movies), episodes = idLookup.episodes(row, episodes, network = false))).first
+    }.getOrDefault(s)
+
+    /**
+     * Section 10a: Dispatcharr rows this device holds by canonical id only
+     * (no local uuid yet) ride in the snapshot as placeholder rows, so the
+     * Drive copy carries every row the Dispatcharr copy holds here.
+     */
+    private suspend fun withHeld(s: WatchProgressSnapshot): WatchProgressSnapshot = runCatching {
+        val row = idLookup.activeDispatcharr() ?: return s
+        com.aeriotv.android.core.sync.dsync.DsyncHeld.withHeld(s, dispatcharrSync.get().heldProgress(row.id))
     }.getOrDefault(s)
 
     private suspend fun withCanonicalIds(s: WatchlistSnapshot): WatchlistSnapshot = runCatching {
@@ -1366,6 +1396,8 @@ class DriveSyncManager @Inject constructor(
             // came back with http://...recordings/93/hls/... rows). Skip
             // on apply too; the next push writes a clean snapshot.
             if (remote.videoId.contains("://")) return@forEach
+            // Held placeholders have no local title yet (holdPlaceholders keeps them).
+            if (com.aeriotv.android.core.sync.dsync.DsyncHeld.isPlaceholder(remote.videoId)) return@forEach
             val local = watchProgressDao.getOnce(remote.videoId)
             if (local == null || remote.updatedAt > local.updatedAt) {
                 // The snapshot only carries the synced position fields, so MERGE

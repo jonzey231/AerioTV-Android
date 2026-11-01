@@ -142,7 +142,7 @@ object DriveCanon {
 
     /** Local movie and episode ids a progress snapshot needs translated (movie uuids, episode uuid to series id). */
     fun progressNeeds(s: WatchProgressSnapshot): Pair<Set<String>, Map<String, Int?>> {
-        val rows = progressCandidates(s).filter { it.dispatcharrVodId == null }
+        val rows = progressCandidates(s).filter { it.dispatcharrVodId == null && !com.aeriotv.android.core.sync.dsync.DsyncHeld.isPlaceholder(it.videoId) }
         return rows.filter { it.vodType == "movie" }.map { it.videoId }.toSet() to
             rows.filter { it.vodType == "episode" }.associate { it.videoId to it.seriesId?.toIntOrNull() }
     }
@@ -163,7 +163,8 @@ object DriveCanon {
 
     /** Movie and episode uuid to canonical id, from the rows that carry one (format 2). */
     fun progressCanonical(s: WatchProgressSnapshot): Pair<Map<String, Int>, Map<String, Int>> {
-        val rows = progressCandidates(s).filter { it.dispatcharrVodId != null }
+        // Held placeholders (no local uuid) never enter the uuid map.
+        val rows = progressCandidates(s).filter { it.dispatcharrVodId != null && !com.aeriotv.android.core.sync.dsync.DsyncHeld.isPlaceholder(it.videoId) }
         return rows.filter { it.vodType == "movie" }.associate { it.videoId to it.dispatcharrVodId!! } to
             rows.filter { it.vodType == "episode" }.associate { it.videoId to it.dispatcharrVodId!! }
     }
@@ -177,6 +178,21 @@ object DriveCanon {
 
     private fun progressCandidates(s: WatchProgressSnapshot) =
         s.entries.filter { !it.videoId.contains("://") && (it.vodType == "movie" || it.vodType == "episode") }
+
+    /**
+     * Canonical VOD items a Drive copy carries with an id (progress, watchlist,
+     * hidden titles), for the Dispatcharr side's representable filter (10a).
+     */
+    fun carriedItems(p: WatchProgressSnapshot?, w: WatchlistSnapshot?, ids: Ids = Ids()): Set<String> {
+        val out = HashSet<String>()
+        p?.let { s -> progressCandidates(s).forEach { r -> (r.dispatcharrVodId ?: progressId(r, ids))?.let { out += vodItem(if (r.vodType == "episode") "e" else "m", it) } } }
+        w?.let { s ->
+            (s.entries.map { it.vodType to (it.dispatcharrVodId ?: markId(it.vodType, it.vodId, ids)) } +
+                s.hidden.map { it.vodType to (it.dispatcharrVodId ?: markId(it.vodType, it.vodId, ids)) })
+                .forEach { (t, id) -> if (id != null) out += vodItem(if (t == "series") "s" else "m", id) }
+        }
+        return out
+    }
 
     /** Canonical-id rows only (distinct Dispatcharr channel ids), as Dispatcharr Sync carries and counts them. */
     fun favorites(s: FavoritesSnapshot, ids: Ids): SetupSourceChoice.Category {

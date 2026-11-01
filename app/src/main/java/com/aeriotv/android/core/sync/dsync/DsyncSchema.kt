@@ -944,7 +944,12 @@ object DsyncCoexistence {
      * settings without the names this device has Off. The Drive side
      * (DriveSyncManager.readSharedSummary) applies the same filters.
      */
-    fun summarize(bucket: DsyncV2.Bucket, scopes: Map<String, com.aeriotv.android.core.sync.SyncScope>): com.aeriotv.android.core.sync.SetupSourceChoice.Summary {
+    fun summarize(
+        bucket: DsyncV2.Bucket,
+        scopes: Map<String, com.aeriotv.android.core.sync.SyncScope>,
+        keep: ((String, Int) -> Boolean)? = null,
+        excluded: MutableMap<String, Int>? = null,
+    ): com.aeriotv.android.core.sync.SetupSourceChoice.Summary {
         val sc = com.aeriotv.android.core.sync.SetupSourceChoice
         val out = LinkedHashMap<String, com.aeriotv.android.core.sync.SetupSourceChoice.Category>()
         FORCE_KEYS.forEach { key ->
@@ -954,6 +959,11 @@ object DsyncCoexistence {
                     ?.let { com.aeriotv.android.core.sync.DriveCanon.lanesOn(it) { n -> sc.nameOff(scopes, n) } }
                 val (n, f) = lanes?.let { com.aeriotv.android.core.sync.DriveCanon.dsyncSettings(it) } ?: (0 to null)
                 com.aeriotv.android.core.sync.SetupSourceChoice.Category(n, env.updatedAt * 1000, f)
+            } else if (keep != null && key in DsyncHeld.VOD_KEYS) {
+                // Section 10a: only rows this device can represent on both providers.
+                val (c, gone) = DsyncHeld.vodCategory(key, env.data, env.updatedAt * 1000, keep)
+                if (gone > 0) excluded?.put(key.suffix, gone)
+                c
             } else com.aeriotv.android.core.sync.SetupSourceChoice.Category(rowCount(key, env.data), env.updatedAt * 1000, fingerprint(key, env.data))
         }
         return sc.forDevice(com.aeriotv.android.core.sync.SetupSourceChoice.Summary(out)) { sc.itemOff(scopes, it) }
