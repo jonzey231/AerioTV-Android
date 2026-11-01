@@ -94,6 +94,8 @@ class DispatcharrSyncManager @Inject constructor(
     private val profileManager: Provider<ProfileManager>,
     private val vodIds: VodIdResolver,
     private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
+    /** Rule 5: Drive follows and converges with Dispatcharr Sync (Provider: the two reference each other). */
+    private val drive: Provider<com.aeriotv.android.core.sync.DriveSyncManager>,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = context.getSharedPreferences("aerio_dsync", Context.MODE_PRIVATE)
@@ -778,18 +780,59 @@ class DispatcharrSyncManager @Inject constructor(
             val root = runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull()
             val bucket = (root?.let { DsyncV2.decode(it) } as? DsyncV2.Decode.Ok)?.bucket
                 ?: return@withContext com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
-            val out = LinkedHashMap<String, com.aeriotv.android.core.sync.SetupSourceChoice.Category>()
-            DsyncCoexistence.FORCE_KEYS.forEach { key ->
-                val env = (DsyncV2.category(bucket, key) as? DsyncDecode.Ok)?.envelope ?: return@forEach
-                out[key.suffix] = com.aeriotv.android.core.sync.SetupSourceChoice.Category(
-                    rows = DsyncCoexistence.rowCount(key, env.data),
-                    updatedAt = env.updatedAt * 1000,
-                    fingerprint = DsyncCoexistence.fingerprint(key, env.data),
-                )
-            }
-            Log.i(TAG, "[DSYNC] setup probe ${out.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
-            com.aeriotv.android.core.sync.SetupSourceChoice.Summary(out)
+            val out = DsyncCoexistence.summarize(bucket, prefs.syncScopesOnce())
+            Log.i(TAG, "[DSYNC] setup probe ${out.categories.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
+            out
         }
+
+    // ---- Rule 5: convergence with Google Drive ----
+
+    /**
+     * Drive follows Dispatcharr Sync in the same foreground session (Rule 5):
+     * a shared key applied from a pull, or changed on this device, queues the
+     * debounced one-shot Drive push (DriveSyncWorker, 15 s, REPLACE). Base
+     * user only (the Drive backup is the base profile's), Drive Sync on, and
+     * the key's Sync Categories item on.
+     */
+    private suspend fun driveFollow(s: Session, key: DsyncKey, why: String) {
+        if (!isBase(s) || key.category !in DsyncCoexistence.SHARED_CATEGORIES) return
+        if (!enabled(key, s)) return
+        val on = runCatching { kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncMasterEnabled.first() } }.getOrDefault(false)
+        if (!on) return
+        Log.i(TAG, "[SYNC] drive follow ${key.suffix} ($why)")
+        com.aeriotv.android.core.sync.DriveSyncWorker.enqueueOneShotPush(context)
+    }
+
+    @Volatile private var convergeRunning = false
+
+    /**
+     * Rule 5 self-heal, once per complete pull: compare the Drive copy with
+     * the Dispatcharr copy this pull just read (the saved bucket, no extra
+     * server read) and push the differing categories to Drive. Only once the
+     * setup choice is settled: never while a Rule 4 hold, forced replace, or
+     * prompt is pending, and never for a sub-profile.
+     */
+    private fun maybeConverge(s: Session) {
+        if (!isBase(s) || choiceHeld() || convergeRunning) return
+        if (DsyncCoexistence.FORCE_KEYS.any { isForced(s, it) }) return
+        val raw = bucketRaw(s, DsyncBucket.Main) ?: return
+        val bucket = (DsyncV2.decode(raw) as? DsyncV2.Decode.Ok)?.bucket ?: return
+        // A key with an unsent local change is on its way to the server; the
+        // follow push carries it to Drive, so it is not compared now.
+        val skip = DsyncCoexistence.FORCE_KEYS.filter { isDirty(s, it) || it !in s.read || synchronized(s.pending) { s.pending.containsKey(it) } }
+            .map { it.suffix }.toSet()
+        convergeRunning = true
+        scope.launch {
+            try {
+                val x = DsyncCoexistence.summarize(bucket, kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncScopesOnce() })
+                drive.get().converge(s.playlistId, x, skip)
+            } catch (t: Throwable) {
+                Log.w(TAG, "[SYNC] converge failed: ${t.javaClass.simpleName}")
+            } finally {
+                convergeRunning = false
+            }
+        }
+    }
 
     /** Settings > Sync Now: pull, then flush anything waiting. */
     fun syncNow() {
@@ -979,6 +1022,7 @@ class DispatcharrSyncManager @Inject constructor(
                 if (isForced(s, key) && s.awaitingCache.containsKey(key)) retryForced(s, key, "cycle")
                 else if (dirty || key !in s.present) schedule(s, key, 0L)
             }
+            maybeConverge(s)
         } finally {
             _ui.value = _ui.value.copy(running = false)
             refreshMessage(s)
@@ -1184,6 +1228,7 @@ class DispatcharrSyncManager @Inject constructor(
             }
             s.suppressUntil[key] = System.currentTimeMillis() + SUPPRESS_MS
             saveAfter(s, key, raw, env.updatedAt, env.deviceId, env.data)
+            driveFollow(s, key, "pull")
             if (key != DsyncKey.Profiles) {
                 setDirty(s, key, true)
                 Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes merged with local change")
@@ -1209,6 +1254,7 @@ class DispatcharrSyncManager @Inject constructor(
                     s.suppressUntil[key] = System.currentTimeMillis() + SUPPRESS_MS
                     saveAfter(s, key, raw, env.updatedAt, env.deviceId, env.data)
                     Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes applied")
+                    driveFollow(s, key, "pull")
                 }
                 ApplyResult.Malformed -> {
                     Log.w(TAG, "[DSYNC] malformed category ${key.suffix}")
@@ -1295,6 +1341,7 @@ class DispatcharrSyncManager @Inject constructor(
         s.healed += key
         if (applied == ApplyResult.Applied) {
             s.suppressUntil[key] = System.currentTimeMillis() + SUPPRESS_MS
+            driveFollow(s, key, "pull")
             Log.i(TAG, "[DSYNC] ${key.suffix} in: re-applied after ${if (check.first) "empty local" else "local differs"} (${check.second})")
         }
         return applied
@@ -1309,6 +1356,7 @@ class DispatcharrSyncManager @Inject constructor(
         if ((s.suppressUntil[key] ?: 0L) > System.currentTimeMillis()) return
         s.tooLarge -= key
         setDirty(s, key, true)
+        scope.launch { driveFollow(s, key, "local") }
         // The profiles lane goes out fast so other devices' pickers see it;
         // a later emission must not stretch it back to the general debounce.
         schedule(s, key, if (key == DsyncKey.Profiles) PEEK_PUSH_DEBOUNCE_MS else DEBOUNCE_MS)

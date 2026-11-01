@@ -833,6 +833,53 @@ first pull applies the server copy; then Drive's next push replaces the
 backup. Log line: `[DRIVE] next push replaces backup (user chose
 Dispatcharr)`. Rule 1 precedence holds afterward in both cases.
 
+Rule 5: convergence (2026-11-01). With Google Drive and Dispatcharr Sync
+both on, the shared categories stay equal on both sides on every device,
+so a device signing in later decides "equal, use Dispatcharr" with no
+prompt from either source. It never replaces or answers a prompt: "Your
+backup needs an update", "Which setup should this device start from?",
+and "Turn on Dispatcharr Sync?" stay exactly as they are, and a mismatch
+found before the setup choice is settled is left to them.
+
+1. Drive follows Dispatcharr Sync in the same foreground session. A shared
+   key applied from a Dispatcharr pull (applied, merged, or self-healed),
+   or changed on this device, queues the one-shot Drive push (15 s
+   debounce, REPLACE), base user only, Drive Sync on, and the key's Sync
+   Categories item on. Log: `[SYNC] drive follow <key> (pull|local)`.
+   A Drive pull of a Drive-owned category (Playlists, Credentials, any
+   category of a non-Dispatcharr playlist) has no Dispatcharr key, so
+   nothing goes to Dispatcharr Sync.
+2. Self-heal after every complete Dispatcharr pull, when all hold: base
+   user, Drive Sync on and signed in, a Drive pull completed on this
+   install, Rule 1 ownership (Dispatcharr Sync on, Dispatcharr playlist,
+   first pull done), no Rule 4 hold, no armed forced key, and no setup
+   prompt open or unanswered this app session. The Dispatcharr side is
+   the bucket this pull just read (no extra server read); the Drive side
+   is one read of the shared files. Both are summarized with the Rule 4
+   probe (same fingerprints). A category with an unsent local change is
+   not compared (the follow push carries it). Every differing category
+   pushes its Drive file from this device, which holds the Dispatcharr
+   copy: Dispatcharr is the source of truth, Drive is never pulled over
+   Dispatcharr-owned data. Log, counts only:
+   `[SYNC] converge <category> drive=<fp>/<rows> dsync=<fp>/<rows> -> push drive`,
+   or `[SYNC] converge equal categories=<n> skipped=<n>`.
+3. No ping-pong: a category pushed once for a given Dispatcharr state
+   (rows plus fingerprint, saved per playlist) is not pushed again until
+   the Dispatcharr copy changes, even when the next compare still differs
+   (a row this device could not translate).
+4. Same inputs on both sides, for the Rule 4 decision and Rule 5 alike:
+   a category whose Sync Categories item is Off on this device is left out
+   of both summaries, so it is never compared, converged, or replaced
+   here; settings drop the names whose item is Off. Drive settings are
+   typed into the wire form a push sends before they are fingerprinted,
+   and every setting value is compared in one spelling (booleans
+   lowercase, whole numbers without ".0", color hex uppercase without
+   "#"). The group sort mode reads as a known mode or "default" on both
+   sides.
+
+Apple mirrors Rule 5 with iCloud in place of Drive (pending in the Apple
+copy of this document).
+
 ## 10b. Sync providers record (`syncProviders`)
 
 Every backup carries which sync providers the device owner runs, so a new device can offer the same ones.

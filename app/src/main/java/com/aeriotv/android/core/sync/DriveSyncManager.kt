@@ -480,6 +480,7 @@ class DriveSyncManager @Inject constructor(
         }
         val out = LinkedHashMap<String, SetupSourceChoice.Category>()
         val now = System.currentTimeMillis()
+        val scopes = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { appPreferences.syncScopesOnce() }
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val row = idLookup.activeDispatcharr()
             val channels = row?.let { runCatching { idLookup.channels(it) }.getOrNull() }.orEmpty()
@@ -510,16 +511,73 @@ class DriveSyncManager @Inject constructor(
                 out["collections"] = DriveCanon.collectionsCategory(p, ids)
                 out["hiddenGroups"] = DriveCanon.hiddenGroupsCategory(p)
                 out["groupOrder"] = DriveCanon.groupOrderCategory(p)
-                val lanes = appPreferences.driveLanesAsDsync(
+                // The wire form a push sends (typed by the registry), the same
+                // input the Dispatcharr side fingerprints (DriveCanon.dsyncSettings).
+                val lanes = appPreferences.driveLanesAsWire(
                     mapOf(SyncScope.LANE_ALL to p.keys, SyncScope.LANE_TV to p.tv, SyncScope.LANE_MOBILE to p.mobile),
                     row?.id,
                 )
-                out["settings"] = DriveCanon.settingsCategory(lanes, p.envelope.lastModified)
+                val (n, f) = DriveCanon.dsyncSettings(DriveCanon.lanesOn(lanes) { SetupSourceChoice.nameOff(scopes, it) })
+                out["settings"] = SetupSourceChoice.Category(n, p.envelope.lastModified, f)
             }
         }
-        Log.i(TAG, "[DRIVE] setup probe ${out.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
-        SetupSourceChoice.Summary(out, lastWrite = out.values.maxOfOrNull { it.updatedAt })
+        val kept = SetupSourceChoice.forDevice(SetupSourceChoice.Summary(out), { SetupSourceChoice.itemOff(scopes, it) }).categories
+        Log.i(TAG, "[DRIVE] setup probe ${kept.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
+        SetupSourceChoice.Summary(kept, lastWrite = kept.values.maxOfOrNull { it.updatedAt })
     }.onFailure { Log.w(TAG, "[DRIVE] setup probe failed: ${it.javaClass.simpleName}") }.getOrNull()
+
+    // ── Rule 5: convergence with Dispatcharr Sync ─────────────────────────
+
+    /**
+     * A Rule 4 "Which setup" prompt is open or unanswered this app session
+     * (SetupSourceCoordinator). Converge never runs then: the prompt decides.
+     */
+    @Volatile var setupChoicePending = false
+
+    private val convergeState = context.getSharedPreferences("aerio_converge", Context.MODE_PRIVATE)
+    private fun convergeKey(pid: String, name: String) = "conv|$pid|$name"
+
+    /**
+     * Rule 5 (docs/DispatcharrSyncSchema.md 10a): with both providers on and
+     * the setup choice settled, Dispatcharr is the source of truth for the
+     * shared categories. [dsync] is the summary of the server copy the
+     * Dispatcharr pull just read; [skip] are categories with a local change
+     * still on its way there. Reads the Drive files once, and pushes this
+     * device's (Dispatcharr-derived) copy of each differing file to Drive.
+     * Never prompts and never pulls Drive. A category pushed once for a given
+     * Dispatcharr state is not pushed again until that state changes, so it
+     * cannot ping-pong. Returns the categories pushed.
+     */
+    suspend fun converge(playlistId: String, dsync: SetupSourceChoice.Summary, skip: Set<String>): List<String> {
+        if (setupChoicePending || sharedHeld()) return emptyList()
+        if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty()) return emptyList()
+        val gates = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            appPreferences.syncMasterEnabled.first() && appPreferences.syncInitialPullDone.first()
+        }
+        if (!gates) return emptyList()
+        if (!runCatching { dispatcharrSync.get().ownsCategory(SyncCategory.Favorites) }.getOrDefault(false)) return emptyList()
+        val token = ensureSignedIn() ?: return emptyList()
+        val d = readSharedSummary(token) ?: return emptyList()
+        val last = SetupSourceChoice.SHARED.mapNotNull { n -> convergeState.getString(convergeKey(playlistId, n), null)?.let { n to it } }.toMap()
+        val plan = SetupSourceChoice.convergePlan(d, dsync, skip, last)
+        if (plan.isEmpty()) {
+            Log.i(TAG, "[SYNC] converge equal categories=${SetupSourceChoice.SHARED.count { it in d.categories || it in dsync.categories }} skipped=${skip.size}")
+            return emptyList()
+        }
+        plan.forEach { Log.i(TAG, SetupSourceChoice.convergeLine(it, d.categories[it], dsync.categories[it])) }
+        val files = plan.mapNotNull { SetupSourceChoice.driveFile(it) }.distinct()
+        val enabledFiles = files.filter { appPreferences.syncCategoryEnabled(it).first() }
+        val ok = enabledFiles.associateWith { c ->
+            runCatching { pushCategory(token, c) }.onFailure { Log.w(TAG, "[SYNC] converge push ${c.name} failed: ${it.javaClass.simpleName}") }.getOrDefault(false)
+        }
+        val e = convergeState.edit()
+        plan.forEach { n ->
+            if (ok[SetupSourceChoice.driveFile(n)] == true) e.putString(convergeKey(playlistId, n), SetupSourceChoice.convergeMark(dsync.categories[n]))
+        }
+        e.commit()
+        if (ok.values.any { it }) appPreferences.setSyncLastPushAt(System.currentTimeMillis())
+        return plan.filter { ok[SetupSourceChoice.driveFile(it)] == true }
+    }
 
     // ── Rule 4 canonical ids (DriveCanon) ─────────────────────────────────
 

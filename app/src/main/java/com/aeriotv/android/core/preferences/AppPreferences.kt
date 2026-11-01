@@ -2126,7 +2126,16 @@ class AppPreferences @Inject constructor(
      */
     suspend fun driveMirrorDsyncLanes(playlistId: String?): Map<String, Map<String, kotlinx.serialization.json.JsonPrimitive>> {
         val c = lanesCache(store.data.first())
-        val names = driveLanesAsDsync(mapOf(SyncScope.LANE_ALL to c.v, SyncScope.LANE_TV to c.tv, SyncScope.LANE_MOBILE to c.mobile), playlistId)
+        return driveLanesAsWire(mapOf(SyncScope.LANE_ALL to c.v, SyncScope.LANE_TV to c.tv, SyncScope.LANE_MOBILE to c.mobile), playlistId)
+    }
+
+    /**
+     * Drive string lanes as Dispatcharr Sync wire lanes, typed by the
+     * registry: the exact form a forced or mirror push sends, so the Drive
+     * setup probe and the Rule 5 converge compare like with like.
+     */
+    fun driveLanesAsWire(lanes: Map<String, Map<String, String>>, playlistId: String?): Map<String, Map<String, kotlinx.serialization.json.JsonPrimitive>> {
+        val names = driveLanesAsDsync(lanes, playlistId)
         val byName = registry.associateBy { it.name }
         val kinds = perPlaylist.associate { it.first to it.third }
         return names.mapValues { (_, m) ->

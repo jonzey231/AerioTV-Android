@@ -890,7 +890,7 @@ object DsyncCoexistence {
         DsyncKey.Collections -> DsyncPayloads.decodeCollections(data)?.size ?: 0
         DsyncKey.HiddenGroups -> DsyncPayloads.decodeHiddenGroups(data)?.let { it.live.size + it.movies.size + it.series.size } ?: 0
         DsyncKey.GroupOrder -> DsyncPayloads.decodeGroupOrder(data)?.let { g ->
-            com.aeriotv.android.core.sync.DriveCanon.groupOrderRows(g.mode, g.order)
+            com.aeriotv.android.core.sync.DriveCanon.groupOrderRows(com.aeriotv.android.core.sync.DriveCanon.groupMode(g.mode), g.order)
         } ?: 0
         // Non-blank values only, the same count the Drive side reports (DriveCanon.settingsCategory).
         DsyncKey.Settings -> DsyncPayloads.decodeSettingsLanes(data)?.let { com.aeriotv.android.core.sync.DriveCanon.dsyncSettings(it).first } ?: 0
@@ -918,6 +918,28 @@ object DsyncCoexistence {
             DsyncKey.Settings -> DsyncPayloads.decodeSettingsLanes(data)?.let { c.dsyncSettings(it).second }
             else -> null
         }
+    }
+
+    /**
+     * The shared categories of one decoded bucket, summarized for Rule 4 (setup
+     * probe) and Rule 5 (converge): rows, time, and fingerprint per category,
+     * only the categories this device syncs ([scopes], Sync Categories), and
+     * settings without the names this device has Off. The Drive side
+     * (DriveSyncManager.readSharedSummary) applies the same filters.
+     */
+    fun summarize(bucket: DsyncV2.Bucket, scopes: Map<String, com.aeriotv.android.core.sync.SyncScope>): com.aeriotv.android.core.sync.SetupSourceChoice.Summary {
+        val sc = com.aeriotv.android.core.sync.SetupSourceChoice
+        val out = LinkedHashMap<String, com.aeriotv.android.core.sync.SetupSourceChoice.Category>()
+        FORCE_KEYS.forEach { key ->
+            val env = (DsyncV2.category(bucket, key) as? DsyncDecode.Ok)?.envelope ?: return@forEach
+            out[key.suffix] = if (key == DsyncKey.Settings) {
+                val lanes = DsyncPayloads.decodeSettingsLanes(env.data)
+                    ?.let { com.aeriotv.android.core.sync.DriveCanon.lanesOn(it) { n -> sc.nameOff(scopes, n) } }
+                val (n, f) = lanes?.let { com.aeriotv.android.core.sync.DriveCanon.dsyncSettings(it) } ?: (0 to null)
+                com.aeriotv.android.core.sync.SetupSourceChoice.Category(n, env.updatedAt * 1000, f)
+            } else com.aeriotv.android.core.sync.SetupSourceChoice.Category(rowCount(key, env.data), env.updatedAt * 1000, fingerprint(key, env.data))
+        }
+        return sc.forDevice(com.aeriotv.android.core.sync.SetupSourceChoice.Summary(out)) { sc.itemOff(scopes, it) }
     }
 
     private fun emptyElement(e: JsonElement): Boolean = when (e) {

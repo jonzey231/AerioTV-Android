@@ -52,6 +52,8 @@ class SetupSourceCoordinator @Inject constructor(
         val d = drive.readSharedSummary(token) ?: return null
         val x = dsync.get().serverSummary(pid) ?: return null
         val decision = SetupSourceChoice.decide(d, x)
+        // Rule 5: no silent converge while this choice is open (the prompt decides).
+        drive.setupChoicePending = decision is SetupSourceChoice.Decision.Ask
         Log.i(TAG, "[SYNC] setup source drive=${d.categories.values.sumOf { it.rows }} rows dsync=${x.categories.values.sumOf { it.rows }} rows decision=${SetupSourceChoice.decisionName(decision)}")
         return Probe(pid, d, x, decision)
     }
@@ -64,6 +66,7 @@ class SetupSourceCoordinator @Inject constructor(
      */
     suspend fun choose(source: SetupSourceChoice.Source, playlistId: String, ignoreOwnership: Boolean = false) {
         Log.i(TAG, "[SYNC] setup source chosen: $source")
+        drive.setupChoicePending = false
         when (source) {
             SetupSourceChoice.Source.Drive -> {
                 // Dispatcharr Sync neither pulls nor pushes shared keys until the
@@ -104,6 +107,7 @@ class SetupSourceCoordinator @Inject constructor(
 
     /** No choice was needed or possible: apply whatever Drive held and carry on as before. */
     suspend fun releaseHeld() {
+        drive.setupChoicePending = false
         if (!drive.sharedHeld()) return
         drive.releaseHold()
         drive.applySharedNow(ignoreOwnership = false)

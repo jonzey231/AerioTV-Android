@@ -45,7 +45,28 @@ object DriveCanon {
     fun collectionItem(id: String, name: String, placement: String, members: List<Int>) =
         "$id|$name|$placement|" + members.distinct().sorted().joinToString(",")
     fun groupItem(kind: String, name: String) = "$kind|$name"
-    fun settingItem(lane: String, name: String, value: String) = "$lane|$name|$value"
+    fun settingItem(lane: String, name: String, value: String) = "$lane|$name|${canonValue(value)}"
+
+    private val HEX = Regex("^#?[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
+
+    /**
+     * One spelling per value on both sides (Rule 5): booleans lowercase,
+     * numbers without a trailing ".0" (Drive writes "1.0", another device may
+     * send 1), and color hex uppercase without "#". Anything else as written.
+     */
+    fun canonValue(v: String): String {
+        val t = v.trim()
+        t.lowercase().toBooleanStrictOrNull()?.let { return it.toString() }
+        if (HEX.matches(t) && (t.startsWith("#") || t.any { it.isLetter() })) return t.removePrefix("#").uppercase()
+        t.toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() }?.let { d ->
+            return if (d == Math.floor(d) && kotlin.math.abs(d) < 1e15) d.toLong().toString() else d.toString()
+        }
+        return t
+    }
+
+    /** Settings lanes without the names this device has Off in Sync Categories (Rule 5, item toggles). */
+    fun <V> lanesOn(lanes: Map<String, Map<String, V>>, off: (String) -> Boolean): Map<String, Map<String, V>> =
+        lanes.mapValues { (_, m) -> m.filterKeys { !off(it) } }
 
     private fun fp(items: Collection<String>) = SetupSourceChoice.fingerprint(items)
 
@@ -58,7 +79,10 @@ object DriveCanon {
     fun dsyncMarks(rows: List<VodMarkRow>) = fp(rows.map { vodItem(it.type, it.vodId) }.distinct())
     fun dsyncCollections(rows: List<CollectionRow>) = fp(rows.map { collectionItem(it.id, it.name, it.placement, it.members) })
     fun dsyncHiddenGroups(g: DsyncPayloads.HiddenGroups) = fp(hiddenGroupItems(g.live, g.movies, g.series))
-    fun dsyncGroupOrder(g: DsyncPayloads.GroupOrder) = fp(groupOrderItems(g.mode, g.order))
+    fun dsyncGroupOrder(g: DsyncPayloads.GroupOrder) = fp(groupOrderItems(groupMode(g.mode), g.order))
+
+    /** The group sort mode as both sides compare it: a known mode, lowercase, else "default" (Drive reads it the same way). */
+    fun groupMode(m: String?): String = m?.lowercase()?.takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
     fun dsyncSettings(lanes: Map<String, Map<String, JsonPrimitive>>): Pair<Int, String> {
         val items = lanes.flatMap { (lane, m) -> m.filterValues { it.content.isNotBlank() }.map { (k, v) -> settingItem(lane, k, v.content) } }
         return items.size to fp(items)
@@ -216,7 +240,7 @@ object DriveCanon {
     }
 
     fun groupOrderCategory(s: PreferencesSnapshot): SetupSourceChoice.Category {
-        val mode = s.keys[K_SORT_MODE]?.lowercase()?.takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
+        val mode = groupMode(s.keys[K_SORT_MODE])
         val order = lines(s.keys[K_ORDER])
         return SetupSourceChoice.Category(groupOrderRows(mode, order), s.envelope.lastModified, fp(groupOrderItems(mode, order)))
     }

@@ -59,14 +59,68 @@ object SetupSourceChoice {
 
     /** Per category: both empty, or the same row count and the same non-null fingerprint. */
     fun equal(a: Summary, b: Summary): Boolean =
-        (a.categories.keys + b.categories.keys).all { name ->
-            val x = a.categories[name]
-            val y = b.categories[name]
-            val xr = x?.rows ?: 0
-            val yr = y?.rows ?: 0
-            (xr <= 0 && yr <= 0) ||
-                (xr == yr && x?.fingerprint != null && x.fingerprint == y?.fingerprint)
-        }
+        (a.categories.keys + b.categories.keys).all { name -> categoryEqual(a.categories[name], b.categories[name]) }
+
+    /** The Sync Categories item that gates a shared category ("settings" is gated per name instead). */
+    fun itemId(name: String): String? = when (name) {
+        "progress" -> "watchProgress"
+        "settings" -> null
+        else -> name
+    }
+
+    /**
+     * Only the categories this device syncs (Sync Categories, item 6): an
+     * item that is Off here is neither compared, converged, nor replaced.
+     * Both sides go through this, so they compare the same category set.
+     */
+    fun forDevice(s: Summary, itemOff: (String) -> Boolean): Summary =
+        Summary(s.categories.filterKeys { n -> itemId(n)?.let { !itemOff(it) } ?: true }, s.lastWrite)
+
+    /** Per category: both empty, or the same row count and the same non-null fingerprint. */
+    fun categoryEqual(x: Category?, y: Category?): Boolean {
+        val xr = x?.rows ?: 0
+        val yr = y?.rows ?: 0
+        return (xr <= 0 && yr <= 0) || (xr == yr && x?.fingerprint != null && x.fingerprint == y?.fingerprint)
+    }
+
+    /** Item Off in this device's Sync Categories ([scopes] is AppPreferences.syncScopesOnce). */
+    fun itemOff(scopes: Map<String, SyncScope>, id: String): Boolean = scopes[id] == SyncScope.Off
+
+    /** A settings name whose item is Off on this device. Names no item covers stay in. */
+    fun nameOff(scopes: Map<String, SyncScope>, name: String): Boolean =
+        SyncItemCatalog.itemForName(name)?.let { itemOff(scopes, it.id) } ?: false
+
+    /** What a converge push remembers per category: the Dispatcharr state it pushed for. */
+    fun convergeMark(c: Category?): String = "${c?.rows ?: 0}|${c?.fingerprint ?: "-"}"
+
+    /**
+     * Rule 5 (convergence): the shared categories whose Drive copy differs
+     * from the Dispatcharr copy, minus [skip] (a local change still on its way
+     * to the server) and minus those already pushed for this exact Dispatcharr
+     * state ([lastPushed] holds [convergeMark] per category). The last guard is
+     * what stops a ping-pong: a category that still differs after one push
+     * (a row this device could not translate) is never pushed again until the
+     * Dispatcharr copy itself changes.
+     */
+    fun convergePlan(drive: Summary, dsync: Summary, skip: Set<String>, lastPushed: Map<String, String>): List<String> =
+        SHARED.filter { it in drive.categories || it in dsync.categories }
+            .filter { it !in skip }
+            .filter { !categoryEqual(drive.categories[it], dsync.categories[it]) }
+            .filter { lastPushed[it] != convergeMark(dsync.categories[it]) }
+
+    /** The Drive file that carries a shared category. */
+    fun driveFile(name: String): SyncCategory? = when (name) {
+        "favorites" -> SyncCategory.Favorites
+        "progress" -> SyncCategory.WatchProgress
+        "reminders" -> SyncCategory.Reminders
+        "watchlist", "hiddenTitles" -> SyncCategory.Watchlist
+        "collections", "recents", "hiddenGroups", "groupOrder", "settings" -> SyncCategory.Preferences
+        else -> null
+    }
+
+    /** The counts-only converge line. */
+    fun convergeLine(name: String, drive: Category?, dsync: Category?) =
+        "[SYNC] converge $name drive=${drive?.fingerprint ?: "-"}/${drive?.rows ?: 0} dsync=${dsync?.fingerprint ?: "-"}/${dsync?.rows ?: 0} -> push drive"
 
     /** Plain name for logs (class names are renamed in release builds). */
     fun decisionName(d: Decision): String = when (d) {
