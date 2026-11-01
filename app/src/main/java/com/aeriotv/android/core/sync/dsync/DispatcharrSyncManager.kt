@@ -1320,6 +1320,7 @@ class DispatcharrSyncManager @Inject constructor(
             state.edit().putString(k("raw", s, key), raw.toString()).apply()
             Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes not newer")
             if (key == DsyncKey.Progress) runCatching { retryHeldProgress(s, env) }
+                .onFailure { Log.w(TAG, "[DSYNC] progress held retry failed: ${it.javaClass.simpleName}") }
             if (healIfLocalDiffers(s, key, env) == ApplyResult.NotReady) return
         }
         s.read += key
@@ -2012,7 +2013,7 @@ class DispatcharrSyncManager @Inject constructor(
      * Server progress rows into the local store. Returns the rows this device
      * cannot map to a local uuid yet (section 10a: held by canonical id, not dropped).
      */
-    private suspend fun applyProgressRows(s: Session, c: Conn, rows: List<ProgressRow>): List<ProgressRow> {
+    private suspend fun applyProgressRows(s: Session, c: Conn, rows: List<ProgressRow>, written: IntArray? = null): List<ProgressRow> {
         val unresolved = ArrayList<ProgressRow>()
         val movieUuids = vodIds.movieUuids(c.row, rows.filter { it.type == "m" }.map { it.vodId }.toSet())
         rows.forEach { r ->
@@ -2039,6 +2040,7 @@ class DispatcharrSyncManager @Inject constructor(
                     isFinished = r.finished,
                 ),
             )
+            written?.let { it[0]++ }
         }
         return unresolved
     }
@@ -2051,7 +2053,7 @@ class DispatcharrSyncManager @Inject constructor(
     private suspend fun holdProgress(s: Session, c: Conn, unresolved: List<ProgressRow>, why: String) {
         if (!isBase(s)) return
         held.setProgress(s.playlistId, unresolved)
-        if (unresolved.isNotEmpty() || why == "in") {
+        if (unresolved.isNotEmpty() || why != "retry") {
             Log.i(TAG, "[DSYNC] progress $why held=${unresolved.size} movies=${unresolved.count { it.type == "m" }} " +
                 "episodes=${unresolved.count { it.type == "e" }} catalogReady=${vodIds.moviesReady(c.row)}")
         }
@@ -2061,16 +2063,23 @@ class DispatcharrSyncManager @Inject constructor(
     private suspend fun retryHeldProgress(s: Session, env: DsyncEnvelope) {
         if (!isBase(s)) return
         val c = conn(s) ?: return
+        val written = IntArray(1)
         if (!held.has(s.playlistId)) {
             // First run of this build: the stamp was consumed before rows were held.
             val rows = DsyncPayloads.decodeProgress(env.data) ?: return
-            holdProgress(s, c, applyProgressRows(s, c, rows), "in (held set rebuilt)")
-            return
+            holdProgress(s, c, applyProgressRows(s, c, rows, written), "in (held set rebuilt)")
+        } else {
+            val before = held.progress(s.playlistId)
+            if (before.isEmpty()) return
+            val left = applyProgressRows(s, c, before, written)
+            if (left.size != before.size) holdProgress(s, c, left, "retry")
         }
-        val before = held.progress(s.playlistId)
-        if (before.isEmpty()) return
-        val left = applyProgressRows(s, c, before)
-        if (left.size != before.size) holdProgress(s, c, left, "retry")
+        // Rows that became local here change what the Drive copy should carry:
+        // the follow push writes them, so converge never keeps a stale mark.
+        if (written[0] > 0) {
+            Log.i(TAG, "[DSYNC] progress held rows resolved=${written[0]}")
+            driveFollow(s, DsyncKey.Progress, "held resolved")
+        }
     }
 
     /**

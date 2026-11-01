@@ -751,8 +751,14 @@ on this device (setup probe, fresh-device order, converge) keeps a
 progress, watchlist, or hidden title row only when it resolves here, is
 held, or the Drive copy carries it with a canonical id; the others are
 excluded with `[SYNC] probe excludes <category> rows=<n> (no local match)`.
-So `converge skip <category> reason=untranslatable` can only follow rows
-that cannot exist on this device, and those are in neither summary. Field
+Held rows that resolve log `[DSYNC] progress held rows resolved=<n>` and
+queue the Drive follow push. A converge mark (this Dispatcharr state was
+pushed once and Drive still differs) stands only while this device's push
+would still carry what Drive holds; when the local copy changed since, the
+mark is cleared (`[SYNC] converge mark cleared <category> (local copy
+changed)`) and converge pushes again. So `converge skip <category>
+reason=untranslatable` can only follow rows that cannot exist on this
+device, and those are in neither summary. Field
 run: `[DSYNC] setup probe progress=1` against `[DRIVE] setup probe
 progress=0` with `push WatchProgress rows=0` after a Dispatcharr choice,
 because the one server row was skipped by the pull

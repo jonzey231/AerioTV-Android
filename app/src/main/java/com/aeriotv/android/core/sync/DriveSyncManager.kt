@@ -444,7 +444,11 @@ class DriveSyncManager @Inject constructor(
      * (DsyncCoexistence.rowCount). The payload already carries the canonical
      * ids (withCanonicalIds), so no lookups are needed beyond the host.
      */
-    private suspend fun localSharedRows(category: SyncCategory, payload: String): Map<String, Int> = runCatching {
+    private suspend fun localSharedRows(category: SyncCategory, payload: String): Map<String, Int> =
+        localSharedCategories(category, payload).mapValues { it.value.rows }
+
+    /** The canonical categories a payload carries (rows and fingerprint), the probe's definition. */
+    private suspend fun localSharedCategories(category: SyncCategory, payload: String): Map<String, SetupSourceChoice.Category> = runCatching {
         val now = System.currentTimeMillis()
         val ids = DriveCanon.Ids()
         val out = LinkedHashMap<String, SetupSourceChoice.Category>()
@@ -478,7 +482,22 @@ class DriveSyncManager @Inject constructor(
         }
         val scopes = appPreferences.syncScopesOnce()
         SetupSourceChoice.forDevice(SetupSourceChoice.Summary(out)) { SetupSourceChoice.itemOff(scopes, it) }
-            .categories.mapValues { it.value.rows }
+            .categories
+    }.getOrDefault(emptyMap())
+
+    /** What a push of [category] would carry now, without uploading (converge mark check). */
+    private suspend fun currentSharedCategories(category: SyncCategory): Map<String, SetupSourceChoice.Category> = runCatching {
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val payload = when (category) {
+                SyncCategory.WatchProgress -> json.encodeToString(withHeld(withCanonicalIds(buildWatchProgressSnapshot())))
+                SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
+                SyncCategory.Favorites -> json.encodeToString(withCanonicalIds(buildFavoritesSnapshot()))
+                SyncCategory.Watchlist -> json.encodeToString(withCanonicalIds(buildWatchlistSnapshot()))
+                SyncCategory.Preferences -> json.encodeToString(withCanonicalIds(buildPreferencesSnapshot()))
+                else -> return@withContext emptyMap()
+            }
+            localSharedCategories(category, payload)
+        }
     }.getOrDefault(emptyMap())
 
     /** Rows in a pushed snapshot, for the push line (counts only): canonical rows for a one-category shared file. */
@@ -848,7 +867,20 @@ class DriveSyncManager @Inject constructor(
             Log.i(TAG, "[SYNC] converge skipped: Drive unreadable (unknown, not empty)")
             return emptyList()
         }
-        val last = SetupSourceChoice.SHARED.mapNotNull { n -> convergeState.getString(convergeKey(playlistId, n), null)?.let { n to it } }.toMap()
+        val marked = SetupSourceChoice.SHARED.mapNotNull { n -> convergeState.getString(convergeKey(playlistId, n), null)?.let { n to it } }.toMap()
+        // A mark means "this Dispatcharr state was pushed once and Drive still
+        // differs". It stands only while this device's push would still carry
+        // what Drive holds; local rows that changed since (held rows resolved,
+        // a pull applied) clear it, so untranslatable means rows that cannot
+        // exist here (section 10a).
+        val stale = SetupSourceChoice.convergeSkips(d, dsync, skipReasons, marked).filter { it.second == "untranslatable" }.map { it.first }
+            .filter { n ->
+                val file = SetupSourceChoice.driveFile(n) ?: return@filter false
+                val now = currentSharedCategories(file)[n]
+                now != null && !SetupSourceChoice.categoryEqual(now, d.categories[n])
+            }
+        stale.forEach { Log.i(TAG, "[SYNC] converge mark cleared $it (local copy changed)") }
+        val last = marked - stale.toSet()
         val plan = SetupSourceChoice.convergePlan(d, dsync, skip, last)
         val skipped = SetupSourceChoice.convergeSkips(d, dsync, skipReasons, last)
         skipped.forEach { (n, why) -> Log.i(TAG, SetupSourceChoice.convergeSkipLine(n, why, d.categories[n], dsync.categories[n])) }
