@@ -69,6 +69,7 @@ class SetupSourceCoordinator @Inject constructor(
         drive.setupChoicePending = false
         when (source) {
             SetupSourceChoice.Source.Drive -> {
+                drive.clearReplaceWaits()
                 // Dispatcharr Sync neither pulls nor pushes shared keys until the
                 // apply is done; the forced replace is armed only per category
                 // whose Drive backup applied (onboarding and Settings alike).
@@ -87,21 +88,32 @@ class SetupSourceCoordinator @Inject constructor(
                     d.releaseChoiceHold()
                 }
             }
-            SetupSourceChoice.Source.Dispatcharr -> pendingDriveReplace = true
+            SetupSourceChoice.Source.Dispatcharr -> {
+                // Fresh-device order (section 10a): armed before any hold is
+                // released, so no Drive push of a shared file goes out before
+                // the Dispatcharr pull has applied it here.
+                drive.armReplaceWait()
+                pendingDriveReplace = true
+            }
         }
     }
 
     @Volatile private var pendingDriveReplace = false
 
-    /** After Dispatcharr Sync is on: finish a Dispatcharr choice once its first pull is done. */
+    /**
+     * After Dispatcharr Sync is on: finish a Dispatcharr choice. The Drive
+     * backup is replaced in this session, right after the first pull (or its
+     * time limit); a file whose Dispatcharr pull has not applied yet waits
+     * (fresh-device order) and goes out with the pull's Drive follow.
+     */
     fun afterDispatcharrOn() {
         if (!pendingDriveReplace) return
         pendingDriveReplace = false
         scope.launch {
             val done = dsync.get().awaitFirstPull(FIRST_PULL_WAIT_MS)
-            if (!done) Log.i(TAG, "[SYNC] first Dispatcharr pull not finished; Drive backup replaced anyway")
+            if (!done) Log.i(TAG, "[SYNC] first Dispatcharr pull not finished; Drive files wait for it")
             drive.releaseHold()
-            drive.replaceBackupOnNextPush()
+            drive.replaceBackupNow()
         }
     }
 

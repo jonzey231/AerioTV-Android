@@ -178,10 +178,10 @@ object DriveCanon {
     private fun progressCandidates(s: WatchProgressSnapshot) =
         s.entries.filter { !it.videoId.contains("://") && (it.vodType == "movie" || it.vodType == "episode") }
 
+    /** Canonical-id rows only (distinct Dispatcharr channel ids), as Dispatcharr Sync carries and counts them. */
     fun favorites(s: FavoritesSnapshot, ids: Ids): SetupSourceChoice.Category {
-        val c = s.entries.map { it.dispatcharrChannelId ?: ids.channel(it.channelId) }
-        val f = if (c.any { it == null }) null else fp(c.filterNotNull().distinct().map(::channelItem))
-        return SetupSourceChoice.Category(s.entries.size, s.envelope.lastModified, f)
+        val c = s.entries.mapNotNull { it.dispatcharrChannelId ?: ids.channel(it.channelId) }.distinct()
+        return SetupSourceChoice.Category(c.size, s.envelope.lastModified, fp(c.map(::channelItem)))
     }
 
     /** Mirrors the Dispatcharr cap: finished rows older than 30 days drop, then the 300 newest. */
@@ -229,10 +229,18 @@ object DriveCanon {
     private fun channelOf(s: PreferencesSnapshot, ids: Ids, local: String): Int? =
         s.dispatcharrChannelIds?.get(local) ?: ids.channel(local)
 
+    /**
+     * Canonical-id rows only, the row definition Dispatcharr Sync carries
+     * (section 10a): a recent channel with no Dispatcharr id (another
+     * playlist, or not in the channel list) can never live on Dispatcharr,
+     * so it is neither counted nor compared. Distinct ids, then the 50 cap,
+     * the same as the Dispatcharr build (DsyncPayloads.capRecents) and its
+     * rowCount (field run 2026-11-01: Drive counted 9 raw lines while the
+     * Dispatcharr build carried fewer).
+     */
     fun recentsCategory(s: PreferencesSnapshot, ids: Ids): SetupSourceChoice.Category {
-        val r = recents(s)
-        val c = r.map { channelOf(s, ids, it) }
-        return SetupSourceChoice.Category(r.size, s.envelope.lastModified, if (c.any { it == null }) null else fp(c.filterNotNull().distinct().map(::channelItem)))
+        val c = lines(s.keys[K_RECENTS]).mapNotNull { channelOf(s, ids, it) }.distinct().take(DsyncLimits.RECENTS)
+        return SetupSourceChoice.Category(c.size, s.envelope.lastModified, fp(c.map(::channelItem)))
     }
 
     /** A member that does not resolve leaves the fingerprint null (it may be on the server under its id). */

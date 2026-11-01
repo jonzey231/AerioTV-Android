@@ -874,6 +874,21 @@ object DsyncCoexistence {
     /** The Rule 4 apply hold is on until [until] (0 = off). */
     fun choiceHeld(until: Long, now: Long): Boolean = until > 0L && now < until
 
+    /**
+     * The Drive file that carries [key] (the Drive follow and converge push it).
+     * Recents and collections live in the Preferences file although their Sync
+     * Categories toggle is Favorites, so [DsyncKey.category] is the wrong
+     * lookup here (field run 2026-11-01: a recents follow was labeled
+     * Favorites). Every key with a category maps; an unmapped one throws
+     * (DriveFileMappingTest), never falls through to a default.
+     */
+    fun driveFileFor(key: DsyncKey): SyncCategory? = when (key) {
+        DsyncKey.Profiles -> null
+        DsyncKey.RemoteMap, DsyncKey.RadioDefault -> SyncCategory.Preferences
+        else -> com.aeriotv.android.core.sync.SetupSourceChoice.driveFile(key.suffix)
+            ?: error("no Drive file for ${key.suffix}")
+    }
+
     /** Row categories whose forced build drops the server rows (no merge, no kept ids). */
     val FORCE_ROW_KEYS: Set<DsyncKey> = setOf(
         DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,
@@ -882,8 +897,9 @@ object DsyncCoexistence {
 
     /** Rows (or names) one category's data holds, for the setup prompt and the force-push log. */
     fun rowCount(key: DsyncKey, data: JsonObject): Int = when (key) {
-        DsyncKey.Favorites -> DsyncPayloads.decodeFavorites(data)?.size ?: 0
-        DsyncKey.Recents -> DsyncPayloads.decodeRecents(data)?.size ?: 0
+        // Distinct channel ids: the same row definition the Drive side counts (DriveCanon.favorites, recentsCategory).
+        DsyncKey.Favorites -> DsyncPayloads.decodeFavorites(data)?.distinct()?.size ?: 0
+        DsyncKey.Recents -> DsyncPayloads.decodeRecents(data)?.distinctBy { it.channelId }?.size ?: 0
         // Distinct canonical ids, the same count the Drive side reports (DriveCanon.progress).
         DsyncKey.Progress -> DsyncPayloads.decodeProgress(data)?.distinctBy { it.type to it.vodId }?.size ?: 0
         DsyncKey.Reminders -> DsyncPayloads.decodeReminders(data)?.size ?: 0

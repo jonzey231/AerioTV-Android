@@ -702,11 +702,20 @@ reads the Drive files and the user's App Data key (`GET` on the existing
 app-data path, no new server path) without applying either, and summarizes
 per shared category (favorites, recents, collections, progress, reminders,
 watchlist, hiddenTitles, hiddenGroups, groupOrder, settings): row count,
-`updatedAt`, and a content fingerprint over canonical row identities. A
-channel category whose rows cannot all be resolved to canonical ids has no
-fingerprint and counts as different when non-empty on either side. The VOD
-categories (progress, watchlist, hidden titles) follow the canonical-id
-requirement below.
+`updatedAt`, and a content fingerprint over canonical row identities. The
+channel categories favorites and recents count canonical-id rows only
+(2026-11-01): distinct Dispatcharr channel ids, recents capped at 50 after
+the dedupe, exactly what the Dispatcharr build carries and
+`DsyncCoexistence.rowCount` counts; a local channel with no Dispatcharr id
+(another playlist, not in the channel list) is neither counted nor compared.
+One row definition per category serves the forced push row count, the
+probe summary, the Drive summary and push line, and the converge
+fingerprint (`ConvergeRoundTripTest.pushRowCountEqualsProbeCountForEveryCategory`).
+A failed channel lookup fails the probe (no choice) instead of undercounting.
+A collection whose members cannot all be resolved has no fingerprint and
+counts as different when non-empty on either side. The VOD categories
+(progress, watchlist, hidden titles) follow the canonical-id requirement
+below.
 
 Canonical-id requirement for VOD rows (2026-11-01). A progress, watchlist,
 or hidden title row counts only when it carries a canonical Dispatcharr VOD
@@ -857,9 +866,29 @@ are left out of the push, logged once with counts only: `[DSYNC] force push
 copy of this document and the Apple app must mirror these rules.
 
 Dispatcharr chosen: the held Drive categories are never applied; the normal
-first pull applies the server copy; then Drive's next push replaces the
-backup. Log line: `[DRIVE] next push replaces backup (user chose
-Dispatcharr)`. Rule 1 precedence holds afterward in both cases.
+first pull applies the server copy; then Drive's backup is replaced in the
+same app session, right after that first pull (or its 120 s limit), not at
+the next scheduled push (2026-11-01). Every enabled shared Drive file is
+pushed at once and logs its own line, counts only: `[DRIVE] next push
+replaces backup (user chose Dispatcharr)`, then `[DRIVE] push <Category>
+rows=<n> (replace)` per file (the Preferences line adds its per-category
+counts, for example `recents=9 groupOrder=4`). Rule 1 precedence holds
+afterward in both cases.
+
+Fresh-device order (2026-11-01, Dispatcharr chosen, prompt or automatic
+UseDispatcharr). The choice arms a persisted wait on every shared Drive
+file before any hold is released. The first Drive push of a file (replace,
+follow, worker, or converge) goes out only when, for every shared category
+it carries that this device syncs: the Dispatcharr pull applied that key on
+this device this session (or the key is absent on the server), and this
+device holds at least one canonical row whenever the server copy has any.
+Otherwise the file is not pushed and logs `[DRIVE] push <Category> held:
+<category> not pulled yet|<category> empty here, <n> on Dispatcharr|Dispatcharr
+pull not done (fresh-device order)`; the pull's Drive follow pushes it once
+the condition holds. So an empty fresh device never overwrites a populated
+backup. The wait clears per file on its first push, on a Google Drive
+choice, or when Dispatcharr Sync is off. A converge push of a waiting file
+is not remembered as pushed, so the next converge retries it.
 
 Rule 5: convergence (2026-11-01). With Google Drive and Dispatcharr Sync
 both on, the shared categories stay equal on both sides on every device,
@@ -874,6 +903,10 @@ found before the setup choice is settled is left to them.
    or changed on this device, queues the one-shot Drive push (15 s
    debounce, REPLACE), base user only, Drive Sync on, and the key's Sync
    Categories item on. Log: `[SYNC] drive follow <key> (pull|local)`.
+   The follow is noted on the Drive FILE that carries the key
+   (`DsyncCoexistence.driveFileFor`): recents and collections ride in
+   Preferences although their Sync Categories toggle is Favorites; a key
+   with no Drive file fails a unit test instead of falling through.
    A Drive pull of a Drive-owned category (Playlists, Credentials, any
    category of a non-Dispatcharr playlist) has no Dispatcharr key, so
    nothing goes to Dispatcharr Sync.
@@ -898,7 +931,14 @@ found before the setup choice is settled is left to them.
    then `[SYNC] converge nothing pushed categories=<n> differing=<n>`. A key
    dirty only because untranslatable rows stayed local is compared, not
    skipped. The follow push logs each followed file:
-   `[DRIVE] push <Category> rows=<n> (follow <key> <reason>)`.
+   `[DRIVE] push <Category> rows=<n> (follow <key> <reason>)`. Every
+   converge push logs `[DRIVE] push <Category> rows=<n> (converge)`, and the
+   next converge reads equal unless a row cannot be translated. A key
+   skipped as dirty with no write queued gets its write queued: the build is
+   compared with the server copy just fetched (never an older saved copy),
+   so a key the server already equals ends as `status=unchanged` and clears,
+   and converge runs again once those writes settle. A truly unsent local
+   change stays a valid skip until its write goes out.
 3. No ping-pong: a category pushed once for a given Dispatcharr state
    (rows plus fingerprint, saved per playlist) is not pushed again until
    the Dispatcharr copy changes, even when the next compare still differs
@@ -915,7 +955,9 @@ found before the setup choice is settled is left to them.
 
 Apple mirrors Rule 5 with iCloud in place of Drive (pending in the Apple
 copy of this document). The Apple copy must also mirror the canonical-id
-requirement for VOD rows and the forced-push translation order above.
+requirement for VOD rows and the forced-push translation order above, and
+(2026-11-01) the canonical-id rule for favorites and recents, the immediate
+backup replace on a Dispatcharr choice, and the fresh-device order.
 
 ## 10b. Sync providers record (`syncProviders`)
 

@@ -169,6 +169,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** Keys already checked by [healIfLocalDiffers] this session. */
         val healed = java.util.Collections.synchronizedSet(HashSet<DsyncKey>())
         val retries = HashMap<DsyncKey, Int>()
+        /** Keys converge skipped as dirty with no write queued: converge again once their write settles. */
+        val convergeAfterWrite = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
         val suppressUntil = HashMap<DsyncKey, Long>()
         var users: List<DispatcharrUserSummary>? = null
         var lastPullAt = 0L
@@ -802,11 +804,38 @@ class DispatcharrSyncManager @Inject constructor(
         val on = runCatching { kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncMasterEnabled.first() } }.getOrDefault(false)
         if (!on) return
         Log.i(TAG, "[SYNC] drive follow ${key.suffix} ($why)")
-        key.category?.let { com.aeriotv.android.core.sync.DriveSyncWorker.noteFollow(it, "${key.suffix} $why") }
+        // The Drive FILE that carries the key (recents and collections ride in Preferences), not its toggle category.
+        DsyncCoexistence.driveFileFor(key)?.let { com.aeriotv.android.core.sync.DriveSyncWorker.noteFollow(it, "${key.suffix} $why") }
         com.aeriotv.android.core.sync.DriveSyncWorker.enqueueOneShotPush(context)
     }
 
     @Volatile private var convergeRunning = false
+
+    /**
+     * What the Drive fresh-device order (DriveSyncManager, section 10a) needs
+     * from this side: the shared keys the pull applied on this device this
+     * session ([read], suffixes) and the server copy as last fetched
+     * ([server], canonical rows). Null when no base-user session runs.
+     * [read] is null until the session's first complete pull.
+     */
+    data class DriveOrderState(val read: Set<String>?, val server: com.aeriotv.android.core.sync.SetupSourceChoice.Summary)
+
+    suspend fun driveOrderState(): DriveOrderState? {
+        val s = session ?: return null
+        if (!isBase(s) || s.peek) return null
+        if (!s.firstPullDone) return DriveOrderState(null, com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY)
+        val read = synchronized(s.read) { s.read.toSet() }.filter { it in DsyncCoexistence.FORCE_KEYS }.map { it.suffix }.toSet()
+        val bucket = bucketRaw(s, DsyncBucket.Main)?.let { (DsyncV2.decode(it) as? DsyncV2.Decode.Ok)?.bucket }
+        val scopes = kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) { prefs.syncScopesOnce() }
+        val server = bucket?.let { DsyncCoexistence.summarize(it, scopes) } ?: com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
+        return DriveOrderState(read, server)
+    }
+
+    /** The data the server held for [key] as of the last fetch of its bucket (refreshBeforePut saves it), or null. */
+    private fun serverDataOf(s: Session, b: DsyncBucket, key: DsyncKey): JsonObject? {
+        val bucket = bucketRaw(s, b)?.let { (DsyncV2.decode(it) as? DsyncV2.Decode.Ok)?.bucket } ?: return null
+        return (DsyncV2.category(bucket, key) as? DsyncDecode.Ok)?.envelope?.data
+    }
 
     /**
      * Rule 5 self-heal, once per complete pull: compare the Drive copy with
@@ -835,6 +864,14 @@ class DispatcharrSyncManager @Inject constructor(
                 else -> null
             }?.let { k.suffix to it }
         }.toMap()
+        // A key dirty with no write queued is either an unsent local change or
+        // a stale flag (the server already equals local). Queue its write: the
+        // build compares with the fetched server copy, so an equal key ends as
+        // status=unchanged and clears, and converge runs again after it.
+        DsyncCoexistence.FORCE_KEYS.filter { skip[it.suffix] == "dirty" && synchronized(s.pending) { !s.pending.containsKey(it) } }.forEach {
+            s.convergeAfterWrite += it
+            schedule(s, it, 0L)
+        }
         convergeRunning = true
         scope.launch {
             try {
@@ -1454,10 +1491,18 @@ class DispatcharrSyncManager @Inject constructor(
             // writes: the same count the Drive probe reports for settings.
             Log.i(TAG, "[DSYNC] force push settings rows=${DsyncCoexistence.rowCount(key, data)} (mirrors Google Drive)")
         } else if (force) Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)} (user chose Google Drive)")
-        if (data.toString() == lastDataOf(s, key) && key in s.present) {
+        // Compare with the server copy refreshBeforePut just fetched, not the
+        // last copy this device saved: a forced refresh saves the bucket but
+        // not the key's data, so the saved copy could be stale (field run
+        // 2026-11-01: "status=unchanged rows=1" while the server held 9).
+        val held = serverDataOf(s, b, key)?.toString() ?: lastDataOf(s, key)
+        if (data.toString() == held && key in s.present) {
             // No PUT: the server already holds exactly this copy. Logged for a
-            // forced key so every force push ends in a status line.
-            if (force) Log.i(TAG, "[DSYNC] put ${b.wire} (${key.suffix}) status=unchanged rows=${DsyncCoexistence.rowCount(key, data)} (server already holds this copy)")
+            // forced key (every force push ends in a status line) and for a
+            // dirty shared key (the flag clears here).
+            if (force || (isDirty(s, key) && key in DsyncCoexistence.FORCE_KEYS)) {
+                Log.i(TAG, "[DSYNC] put ${b.wire} (${key.suffix}) status=unchanged rows=${DsyncCoexistence.rowCount(key, data)} (server already holds this copy)")
+            }
             if (force) clearForced(s, key)
             markSent(s, key)
             clearAwaiting(s, key)
@@ -1769,6 +1814,7 @@ class DispatcharrSyncManager @Inject constructor(
             // Keep dirtyAt: the rows did not change locally, so pulls are not outvoted by this flag.
             state.edit().putBoolean(k("dirty", s, key), true).commit()
         } else setDirty(s, key, false)
+        if (s.convergeAfterWrite.remove(key) && s.convergeAfterWrite.isEmpty()) maybeConverge(s)
     }
 
     /**
@@ -1820,7 +1866,11 @@ class DispatcharrSyncManager @Inject constructor(
                 val ids = prefs.recentChannelIdsIn(s.token)
                 val local = ids.mapIndexedNotNull { i, id -> m.toInt[id]?.let { RecentRow(it, stamps[id] ?: (now - i)) } }
                 val remote = base?.let(DsyncPayloads::decodeRecents).orEmpty()
-                DsyncPayloads.encodeRecents(base, DsyncMerge.recents(local, remote))
+                val out = DsyncPayloads.encodeRecents(base, DsyncMerge.recents(local, remote))
+                // Counts only: the local store, the rows with a Dispatcharr id, the
+                // server rows merged in, and what goes up (the rowCount definition).
+                Log.i(TAG, "[DSYNC] recents out local=${ids.size} canonical=${local.map { it.channelId }.distinct().size} server=${remote.size} out=${DsyncCoexistence.rowCount(key, out)}")
+                out
             }
         }
         DsyncKey.Progress -> {

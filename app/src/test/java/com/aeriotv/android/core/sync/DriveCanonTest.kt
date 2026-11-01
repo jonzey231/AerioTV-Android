@@ -103,8 +103,10 @@ class DriveCanonTest {
         assertEquals(dsyncFp, DriveCanon.favorites(migrated, DriveCanon.Ids()).fingerprint)
         val legacy = FavoritesSnapshot(env, listOf(fav("a"), fav("b")))
         assertEquals(dsyncFp, DriveCanon.favorites(legacy, DriveCanon.Ids(channels = mapOf("a" to 1, "b" to 2))).fingerprint)
-        // An unresolved row keeps the prompt.
-        assertNull(DriveCanon.favorites(legacy, DriveCanon.Ids(channels = mapOf("a" to 1))).fingerprint)
+        // Canonical-id rows only (section 10a): an unresolved row is neither counted nor compared.
+        val partial = DriveCanon.favorites(legacy, DriveCanon.Ids(channels = mapOf("a" to 1)))
+        assertEquals(1, partial.rows)
+        assertEquals(DriveCanon.dsyncFavorites(listOf(1)), partial.fingerprint)
     }
 
     @Test fun progressMatchesWireAndAppliesTheCap() {

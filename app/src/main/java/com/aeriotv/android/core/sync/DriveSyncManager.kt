@@ -304,14 +304,15 @@ class DriveSyncManager @Inject constructor(
     // playlist DAO return the stored (default) login, so a non-default active
     // profile never leaks into, or is overwritten by, the Drive snapshot.
     // PHASE 2 HOOK: per-profile sync replaces this with a profile id per file.
-    private suspend fun pushCategory(token: String, category: SyncCategory): Boolean =
+    private suspend fun pushCategory(token: String, category: SyncCategory, label: String? = null): Boolean =
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
-            pushCategoryDefaultProfile(token, category)
+            pushCategoryDefaultProfile(token, category, label)
         }
 
-    private suspend fun pushCategoryDefaultProfile(token: String, category: SyncCategory): Boolean {
+    private suspend fun pushCategoryDefaultProfile(token: String, category: SyncCategory, label: String?): Boolean {
+        val shared = category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES
         // Rule 4: never push this device's (not yet chosen) shared data over the backup.
-        if (sharedHeld() && category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES) {
+        if (sharedHeld() && shared) {
             Log.i(TAG, "[DRIVE] push ${category.name} held: waiting for the setup choice")
             return true
         }
@@ -324,15 +325,73 @@ class DriveSyncManager @Inject constructor(
             SyncCategory.Preferences -> json.encodeToString(withCanonicalIds(buildPreferencesSnapshot()))
             SyncCategory.Credentials -> json.encodeToString(buildCredentialsSnapshot())
         }
+        // Fresh-device order (Rule 4, Dispatcharr chosen; section 10a): the first
+        // push of each shared file waits until the Dispatcharr pull applied its
+        // categories here, so an empty fresh device never overwrites a
+        // populated backup (field run 2026-11-01: Drive progress 1 fell to 0).
+        val waiting = shared && replaceWaiting(category)
+        val local = if (shared) localSharedRows(category, payload) else emptyMap()
+        if (waiting) {
+            if (!appPreferences.dispatcharrSyncEnabledOnce()) {
+                clearReplaceWait(category)
+            } else {
+                val st = runCatching { dispatcharrSync.get().driveOrderState() }.getOrNull()
+                val server = st?.server?.categories?.mapValues { it.value.rows }.orEmpty()
+                val hold = SetupSourceChoice.freshDeviceHold(SetupSourceChoice.namesInFile(category), st?.read, server, local)
+                if (hold != null) {
+                    Log.i(TAG, "[DRIVE] push ${category.name} held: $hold (fresh-device order)")
+                    return true
+                }
+                clearReplaceWait(category)
+            }
+        }
         val ok = driveClient.upload(token, category.fileName, payload).isSuccess
-        DriveSyncWorker.takeFollows(category).takeIf { it.isNotEmpty() }?.let { why ->
-            Log.i(TAG, "[DRIVE] push ${category.name} rows=${snapshotRows(category, payload)} (follow ${why.joinToString(", ")})${if (ok) "" else " failed"}")
+        val follows = DriveSyncWorker.takeFollows(category)
+        val why = label ?: if (waiting) "replace" else null
+        if (why != null || follows.isNotEmpty()) {
+            Log.i(TAG, SetupSourceChoice.drivePushLine(category.name, snapshotRows(category, payload, local), local, why, follows, ok))
         }
         return ok
     }
 
-    /** Rows in a pushed snapshot, for the follow line (counts only). */
-    private fun snapshotRows(category: SyncCategory, payload: String): Int = runCatching {
+    /**
+     * Canonical rows per shared category in a payload this device is about to
+     * push: the same definition the setup probe reads back from Drive
+     * (readSharedSummary, DriveCanon) and Dispatcharr Sync counts
+     * (DsyncCoexistence.rowCount). The payload already carries the canonical
+     * ids (withCanonicalIds), so no lookups are needed beyond the host.
+     */
+    private suspend fun localSharedRows(category: SyncCategory, payload: String): Map<String, Int> = runCatching {
+        val now = System.currentTimeMillis()
+        val ids = DriveCanon.Ids()
+        val out = LinkedHashMap<String, SetupSourceChoice.Category>()
+        when (category) {
+            SyncCategory.Favorites -> out["favorites"] = DriveCanon.favorites(json.decodeFromString(payload), ids)
+            SyncCategory.WatchProgress -> out["progress"] = DriveCanon.progress(json.decodeFromString(payload), ids, now)
+            SyncCategory.Reminders -> out["reminders"] = DriveCanon.reminders(json.decodeFromString(payload), now)
+            SyncCategory.Watchlist -> {
+                val w = json.decodeFromString<WatchlistSnapshot>(payload)
+                val host = idLookup.activeDispatcharr()?.let { idLookup.host(it) }
+                out["watchlist"] = DriveCanon.watchlist(w, ids, host)
+                out["hiddenTitles"] = DriveCanon.hiddenTitles(w, ids, host)
+            }
+            SyncCategory.Preferences -> {
+                val p = json.decodeFromString<PreferencesSnapshot>(payload)
+                out["recents"] = DriveCanon.recentsCategory(p, ids)
+                out["collections"] = DriveCanon.collectionsCategory(p, ids)
+                out["hiddenGroups"] = DriveCanon.hiddenGroupsCategory(p)
+                out["groupOrder"] = DriveCanon.groupOrderCategory(p)
+            }
+            else -> Unit
+        }
+        val scopes = appPreferences.syncScopesOnce()
+        SetupSourceChoice.forDevice(SetupSourceChoice.Summary(out)) { SetupSourceChoice.itemOff(scopes, it) }
+            .categories.mapValues { it.value.rows }
+    }.getOrDefault(emptyMap())
+
+    /** Rows in a pushed snapshot, for the push line (counts only): canonical rows for a one-category shared file. */
+    private fun snapshotRows(category: SyncCategory, payload: String, shared: Map<String, Int> = emptyMap()): Int = runCatching {
+        if (shared.size == 1) return@runCatching shared.values.first()
         when (category) {
             SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(payload).entries.size
             SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(payload).entries.size
@@ -498,11 +557,54 @@ class DriveSyncManager @Inject constructor(
         return out
     }
 
-    /** The user chose Dispatcharr: the next Drive push overwrites the backup with this device's copy. */
-    suspend fun replaceBackupOnNextPush() {
+    // Fresh-device order: shared Drive files waiting for their first push after a Dispatcharr choice.
+    private fun waitKey(c: SyncCategory) = "replaceWait|${c.name}"
+    private fun replaceWaiting(c: SyncCategory) = setupState.getBoolean(waitKey(c), false)
+    private fun clearReplaceWait(c: SyncCategory) { setupState.edit().remove(waitKey(c)).commit() }
+
+    /**
+     * The user chose Dispatcharr (prompt or automatic UseDispatcharr): every
+     * shared Drive file waits for its Dispatcharr pull before its first push
+     * (persisted, so a restart keeps the order). Armed before the hold is
+     * released, so no worker or follow push can slip in ahead of it.
+     */
+    fun armReplaceWait() {
+        val e = setupState.edit()
+        com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES.forEach { e.putBoolean(waitKey(it), true) }
+        e.commit()
+    }
+
+    /** The user chose Google Drive: nothing waits on Dispatcharr. */
+    fun clearReplaceWaits() {
+        val e = setupState.edit()
+        com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES.forEach { e.remove(waitKey(it)) }
+        e.commit()
+    }
+
+    /**
+     * The user chose Dispatcharr: overwrite the Drive backup with this
+     * device's copy of every shared category NOW, in this session (field run
+     * 2026-11-01: the old debounced worker push went out with no per-category
+     * line, and a later follow could replace it). Each file logs
+     * "[DRIVE] push <Category> rows=N (replace)" or why it waits (fresh-device
+     * order); a waiting file goes out with the next push once its Dispatcharr
+     * pull has applied (the pull's Drive follow queues it).
+     */
+    suspend fun replaceBackupNow() {
         appPreferences.setSyncInitialPullDone(true)
         Log.i(TAG, "[DRIVE] next push replaces backup (user chose Dispatcharr)")
-        DriveSyncWorker.enqueueOneShotPush(context)
+        val on = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { appPreferences.syncMasterEnabled.first() }
+        if (!on) return
+        val token = ensureSignedIn() ?: run { DriveSyncWorker.enqueueOneShotPush(context); return }
+        val wanted = SyncCategory.entries
+            .filter { it in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES }
+            .filter { appPreferences.syncCategoryEnabled(it).first() }
+        val ok = wanted.associateWith { c ->
+            runCatching { pushCategory(token, c, "replace") }
+                .onFailure { Log.w(TAG, "[DRIVE] replace push ${c.name} failed: ${it.javaClass.simpleName}") }
+                .getOrDefault(false)
+        }
+        if (ok.values.any { it }) appPreferences.setSyncLastPushAt(System.currentTimeMillis())
     }
 
     /**
@@ -521,7 +623,9 @@ class DriveSyncManager @Inject constructor(
         val scopes = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { appPreferences.syncScopesOnce() }
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val row = idLookup.activeDispatcharr()
-            val channels = row?.let { runCatching { idLookup.channels(it) }.getOrNull() }.orEmpty()
+            // Canonical-id rows only: a failed channel lookup would hide legacy
+            // rows, so the probe fails (no choice) instead of undercounting.
+            val channels = row?.let { idLookup.channels(it) }.orEmpty()
             val host = row?.let { idLookup.host(it) }
             body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) }?.let { f ->
                 out["favorites"] = DriveCanon.favorites(f, DriveCanon.Ids(channels = channels))
@@ -611,7 +715,9 @@ class DriveSyncManager @Inject constructor(
         val files = plan.mapNotNull { SetupSourceChoice.driveFile(it) }.distinct()
         val enabledFiles = files.filter { appPreferences.syncCategoryEnabled(it).first() }
         val ok = enabledFiles.associateWith { c ->
-            runCatching { pushCategory(token, c) }.onFailure { Log.w(TAG, "[SYNC] converge push ${c.name} failed: ${it.javaClass.simpleName}") }.getOrDefault(false)
+            // A file still waiting (fresh-device order) is not marked pushed, so the next converge retries it.
+            (runCatching { pushCategory(token, c, "converge") }.onFailure { Log.w(TAG, "[SYNC] converge push ${c.name} failed: ${it.javaClass.simpleName}") }.getOrDefault(false)) &&
+                !replaceWaiting(c)
         }
         val e = convergeState.edit()
         plan.forEach { n ->

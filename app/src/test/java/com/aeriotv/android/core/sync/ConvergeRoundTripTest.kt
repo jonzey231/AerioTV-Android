@@ -45,10 +45,15 @@ class ConvergeRoundTripTest {
     // Local channel ids "a".."c" map to Dispatcharr 1..3; movie uuids to 11..; series id is its own id.
     private val ids = DriveCanon.Ids(channels = mapOf("a" to 1, "b" to 2, "c" to 3), movies = mapOf("u1" to 11, "u2" to 12), episodes = mapOf("e1" to 21))
 
-    private fun driveSummary(full: Boolean, scopes: Map<String, SyncScope> = emptyMap(), driveLanes: Map<String, Map<String, JsonPrimitive>>): SetupSourceChoice.Summary {
+    /**
+     * [strays] adds local rows with no Dispatcharr id (a channel of another
+     * playlist, "z"): they can never live on Dispatcharr, so neither side
+     * counts them (canonical-id rows only, section 10a).
+     */
+    private fun driveSummary(full: Boolean, scopes: Map<String, SyncScope> = emptyMap(), driveLanes: Map<String, Map<String, JsonPrimitive>>, strays: Boolean = false): SetupSourceChoice.Summary {
         val fav = rt(DriveCanon.enrichFavorites(FavoritesSnapshot(env, if (full) listOf(
             FavoriteSnapshotEntry("a", "A", 0, 0), FavoriteSnapshotEntry("b", "B", 1, 0),
-        ) else emptyList()), ids).first)
+        ) + (if (strays) listOf(FavoriteSnapshotEntry("z", "Z", 2, 0)) else emptyList()) else emptyList()), ids).first)
         val prog = rt(DriveCanon.enrichProgress(WatchProgressSnapshot(env, if (full) listOf(
             WatchProgressSnapshotEntry("u1", "M", null, 10, 100, now - 1_000, "movie"),
             WatchProgressSnapshotEntry("e1", "E", null, 10, 100, now - 2_000, "episode", "7"),
@@ -59,7 +64,7 @@ class ConvergeRoundTripTest {
             if (full) listOf(HiddenTitleSnapshotEntry("u2", "movie", hiddenAt = 1)) else emptyList(),
         ), ids).first)
         val keys = if (full) mapOf(
-            DriveCanon.K_RECENTS to "a\nc",
+            DriveCanon.K_RECENTS to if (strays) "a\nz\nc\na" else "a\nc",
             DriveCanon.K_COLLECTIONS to json.encodeToString(listOf(ChannelCollection("c1", "Sports", listOf("a", "b"), ChannelCollection.PLACEMENT_BEGINNING))),
             DriveCanon.K_HIDDEN_LIVE to "Adult", DriveCanon.K_HIDDEN_MOVIES to "", DriveCanon.K_HIDDEN_SERIES to "Kids",
             DriveCanon.K_ORDER to "News\nSports", DriveCanon.K_SORT_MODE to "Manual",
@@ -117,6 +122,35 @@ class ConvergeRoundTripTest {
         }
         assertTrue(SetupSourceChoice.equal(d, x))
         assertEquals(SetupSourceChoice.Decision.UseDispatcharr, SetupSourceChoice.decide(d, x))
+    }
+
+    /**
+     * One row definition per category (field run 2026-11-01: a forced recents
+     * push logged rows=1 while the probe read 9): the Dispatcharr push
+     * rowCount, the Dispatcharr probe summary, and the Drive summary (which
+     * the Drive push line and the converge fingerprint use) agree for all 10
+     * shared categories, with stray local rows that have no Dispatcharr id.
+     */
+    @Test fun pushRowCountEqualsProbeCountForEveryCategory() {
+        val data = dsyncData(true, wireLanes)
+        val probe = dsyncSummary(data)
+        val drive = driveSummary(true, driveLanes = driveLanes, strays = true)
+        assertEquals(SetupSourceChoice.SHARED.toSet(), DsyncCoexistence.FORCE_KEYS.map { it.suffix }.toSet())
+        DsyncCoexistence.FORCE_KEYS.forEach { key ->
+            val n = key.suffix
+            val push = DsyncCoexistence.rowCount(key, data.getValue(key))
+            assertEquals("$n push vs probe", push, probe.rows(n))
+            assertEquals("$n push vs drive", push, drive.rows(n))
+            assertTrue("$n has rows", push > 0)
+            assertTrue("$n equal", SetupSourceChoice.categoryEqual(drive.categories[n], probe.categories[n]))
+        }
+        // The 50 cap and dedupe are the same on both sides.
+        val many = (1..60).map { RecentRow(it, it.toLong()) } + RecentRow(60, 1)
+        val enc = DsyncPayloads.encodeRecents(null, many)
+        val lines = (1..60).joinToString("\n") { "c$it" }
+        val dr = DriveCanon.recentsCategory(PreferencesSnapshot(env, mapOf(DriveCanon.K_RECENTS to lines)), DriveCanon.Ids(channels = (1..60).associate { "c$it" to it }))
+        assertEquals(50, DsyncCoexistence.rowCount(DsyncKey.Recents, enc))
+        assertEquals(50, dr.rows)
     }
 
     @Test fun emptyCategoriesEqualOnBothSides() {

@@ -137,6 +137,37 @@ object SetupSourceChoice {
         else -> null
     }
 
+    /** The shared categories one Drive file carries, in [SHARED] order. */
+    fun namesInFile(file: SyncCategory): List<String> = SHARED.filter { driveFile(it) == file }
+
+    /**
+     * Fresh-device order (Rule 4, Dispatcharr chosen; section 10a): the first
+     * Drive push of [names] (one Drive file) waits until Dispatcharr Sync has
+     * applied each of them on this device, so an empty fresh device never
+     * overwrites a populated backup. [read] is the set of shared keys the
+     * Dispatcharr pull applied this session (null: no session or no complete
+     * pull yet); [server] and [local] are canonical row counts per name.
+     * Names off on this device (absent from both maps) are not waited on.
+     * Null means push now; otherwise the counts-only reason it waits.
+     */
+    fun freshDeviceHold(names: List<String>, read: Set<String>?, server: Map<String, Int>, local: Map<String, Int>): String? {
+        val live = names.filter { it in server || it in local }
+        if (live.isEmpty()) return null
+        if (read == null) return "Dispatcharr pull not done"
+        live.firstOrNull { it !in read }?.let { return "$it not pulled yet" }
+        live.firstOrNull { (server[it] ?: 0) > 0 && (local[it] ?: 0) <= 0 }?.let {
+            return "$it empty here, ${server[it]} on Dispatcharr"
+        }
+        return null
+    }
+
+    /** The per-category Drive push line (counts only): "(converge)", "(replace)", "(follow recents local, recents pull)". */
+    fun drivePushLine(file: String, rows: Int, shared: Map<String, Int>, label: String?, follows: List<String>, ok: Boolean): String {
+        val why = listOfNotNull(label, follows.takeIf { it.isNotEmpty() }?.let { "follow " + it.joinToString(", ") }).joinToString("; ")
+        val detail = if (shared.size > 1) " " + shared.entries.joinToString(" ") { "${it.key}=${it.value}" } else ""
+        return "[DRIVE] push $file rows=$rows$detail ($why)${if (ok) "" else " failed"}"
+    }
+
     /** The counts-only converge line. */
     fun convergeLine(name: String, drive: Category?, dsync: Category?) =
         "[SYNC] converge $name drive=${drive?.fingerprint ?: "-"}/${drive?.rows ?: 0} dsync=${dsync?.fingerprint ?: "-"}/${dsync?.rows ?: 0} -> push drive"
