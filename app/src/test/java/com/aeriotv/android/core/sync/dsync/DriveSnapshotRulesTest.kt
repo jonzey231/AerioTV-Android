@@ -56,6 +56,14 @@ class DriveSnapshotRulesTest {
         assertFalse(driveSrc.contains("withHeld("))
     }
 
+    @Test fun playlistWritesNeverReplaceTheRow() {
+        // REPLACE deletes the parent row first, and ON DELETE CASCADE then removed every
+        // watch progress, reminder, and local recording row of that playlist.
+        val dao = src("src/main/java/com/aeriotv/android/core/data/db/dao/PlaylistDao.kt")
+        assertFalse(dao.contains("OnConflictStrategy.REPLACE"))
+        assertTrue(Regex("""@androidx\.room\.Upsert\s+suspend fun upsert\(playlist: PlaylistEntity\)""").containsMatchIn(dao))
+    }
+
     @Test fun failedIdLookupNoLongerEmptiesTheSnapshot() {
         // Item 4: the local row existed but its canonical lookup returned nothing in that run.
         val s = DsyncHeld.driveSnapshot(WatchProgressSnapshot(env, listOf(local(null))), listOf(serverPlayed, heldRow), uuidOf)

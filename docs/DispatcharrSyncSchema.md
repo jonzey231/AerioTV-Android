@@ -1033,6 +1033,13 @@ Single snapshot builder, pull before replace, and atomic category commit
    row from Drive (field run: the movie row existed, the push counted 0).
    Each push logs counts only: `[DRIVE] progress snapshot local=<n>
    canonical=<n> dsync=<n> placeholders=<n> (<why>)`.
+   What emptied the snapshot on the phone: every Drive worker run pulls
+   Playlists after its push, and the playlist write used SQLite REPLACE,
+   which deletes the playlist row before inserting it, so ON DELETE CASCADE
+   removed every watch progress (and reminder and local recording) row of
+   that playlist (`progress snapshot local=2`, then `local=0` right after
+   the pull). Playlist writes are now an in-place upsert (Room `@Upsert`).
+   The Apple copy must check its own playlist writes for the same cascade.
 2. Progress heal. A progress pull that is "not newer" writes every server
    row this device lacks (or holds older) when it resolves, and holds the
    rest, unless a local change is unsent. The server copy is a per-row

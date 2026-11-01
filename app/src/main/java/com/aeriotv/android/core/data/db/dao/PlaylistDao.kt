@@ -2,8 +2,6 @@ package com.aeriotv.android.core.data.db.dao
 
 import androidx.room.Dao
 import androidx.room.Delete
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
@@ -76,7 +74,15 @@ interface PlaylistDao {
     @Query("DELETE FROM playlists WHERE id = :id")
     suspend fun deleteById(id: String)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    /**
+     * Insert, or UPDATE the existing row in place. Never REPLACE: SQLite's
+     * REPLACE deletes the old row first, and every child table with an ON
+     * DELETE CASCADE foreign key to playlists (watch progress among them)
+     * lost its rows on each write of an existing playlist. Field run
+     * 2026-11-01: the Drive Playlists pull in every Drive worker run emptied
+     * watch_progress (local=2, then local=0 after "pull WatchProgress").
+     */
+    @androidx.room.Upsert
     suspend fun upsert(playlist: PlaylistEntity)
 
     @Update
