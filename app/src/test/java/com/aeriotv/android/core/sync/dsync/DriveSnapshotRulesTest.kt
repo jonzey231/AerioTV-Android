@@ -93,6 +93,23 @@ class DriveSnapshotRulesTest {
         assertTrue(body.contains("[DRIVE] replace deferred: Dispatcharr pull failed"))
     }
 
+    @Test fun recentThisDeviceCannotMapIsExcludedSoTheProbesAgree() {
+        // Server recents 14, one channel absent from this device's list: both summaries count 13.
+        val local = (1..13).map { RecentRow(100 + it, nowS - 100 - it) }
+        val wire = DsyncPayloads.encodeRecents(null, local + RecentRow(999, nowS - 5))
+        val mine = local.map { it.channelId }.toSet()
+        val keep = { t: String, id: Int -> DsyncHeld.representable(t, id, emptySet(), emptySet(), emptySet(), emptySet(), mine) }
+        val (c, gone) = DsyncHeld.recentsCategory(wire, 1_000, keep)
+        assertEquals(13, c.rows)
+        assertEquals(1, gone)
+        val ids = local.associate { "ch-${it.channelId}" to it.channelId }
+        val prefs = PreferencesSnapshot(env, mapOf(DriveCanon.K_RECENTS to local.joinToString("\n") { "ch-${it.channelId}" }), dispatcharrChannelIds = ids)
+        assertEquals(DriveCanon.recentsCategory(prefs, DriveCanon.Ids()).fingerprint, c.fingerprint)
+        // A Drive copy that carries the channel keeps it; an unloaded channel list excludes nothing.
+        assertTrue(DsyncHeld.representable("c", 999, emptySet(), emptySet(), emptySet(), setOf(DsyncHeld.channelItem(999)), mine))
+        assertTrue(DsyncHeld.representable("c", 999, emptySet(), emptySet(), emptySet(), emptySet(), emptySet()))
+    }
+
     @Test fun uploadAndBookkeepingCannotBeSplitByCancellation() {
         // The only category push upload lives in commitCategory, and commitCategory runs under NonCancellable
         // (the id migration's single-call rewrites carry no bookkeeping).

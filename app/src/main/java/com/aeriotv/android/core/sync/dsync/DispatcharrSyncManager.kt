@@ -2142,7 +2142,8 @@ class DispatcharrSyncManager @Inject constructor(
         val episodes = prog.filter { it.type == "e" && vodIds.episodeUuidCached(it.vodId) != null }.map { it.vodId }.toSet()
         val h = held.items(row.id)
         val drive = held.driveItems(row.id)
-        return { t, id -> DsyncHeld.representable(t, id, movies, episodes, h, drive) }
+        val channels = runCatching { channelSnapshotDao.forPlaylistKey(row.id).mapNotNull { it.dispatcharrChannelId }.toSet() }.getOrNull()
+        return { t, id -> DsyncHeld.representable(t, id, movies, episodes, h, drive, channels) }
     }
 
     /** Summary of the Dispatcharr copy restricted to representable rows, with the exclusion lines. */

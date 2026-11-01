@@ -1054,7 +1054,13 @@ Single snapshot builder, pull before replace, and atomic category commit
    not replaced: `[DRIVE] replace deferred: Dispatcharr pull failed`, the
    shared Drive pushes are held (`[DRIVE] push <Category> held: replace
    deferred until the Dispatcharr pull applies`), and the next Dispatcharr
-   cycle (converge) retries pull then replace.
+   cycle (converge) retries pull then replace. Recents follow the same
+   representable rule as the VOD keys: the Dispatcharr summary on this
+   device keeps a recent channel only when this device's channel list maps
+   it or the Drive copy carries it (`[SYNC] probe excludes recents rows=<n>
+   (no local match)`); an unloaded channel list excludes nothing. Field run
+   after the first fix: server recents 14, one channel absent here, so the
+   apply could never write it and every probe read 14 against 13.
 4. Atomic category commit. Once a category's upload starts, the upload,
    the follow bookkeeping, and its push line run under NonCancellable;
    turning Drive off stops the push only between categories (`[DRIVE] push

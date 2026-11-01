@@ -254,6 +254,10 @@ object DriveCanon {
      * rowCount (field run 2026-11-01: Drive counted 9 raw lines while the
      * Dispatcharr build carried fewer).
      */
+    /** Canonical channel items ("c|<id>") the recents of a Drive copy carry, for the representable filter. */
+    fun recentChannelItems(s: PreferencesSnapshot, ids: Ids): Set<String> =
+        lines(s.keys[K_RECENTS]).mapNotNull { channelOf(s, ids, it) }.map { vodItem("c", it) }.toSet()
+
     fun recentsCategory(s: PreferencesSnapshot, ids: Ids): SetupSourceChoice.Category {
         val c = lines(s.keys[K_RECENTS]).mapNotNull { channelOf(s, ids, it) }.distinct().take(DsyncLimits.RECENTS)
         return SetupSourceChoice.Category(c.size, s.envelope.lastModified, fp(c.map(::channelItem)))

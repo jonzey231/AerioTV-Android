@@ -143,11 +143,28 @@ object DsyncHeld {
     fun representable(
         type: String, id: Int,
         movies: Set<Int>, episodes: Set<Int>, held: Set<String>, drive: Set<String>,
+        channels: Set<Int>? = null,
     ): Boolean = when {
         type == "s" -> true
+        // Recent channels (2026-11-01, recents 14 vs 13): a channel this
+        // device's list maps, or one the Drive copy carries. An unloaded
+        // channel list (null or empty) excludes nothing.
+        type == CHANNEL -> channels.isNullOrEmpty() || id in channels || channelItem(id) in drive
         type == "m" && id in movies -> true
         type == "e" && id in episodes -> true
         else -> DriveCanon.vodItem(type, id).let { it in held || it in drive }
+    }
+
+    const val CHANNEL = "c"
+
+    /** Canonical channel item for the representable sets ("c|<id>"). */
+    fun channelItem(id: Int) = DriveCanon.vodItem(CHANNEL, id)
+
+    /** The recents category of the Dispatcharr copy restricted to channels [keep] accepts; returns the excluded count. */
+    fun recentsCategory(data: JsonObject, updatedAtMs: Long, keep: (String, Int) -> Boolean): Pair<SetupSourceChoice.Category, Int> {
+        val all = DsyncPayloads.decodeRecents(data).orEmpty().distinctBy { it.channelId }
+        val rows = all.filter { keep(CHANNEL, it.channelId) }
+        return SetupSourceChoice.Category(rows.size, updatedAtMs, DriveCanon.dsyncRecents(rows)) to (all.size - rows.size)
     }
 
     fun excludeLine(name: String, rows: Int) = "[SYNC] probe excludes $name rows=$rows (no local match)"

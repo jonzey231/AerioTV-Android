@@ -840,6 +840,8 @@ class DriveSyncManager @Inject constructor(
             body(SyncCategory.Preferences)?.let { json.decodeFromString<PreferencesSnapshot>(it) }?.let { p ->
                 val ids = DriveCanon.Ids(channels = channels)
                 out["recents"] = DriveCanon.recentsCategory(p, ids)
+                // Recent channels the Drive copy carries are representable here too (10a).
+                row?.let { r -> dispatcharrSync.get().noteDriveItems(r.id, DriveCanon.carriedItems(carriedP, carriedW, carriedIds) + DriveCanon.recentChannelItems(p, ids)) }
                 out["collections"] = DriveCanon.collectionsCategory(p, ids)
                 out["hiddenGroups"] = DriveCanon.hiddenGroupsCategory(p)
                 out["groupOrder"] = DriveCanon.groupOrderCategory(p)

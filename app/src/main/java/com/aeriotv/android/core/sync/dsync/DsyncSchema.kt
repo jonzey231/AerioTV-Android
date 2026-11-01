@@ -972,6 +972,10 @@ object DsyncCoexistence {
                 val (c, gone) = DsyncHeld.vodCategory(key, env.data, env.updatedAt * 1000, keep)
                 if (gone > 0) excluded?.put(key.suffix, gone)
                 c
+            } else if (keep != null && key == DsyncKey.Recents) {
+                val (c, gone) = DsyncHeld.recentsCategory(env.data, env.updatedAt * 1000, keep)
+                if (gone > 0) excluded?.put(key.suffix, gone)
+                c
             } else com.aeriotv.android.core.sync.SetupSourceChoice.Category(rowCount(key, env.data), env.updatedAt * 1000, fingerprint(key, env.data))
         }
         return sc.forDevice(com.aeriotv.android.core.sync.SetupSourceChoice.Summary(out)) { sc.itemOff(scopes, it) }
