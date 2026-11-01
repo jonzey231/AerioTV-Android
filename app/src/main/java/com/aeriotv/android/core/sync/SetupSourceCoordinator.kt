@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -124,8 +125,33 @@ class SetupSourceCoordinator @Inject constructor(
             val done = dsync.get().awaitFirstPull(FIRST_PULL_WAIT_MS)
             if (!done) Log.i(TAG, "[SYNC] first Dispatcharr pull not finished; Drive files wait for it")
             drive.releaseHold()
-            drive.replaceBackupNow()
+            pullThenReplace()
         }
+    }
+
+    /**
+     * Pull before replace (section 10a, field run 2026-11-01: the probe read
+     * recents=14 on the server, this device pushed its own 13 to Drive): a
+     * full Dispatcharr pull with the stamp check forced applies every shared
+     * key first, and only then is the Drive backup replaced. A failed pull
+     * replaces nothing; the next Dispatcharr cycle (converge) retries.
+     */
+    private suspend fun pullThenReplace() = replaceLock.withLock {
+        if (!dsync.get().pullForChoice()) {
+            drive.markReplaceDeferred()
+            Log.i("DriveSyncManager", "[DRIVE] replace deferred: Dispatcharr pull failed")
+            return@withLock
+        }
+        drive.clearReplaceDeferred()
+        drive.replaceBackupNow()
+    }
+
+    private val replaceLock = kotlinx.coroutines.sync.Mutex()
+
+    /** A deferred Dispatcharr-choice replace: retry on the next cycle (never inline, never twice at once). */
+    fun retryDeferredReplace() {
+        if (!drive.replaceDeferred() || replaceLock.isLocked) return
+        scope.launch { pullThenReplace() }
     }
 
     /**

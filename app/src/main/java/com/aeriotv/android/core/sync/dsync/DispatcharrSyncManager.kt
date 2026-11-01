@@ -175,6 +175,13 @@ class DispatcharrSyncManager @Inject constructor(
         val suppressUntil = HashMap<DsyncKey, Long>()
         var users: List<DispatcharrUserSummary>? = null
         var lastPullAt = 0L
+        /** Setup choice pull (section 10a): apply shared keys even when the stamp is "not newer". */
+        @Volatile var forceApply = false
+        /** A forced apply could not run (channel list not loaded, apply failed). */
+        @Volatile var forceApplyFailed = false
+        /** The last pullAll read the list and every bucket it needed. */
+        @Volatile var pullComplete = false
+        @Volatile var bucketFailed = false
     }
 
     @Volatile private var session: Session? = null
@@ -1027,6 +1034,8 @@ class DispatcharrSyncManager @Inject constructor(
         }
         val c = conn(s) ?: return@withLock
         s.listOk = false
+        s.pullComplete = false
+        s.bucketFailed = false
         _ui.value = _ui.value.copy(running = true)
         try {
             val list = runCatching { client.appDataList(c.base, c.apiKey) }.getOrNull()
@@ -1062,6 +1071,7 @@ class DispatcharrSyncManager @Inject constructor(
                 if (keys.isNotEmpty()) pullBucket(s, c, b, keys)
             }
             s.lastPullAt = System.currentTimeMillis()
+            s.pullComplete = !s.bucketFailed
             s.firstPullDone = true
             state.edit().putBoolean(k("fpdone", s), true).apply()
             stampLast(s)
@@ -1118,15 +1128,16 @@ class DispatcharrSyncManager @Inject constructor(
         // one that sees the same size skips the GET (review 2026-10-27);
         // anything older, or any size change, fetches as before.
         val listed = s.serverBytes[b.wire]
-        if (shouldSkipBucketGet(s.lastPullAt, System.currentTimeMillis(), s.fetchedBytes[b.wire], listed)) {
+        if (!s.forceApply && shouldSkipBucketGet(s.lastPullAt, System.currentTimeMillis(), s.fetchedBytes[b.wire], listed)) {
             Log.d(TAG, "[DSYNC] skip get ${b.wire}: unchanged ${listed}B, last pull under ${BUCKET_REFETCH_MIN_MS / 1000}s ago")
             return
         }
         when (val f = fetchBucket(c, b)) {
             Fetched.Absent -> keys.forEach { s.present -= it; s.read += it }
-            Fetched.Failed -> Unit
-            Fetched.Malformed -> Log.w(TAG, "[DSYNC] malformed ${b.wire}")
+            Fetched.Failed -> s.bucketFailed = true
+            Fetched.Malformed -> { s.bucketFailed = true; Log.w(TAG, "[DSYNC] malformed ${b.wire}") }
             is Fetched.TooNew -> {
+                s.bucketFailed = true
                 s.blocked += keys
                 Log.w(TAG, "[DSYNC] skip ${b.wire} v${f.version} > v${DsyncV2.SCHEMA}")
             }
@@ -1290,6 +1301,27 @@ class DispatcharrSyncManager @Inject constructor(
             s.read += key
             return
         }
+        // Setup choice (section 10a, pull before replace): the user chose
+        // Dispatcharr, so its copy is applied whole before Drive is replaced,
+        // even when this device already consumed the stamp ("not newer" hid a
+        // recent the probe counted; field run 2026-11-01 recents 14 vs 13).
+        // A key with an unsent local change keeps it (that change is newer).
+        val forceWin = DsyncCoexistence.choiceApplies(wins, s.forceApply, key, isDirty(s, key))
+        if (forceWin) {
+            val applied = runCatching { apply(s, key, env) }
+                .onFailure { Log.w(TAG, "[DSYNC] apply ${key.suffix} failed: ${it.javaClass.simpleName}") }
+                .getOrDefault(ApplyResult.Failed)
+            if (applied != ApplyResult.Applied) {
+                s.forceApplyFailed = true
+                Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes setup choice apply did not run")
+                return
+            }
+            s.suppressUntil[key] = System.currentTimeMillis() + SUPPRESS_MS
+            saveAfter(s, key, raw, env.updatedAt, env.deviceId, env.data)
+            Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes applied (setup choice, stamp not newer)")
+            s.read += key
+            return
+        }
         if (wins && decision == DsyncGate.DirtyPull.KeepLocal) {
             state.edit().putString(k("raw", s, key), raw.toString()).apply()
             Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes kept local (local change newer)")
@@ -1313,7 +1345,10 @@ class DispatcharrSyncManager @Inject constructor(
                     return
                 }
                 // The channel list is not loaded yet: do not count as read.
-                ApplyResult.NotReady, ApplyResult.Failed -> return
+                ApplyResult.NotReady, ApplyResult.Failed -> {
+                    if (s.forceApply) s.forceApplyFailed = true
+                    return
+                }
             }
         } else {
             // Keep the newest raw for round-trip and the row merges.
@@ -2068,6 +2103,17 @@ class DispatcharrSyncManager @Inject constructor(
             // First run of this build: the stamp was consumed before rows were held.
             val rows = DsyncPayloads.decodeProgress(env.data) ?: return
             holdProgress(s, c, applyProgressRows(s, c, rows, written), "in (held set rebuilt)")
+        } else if (!isDirty(s, DsyncKey.Progress)) {
+            // Every server row, not only the held ones (section 10a): a row the
+            // stamp check skipped ("not newer") while local lacked it (removed
+            // here by an earlier replace, or never written) is written now when
+            // it resolves, else held. applyProgressRows never lowers a newer
+            // local row, and the server copy is a per-row union, so nothing a
+            // later push would undo is written.
+            val before = held.progress(s.playlistId)
+            val rows = DsyncPayloads.decodeProgress(env.data) ?: return
+            val left = applyProgressRows(s, c, DsyncHeld.merge(rows, before), written)
+            if (left.map(DsyncHeld::item).toSet() != before.map(DsyncHeld::item).toSet()) holdProgress(s, c, left, "retry")
         } else {
             val before = held.progress(s.playlistId)
             if (before.isEmpty()) return
@@ -2113,6 +2159,50 @@ class DispatcharrSyncManager @Inject constructor(
 
     /** Held progress rows for the Drive snapshot of [playlistId] (base user). */
     fun heldProgress(playlistId: String): List<ProgressRow> = held.progress(playlistId)
+
+    /**
+     * The Dispatcharr rows the Drive WatchProgress snapshot must carry
+     * (DsyncHeld.driveSnapshot, section 10a): the held rows plus the progress
+     * rows of the server copy this device last read, for the active base-user
+     * session of Dispatcharr Sync. Held rows only when no such session runs,
+     * progress is off, or the user chose Google Drive (forced: Drive is the
+     * source, so the server copy is about to be replaced).
+     */
+    suspend fun driveProgressRows(): Pair<String?, List<ProgressRow>> {
+        val s = session?.takeIf { isBase(it) && !it.peek } ?: return null to emptyList()
+        val h = held.progress(s.playlistId)
+        if (isForced(s, DsyncKey.Progress) || !enabled(DsyncKey.Progress, s)) return s.playlistId to h
+        val server = bucketRaw(s, DsyncBucket.Main)
+            ?.let { (DsyncV2.decode(it) as? DsyncV2.Decode.Ok)?.bucket }
+            ?.let { (DsyncV2.category(it, DsyncKey.Progress) as? DsyncDecode.Ok)?.envelope?.data }
+            ?.let { DsyncPayloads.decodeProgress(it) }.orEmpty()
+        return s.playlistId to DsyncHeld.merge(h, server)
+    }
+
+    /** Saved reverse id (no catalog scan, no network): canonical row to local uuid. */
+    fun cachedUuid(type: String, id: Int): String? =
+        if (type == "e") vodIds.episodeUuidCached(id) else if (type == "m") vodIds.movieUuidCached(id) else null
+
+    /**
+     * Pull before replace (section 10a): the user chose Dispatcharr, so a full
+     * pull applies every shared key (stamp check forced) before the Drive
+     * backup is overwritten with this device's copy. True only when the list
+     * and the bucket were read and every forced apply ran; false means Drive
+     * must not be replaced yet.
+     */
+    suspend fun pullForChoice(): Boolean {
+        val s = session?.takeIf { isBase(it) && !it.peek } ?: return false
+        s.forceApply = true
+        s.forceApplyFailed = false
+        try {
+            pullAll(s, "setup choice")
+        } finally {
+            s.forceApply = false
+        }
+        val ok = s.listOk && s.pullComplete && !s.forceApplyFailed
+        Log.i(TAG, "[DSYNC] setup choice pull ok=$ok")
+        return ok
+    }
 
     /** A Drive apply carried placeholder rows: hold them (replace when the user chose Google Drive). */
     fun holdFromDrive(playlistId: String, rows: List<ProgressRow>, replace: Boolean) {

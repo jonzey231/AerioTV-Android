@@ -139,6 +139,9 @@ class VodIdResolver @Inject constructor(
     /** Episode uuid -> id from the saved map only (no network): Drive pushes never wait on a fetch. */
     fun episodeIdCached(uuid: String): Int? = if (prefs.contains("e:$uuid")) prefs.getInt("e:$uuid", 0) else null
 
+    /** Movie id -> local uuid from the saved map only (no catalog scan): the Drive progress snapshot. */
+    fun movieUuidCached(id: Int): String? = prefs.getString("M:$id", null)
+
     /** Episode id -> local uuid from the saved map only (no network): the setup probe filter. */
     fun episodeUuidCached(id: Int): String? = prefs.getString("E:$id", null)
 

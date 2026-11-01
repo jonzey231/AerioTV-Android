@@ -835,6 +835,14 @@ object DsyncCoexistence {
      * Rule 4: the keys a "user chose Google Drive" replace pushes whole from
      * local. Profiles (per-row merge), remoteMap, and radioDefault are excluded.
      */
+    /**
+     * Pull before replace (section 10a): during the setup choice pull a shared
+     * key the stamp check calls "not newer" is applied anyway, unless this
+     * device holds an unsent change for it (that change is newer and goes up).
+     */
+    fun choiceApplies(remoteWins: Boolean, forceApply: Boolean, key: DsyncKey, dirty: Boolean): Boolean =
+        !remoteWins && forceApply && key != DsyncKey.Profiles && key in FORCE_KEYS && !dirty
+
     val FORCE_KEYS: List<DsyncKey> = listOf(
         DsyncKey.Favorites, DsyncKey.Recents, DsyncKey.Collections, DsyncKey.Progress, DsyncKey.Reminders,
         DsyncKey.Watchlist, DsyncKey.HiddenTitles, DsyncKey.HiddenGroups, DsyncKey.GroupOrder, DsyncKey.Settings,

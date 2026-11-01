@@ -69,14 +69,45 @@ object DsyncHeld {
      * carries yet (a resolved local row wins). Placeholder rows already in
      * [s] are replaced by the current held set.
      */
-    fun withHeld(s: WatchProgressSnapshot, held: List<ProgressRow>): WatchProgressSnapshot {
-        val real = s.entries.filterNot { isPlaceholder(it.videoId) }
+    fun withHeld(s: WatchProgressSnapshot, held: List<ProgressRow>): WatchProgressSnapshot = driveSnapshot(s, held)
+
+    /**
+     * THE Drive WatchProgress snapshot rule (section 10a, single builder,
+     * 2026-11-01): local rows plus every Dispatcharr row this device holds or
+     * last read from the server ([extra]), so the Drive copy always carries
+     * what the Dispatcharr copy carries here. Every push entry point (replace,
+     * converge, follow local, follow pull, periodic worker, Push to Drive)
+     * goes through DriveSyncManager.driveProgressSnapshot, which calls this.
+     *
+     * 1. A local row without a canonical id takes it from an [extra] row whose
+     *    saved reverse id ([uuidOf]) is that row's uuid (a lookup that failed
+     *    in this run never drops the row from the canonical set).
+     * 2. A resolved local row wins over the placeholder for the same item.
+     * 3. Any other [extra] row rides as a placeholder ("dsync:<type>:<id>").
+     * Placeholder rows already in [s] are replaced by the current set.
+     */
+    fun driveSnapshot(
+        s: WatchProgressSnapshot,
+        extra: List<ProgressRow>,
+        uuidOf: (String, Int) -> String? = { _, _ -> null },
+    ): WatchProgressSnapshot {
+        val rows = extra.groupBy { item(it) }.map { (_, v) -> v.maxBy { it.updatedAt } }
+        val byUuid = HashMap<String, ProgressRow>()
+        rows.forEach { r -> uuidOf(r.type, r.vodId)?.takeIf { it.isNotBlank() }?.let { byUuid[it] = r } }
+        val real = s.entries.filterNot { isPlaceholder(it.videoId) }.map { e ->
+            if (e.dispatcharrVodId != null || (e.vodType != "movie" && e.vodType != "episode")) e
+            else byUuid[e.videoId]?.takeIf { (it.type == "e") == (e.vodType == "episode") }?.let { e.copy(dispatcharrVodId = it.vodId) } ?: e
+        }
         val have = real.mapNotNull { e ->
             e.dispatcharrVodId?.let { DriveCanon.vodItem(if (e.vodType == "episode") "e" else "m", it) }
         }.toSet()
-        val add = held.distinctBy { item(it) }.filter { item(it) !in have }.map(::toEntry)
+        val add = rows.filter { item(it) !in have }.map(::toEntry)
         return s.copy(entries = real + add)
     }
+
+    /** Counts only, for the snapshot line. */
+    fun snapshotLine(why: String, local: Int, canonical: Int, extra: Int, placeholders: Int) =
+        "[DRIVE] progress snapshot local=$local canonical=$canonical dsync=$extra placeholders=$placeholders ($why)"
 
     /** Held rows merged per canonical item, newest updatedAt wins. */
     fun merge(a: List<ProgressRow>, b: List<ProgressRow>): List<ProgressRow> =

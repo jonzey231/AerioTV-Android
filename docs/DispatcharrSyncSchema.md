@@ -1016,6 +1016,45 @@ found before the setup choice is settled is left to them.
    "#"). The group sort mode reads as a known mode or "default" on both
    sides.
 
+Single snapshot builder, pull before replace, and atomic category commit
+(2026-11-01, third field run on the phone):
+
+1. One builder. Exactly one function builds the Drive WatchProgress
+   snapshot (`DriveSyncManager.driveProgressSnapshot`, pure rule
+   `DsyncHeld.driveSnapshot`). Every caller uses it: replace, converge,
+   follow local, follow pull, the periodic and one-shot worker, Push to
+   Drive, and the converge mark check. It merges the local rows with the
+   held rows and the progress rows of the Dispatcharr copy this device
+   last read (the active base-user session; held rows only when the user
+   chose Google Drive or progress is off). A resolved local row wins over
+   the placeholder for the same item; a local row whose canonical lookup
+   returned nothing takes the id from the Dispatcharr row whose saved
+   reverse id is its uuid. So a lookup that fails in one run never drops a
+   row from Drive (field run: the movie row existed, the push counted 0).
+   Each push logs counts only: `[DRIVE] progress snapshot local=<n>
+   canonical=<n> dsync=<n> placeholders=<n> (<why>)`.
+2. Progress heal. A progress pull that is "not newer" writes every server
+   row this device lacks (or holds older) when it resolves, and holds the
+   rest, unless a local change is unsent. The server copy is a per-row
+   union, so this never writes anything a later push would undo.
+3. Pull before replace. Choosing Dispatcharr runs a full Dispatcharr pull
+   first with the stamp check forced (a shared key that is "not newer" is
+   applied anyway unless it has an unsent local change;
+   `DsyncCoexistence.choiceApplies`), and only then replaces the Drive
+   backup. The pull logs `[DSYNC] setup choice pull ok=<bool>` and each
+   forced key `[DSYNC] pull <key> bytes=<n> applied (setup choice, stamp
+   not newer)`. If the list, the bucket, or a forced apply fails, Drive is
+   not replaced: `[DRIVE] replace deferred: Dispatcharr pull failed`, the
+   shared Drive pushes are held (`[DRIVE] push <Category> held: replace
+   deferred until the Dispatcharr pull applies`), and the next Dispatcharr
+   cycle (converge) retries pull then replace.
+4. Atomic category commit. Once a category's upload starts, the upload,
+   the follow bookkeeping, and its push line run under NonCancellable;
+   turning Drive off stops the push only between categories (`[DRIVE] push
+   stopped before <Category>: sync cancelled (Drive turned off)`). Tests:
+   `DriveSnapshotRulesTest`. The Apple copy must mirror all four rules
+   (iCloud in place of Drive).
+
 Apple mirrors Rule 5 with iCloud in place of Drive (pending in the Apple
 copy of this document). The Apple copy must also mirror the canonical-id
 requirement for VOD rows and the forced-push translation order above, and

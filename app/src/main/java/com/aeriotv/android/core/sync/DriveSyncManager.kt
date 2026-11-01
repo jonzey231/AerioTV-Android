@@ -16,6 +16,8 @@ import com.aeriotv.android.core.preferences.AppPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -305,13 +307,22 @@ class DriveSyncManager @Inject constructor(
                 )
             }
         }.getOrNull()
-        enabled.forEach { category ->
+        for (category in enabled) {
+            // Drive turned off (worker cancelled): stop before the next
+            // category starts; a category already uploading commits whole.
+            if (!kotlinx.coroutines.currentCoroutineContext().isActive) {
+                Log.i(TAG, "[DRIVE] push stopped before ${category.name}: sync cancelled (Drive turned off)")
+                break
+            }
             val ok = runCatching { pushCategory(token, category) }
-                .onFailure { Log.w(TAG, "push ${category.name} failed", it) }
+                .onFailure { if (it !is kotlinx.coroutines.CancellationException) Log.w(TAG, "push ${category.name} failed", it) }
                 .getOrDefault(false)
             result[category] = ok
         }
-        appPreferences.setSyncLastPushAt(System.currentTimeMillis())
+        if (result.values.any { it }) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            appPreferences.setSyncLastPushAt(System.currentTimeMillis())
+        }
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
         return result
     }
 
@@ -395,9 +406,15 @@ class DriveSyncManager @Inject constructor(
             Log.i(TAG, "[DRIVE] push ${category.name} held: Drive state unknown (setup probe failed)")
             return true
         }
+        // Pull before replace: the user chose Dispatcharr but its pull has not
+        // applied yet, so this device's copy may be older than the server's.
+        if (replaceDeferred() && shared) {
+            Log.i(TAG, "[DRIVE] push ${category.name} held: replace deferred until the Dispatcharr pull applies")
+            return true
+        }
         val payload = when (category) {
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
-            SyncCategory.WatchProgress -> json.encodeToString(withHeld(withCanonicalIds(buildWatchProgressSnapshot())))
+            SyncCategory.WatchProgress -> json.encodeToString(driveProgressSnapshot(label ?: "push"))
             SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
             SyncCategory.Favorites -> json.encodeToString(withCanonicalIds(buildFavoritesSnapshot()))
             SyncCategory.Watchlist -> json.encodeToString(withCanonicalIds(buildWatchlistSnapshot()))
@@ -428,9 +445,21 @@ class DriveSyncManager @Inject constructor(
                 clearReplaceWait(category)
             }
         }
+        // Atomic category commit (section 10a, field run 2026-11-01: Drive
+        // turned off mid-push logged "upload OK" then "Job was cancelled"):
+        // once the upload starts, the upload, the follow bookkeeping, and the
+        // push line finish together; cancellation only stops the NEXT
+        // category (pushAll checks between categories).
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            commitCategory(token, category, payload, label ?: if (waiting) "replace" else null, local)
+        }
+    }
+
+    /** Upload plus bookkeeping for one category; always runs to completion (NonCancellable caller). */
+    private suspend fun commitCategory(token: String, category: SyncCategory, payload: String, why: String?, local: Map<String, Int>): Boolean {
         val ok = driveClient.upload(token, category.fileName, payload).isSuccess
         val follows = DriveSyncWorker.takeFollows(category)
-        val why = label ?: if (waiting) "replace" else null
+        if (!ok && follows.isNotEmpty()) follows.forEach { DriveSyncWorker.noteFollow(category, it) }
         if (why != null || follows.isNotEmpty()) {
             Log.i(TAG, SetupSourceChoice.drivePushLine(category.name, snapshotRows(category, payload, local), local, why, follows, ok))
         }
@@ -489,7 +518,7 @@ class DriveSyncManager @Inject constructor(
     private suspend fun currentSharedCategories(category: SyncCategory): Map<String, SetupSourceChoice.Category> = runCatching {
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val payload = when (category) {
-                SyncCategory.WatchProgress -> json.encodeToString(withHeld(withCanonicalIds(buildWatchProgressSnapshot())))
+                SyncCategory.WatchProgress -> json.encodeToString(driveProgressSnapshot(null))
                 SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
                 SyncCategory.Favorites -> json.encodeToString(withCanonicalIds(buildFavoritesSnapshot()))
                 SyncCategory.Watchlist -> json.encodeToString(withCanonicalIds(buildWatchlistSnapshot()))
@@ -633,6 +662,11 @@ class DriveSyncManager @Inject constructor(
         val at = setupState.getLong(K_HOLD, 0L)
         return at > 0L && System.currentTimeMillis() - at < HOLD_TTL_MS
     }
+
+    /** Pull before replace (section 10a): the Dispatcharr choice's pull failed; Drive is not replaced until it applies. */
+    fun markReplaceDeferred() { setupState.edit().putBoolean(K_REPLACE_DEFERRED, true).commit() }
+    fun clearReplaceDeferred() { setupState.edit().remove(K_REPLACE_DEFERRED).commit() }
+    fun replaceDeferred(): Boolean = setupState.getBoolean(K_REPLACE_DEFERRED, false)
 
     fun releaseHold() {
         if (!setupState.contains(K_HOLD)) return
@@ -848,6 +882,12 @@ class DriveSyncManager @Inject constructor(
      */
     suspend fun converge(playlistId: String, dsync: SetupSourceChoice.Summary, skipReasons: Map<String, String>): List<String> {
         val skip = skipReasons.keys
+        // Next cycle after a failed choice pull: retry pull then replace.
+        if (replaceDeferred()) {
+            runCatching { setupCoordinator.get().retryDeferredReplace() }
+                .onFailure { Log.w(TAG, "[DRIVE] replace retry failed: ${it.javaClass.simpleName}") }
+            return emptyList()
+        }
         if (setupChoicePending || sharedHeld()) return emptyList()
         if (com.aeriotv.android.core.profiles.ProfileScope.token.value.isNotEmpty()) return emptyList()
         val gates = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
@@ -924,6 +964,9 @@ class DriveSyncManager @Inject constructor(
         val row = idLookup.activeDispatcharr() ?: return s
         val (movies, episodes) = DriveCanon.progressNeeds(s)
         DriveCanon.enrichProgress(s, DriveCanon.Ids(movies = idLookup.movies(row, movies), episodes = idLookup.episodes(row, episodes, network = false))).first
+    }.onFailure {
+        if (it is kotlinx.coroutines.CancellationException) throw it
+        Log.w(TAG, "[DRIVE] progress canonical ids failed: ${it.javaClass.simpleName}")
     }.getOrDefault(s)
 
     /**
@@ -931,10 +974,33 @@ class DriveSyncManager @Inject constructor(
      * (no local uuid yet) ride in the snapshot as placeholder rows, so the
      * Drive copy carries every row the Dispatcharr copy holds here.
      */
-    private suspend fun withHeld(s: WatchProgressSnapshot): WatchProgressSnapshot = runCatching {
-        val row = idLookup.activeDispatcharr() ?: return s
-        com.aeriotv.android.core.sync.dsync.DsyncHeld.withHeld(s, dispatcharrSync.get().heldProgress(row.id))
-    }.getOrDefault(s)
+    /**
+     * THE Drive WatchProgress snapshot (section 10a, single builder): every
+     * push entry point (replace, converge, follow local, follow pull, the
+     * periodic and one-shot worker, Push to Drive) and the converge mark check
+     * build it here, so held placeholder rows and the Dispatcharr rows this
+     * device last read always ride with the local rows (DsyncHeld.driveSnapshot).
+     * The Dispatcharr rows come from the Dispatcharr Sync session, not from a
+     * lookup that can fail: a canonical-id lookup that failed in one run
+     * (field run 2026-11-01: the local row existed, yet the push counted 0)
+     * no longer drops a row from Drive.
+     */
+    private suspend fun driveProgressSnapshot(why: String?): WatchProgressSnapshot {
+        val local = buildWatchProgressSnapshot()
+        val enriched = withCanonicalIds(local)
+        val d = runCatching { dispatcharrSync.get() }.getOrNull()
+        val (pid, extra) = runCatching { d?.driveProgressRows() }.getOrNull() ?: (null to emptyList())
+        val active = runCatching { idLookup.activeDispatcharr()?.id }.getOrNull()
+        // Only the active Dispatcharr playlist's rows (all media is scoped to the active playlist).
+        val rows = if (pid != null && (active == null || active == pid)) extra else emptyList()
+        val out = com.aeriotv.android.core.sync.dsync.DsyncHeld.driveSnapshot(enriched, rows) { t, id -> d?.cachedUuid(t, id) }
+        if (why != null) {
+            val canonical = runCatching { DriveCanon.progress(out, DriveCanon.Ids(), System.currentTimeMillis()).rows }.getOrDefault(-1)
+            val ph = out.entries.count { com.aeriotv.android.core.sync.dsync.DsyncHeld.isPlaceholder(it.videoId) }
+            Log.i(TAG, com.aeriotv.android.core.sync.dsync.DsyncHeld.snapshotLine(why, local.entries.size, canonical, rows.size, ph))
+        }
+        return out
+    }
 
     private suspend fun withCanonicalIds(s: WatchlistSnapshot): WatchlistSnapshot = runCatching {
         val row = idLookup.activeDispatcharr() ?: return s
@@ -1659,6 +1725,7 @@ class DriveSyncManager @Inject constructor(
         private const val K_HOLD = "holdShared"
         private const val K_NEEDS_SIGN_IN = "needsSignIn"
         private const val K_DRIVE_UNKNOWN = "driveUnknown"
+        private const val K_REPLACE_DEFERRED = "replaceDeferred"
         /** An abandoned setup choice stops holding Drive after 30 minutes. */
         private const val HOLD_TTL_MS = 30L * 60L * 1000L
     }
