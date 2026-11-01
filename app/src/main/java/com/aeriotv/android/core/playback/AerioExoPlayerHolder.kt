@@ -1993,6 +1993,68 @@ class AerioExoPlayerHolder @Inject constructor(
      *  itself re-sets it so only ONE retry runs per failure. */
     private var decoderRetryUsed = false
 
+    /** [CODEC] rebuilds spent on the current channel; capped at
+     *  [MAX_CODEC_REBUILDS_PER_TUNE] so a decoder that keeps dying hands over
+     *  to the existing failover. Reset on a new channel or a rendered frame. */
+    private var codecRebuildsThisTune = 0
+    private var codecRebuildChannel: String? = null
+
+    /** Last non-fatal codec / audio sink error Media3 reported for this
+     *  prime (elapsedRealtime), 0 when none. The watchdog rebuilds sooner
+     *  when one was seen and no decoded progress followed. */
+    @Volatile private var codecErrorAtMs = 0L
+
+    private fun codecTrackLabel(mime: String?): String = when {
+        mime == null -> "media"
+        mime.startsWith("audio/") -> "audio"
+        mime.startsWith("video/") -> "video"
+        else -> "media"
+    }
+
+    /** Logs the [CODEC] line and runs the full player rebuild, at most
+     *  [MAX_CODEC_REBUILDS_PER_TUNE] times per channel. Returns false when the
+     *  per-tune budget is spent (the caller falls through to its old path). */
+    private fun rebuildForCodec(track: String, cause: String, reason: String): Boolean {
+        val chan = currentChannelIdForRebuild ?: currentChannelId
+        if (chan != codecRebuildChannel) {
+            codecRebuildChannel = chan
+            codecRebuildsThisTune = 0
+        }
+        if (codecRebuildsThisTune >= MAX_CODEC_REBUILDS_PER_TUNE) {
+            Log.w(TAG, "[CODEC] $track decoder died: $cause; rebuild budget spent, failover takes over")
+            return false
+        }
+        codecRebuildsThisTune++
+        Log.w(TAG, "[CODEC] $track decoder died: $cause; rebuilding player")
+        codecErrorAtMs = 0L
+        return rebuildPlayerAndSurface(reason)
+    }
+
+    /** Non-fatal codec reports. Media3 delivers these even when it does not
+     *  raise a player error, which is the silent-death shape seen on the
+     *  Streamer (DEAD_OBJECT on the new AC-3 decoder, player stuck BUFFERING). */
+    private val codecErrorListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+        override fun onAudioCodecError(
+            eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+            audioCodecError: Exception,
+        ) = noteCodecError("audio", audioCodecError)
+
+        override fun onVideoCodecError(
+            eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+            videoCodecError: Exception,
+        ) = noteCodecError("video", videoCodecError)
+
+        override fun onAudioSinkError(
+            eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+            audioSinkError: Exception,
+        ) = noteCodecError("audio sink", audioSinkError)
+    }
+
+    private fun noteCodecError(track: String, e: Exception) {
+        codecErrorAtMs = SystemClock.elapsedRealtime()
+        Log.w(TAG, "[CODEC] $track codec error reported: ${e.javaClass.simpleName}: ${e.message}")
+    }
+
     /** Codec-handover shaped failure: a reclaimed / dead MediaCodec rather than a
      *  dead stream. Matches by error code, and by the cause chain for the
      *  DEAD_OBJECT / CodecException wording MediaTek boxes report. */
@@ -2322,14 +2384,22 @@ class AerioExoPlayerHolder @Inject constructor(
             // corresponding native window for surface", reboot to recover). Go
             // straight to the deepest teardown: release the player AND the
             // surface, then tune the same channel.
-            if (isDecoderDeath(error, causeChain)) {
+            if (isDecoderDeath(error, causeChain) ||
+                (!isTimeshifting && isTransientDecoderError(error, causeChain) &&
+                    causeChain.contains("DEAD_OBJECT", ignoreCase = true))
+            ) {
                 val kind = if (causeChain.contains("flush", ignoreCase = true)) {
                     "decoder death (MediaCodec flush)"
                 } else {
                     "decoder death (${error.errorCodeName})"
                 }
-                if (rebuildPlayerAndSurface(kind)) return
-                // Budget spent: markStreamUnavailable already ran inside.
+                val mime = (error as? androidx.media3.exoplayer.ExoPlaybackException)
+                    ?.rendererFormat?.sampleMimeType
+                if (rebuildForCodec(codecTrackLabel(mime), "${error.errorCodeName}", kind)) return
+                // Per-tune [CODEC] budget spent: hand over to the existing
+                // unavailable path (its card owns the retry). When the rebuild
+                // window budget was spent instead, it already ran inside.
+                if (!_streamUnavailable.value) markStreamUnavailable()
                 return
             }
             val liveUrl = lastPlayUrl
@@ -2399,6 +2469,7 @@ class AerioExoPlayerHolder @Inject constructor(
         override fun onRenderedFirstFrame() {
             videoFrameRendered = true
             noFrameHealAttempts = 0
+            codecRebuildsThisTune = 0
             // GH #107: video that has been painting steadily for a while means
             // the surface and codec are genuinely healthy again, so the rebuild
             // budget earns a fresh window. Guarded by elapsed time since the
@@ -2689,6 +2760,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 addAnalyticsListener(LoadErrorDiagnosticsListener())
                 // Always-on tune/stall/feed tracer (tag AerioTrace).
                 addAnalyticsListener(tracer.analyticsListener)
+                addAnalyticsListener(codecErrorListener)
                 // Developer Force HLS: log the 302 Location Media3 followed.
                 addAnalyticsListener(forceHlsRedirectListener)
                 // Always-on frame-pacing timer ([JUDDER] / [PERF] render=).
@@ -3658,6 +3730,16 @@ class AerioExoPlayerHolder @Inject constructor(
         val source = wrapForSwitchSkip(
             url, buildMediaSource(url, title, subtitle, artworkUri, drmLicenseType, drmLicenseKey),
         )
+        // Streamer 2026-11-01 18:20:19: on a live channel change the previous
+        // channel's c2.dolby.ac3.decoder was reclaimed only AFTER the new AC-3
+        // codec was created, and the new one died with DEAD_OBJECT. stop() is
+        // queued on the playback thread ahead of setMediaSource/prepare, so the
+        // renderers are disabled and the old codecs released before the next
+        // channel creates decoders of the same MIME type.
+        if (kind == "live" && channelId != null && p.playbackState != Player.STATE_IDLE) {
+            Log.i(TAG, "[CODEC] releasing previous decoders before tune ch=$effectiveChannelId")
+            p.stop()
+        }
         p.setMediaSource(source)
         retireLiveCalls(p, staleCalls)
         p.prepare()
@@ -4223,6 +4305,54 @@ class AerioExoPlayerHolder @Inject constructor(
                 val coldStartIsLive = coldStartUrl != null && isRawTsUrl(coldStartUrl)
                 val coldStartCeilingMs =
                     if (coldStartIsLive) liveNoDataStartupThresholdMs else noDataStartupThresholdMs
+                // Bytes flowing but nothing decoded: a local decoder fault, not
+                // a dead stream (Streamer 2026-11-01 18:20, 47 MB delivered
+                // while the old net said "no bytes" and walked every stream).
+                // Counted at the data source, so a buffered position stuck at 0
+                // behind a dead codec no longer reads as network silence.
+                if (coldStartIsLive && coldStartUrl != null && p.playWhenReady &&
+                    !hasReachedPlaybackRestart && !videoFrameRendered && !audioOnlyHoldActive &&
+                    p.playbackState == Player.STATE_BUFFERING && p.currentPosition <= 0L
+                ) {
+                    val (feedBytes, sinceLastByte) = tracer.feedSinceTune()
+                    val elapsedMs = now - streamPrimedAtMs
+                    val flowing = LiveNoProgressPolicy.isFlowing(feedBytes, sinceLastByte)
+                    val codecErr = codecErrorAtMs
+                    val codecErrDue = codecErr != 0L && codecErr >= streamPrimedAtMs &&
+                        now - codecErr >= CODEC_ERROR_REBUILD_MS
+                    val verdict = LiveNoProgressPolicy.decide(
+                        elapsedMs, coldStartCeilingMs, feedBytes, sinceLastByte, decodedProgress = false,
+                    )
+                    if (flowing && (verdict == LiveNoProgressPolicy.Verdict.REBUILD || codecErrDue)) {
+                        Log.w(
+                            TAG,
+                            "[NO-DATA] bytes flowing (${feedBytes / 1024} KB in budget) but no decoded " +
+                                "progress; rebuilding player ch=$currentChannelId",
+                        )
+                        if (rebuildForCodec(
+                                "media", if (codecErrDue) "codec error, no progress" else "no decoded progress",
+                                "no decoded progress",
+                            )
+                        ) {
+                            continue
+                        }
+                    }
+                    // Flowing feed with the rebuild budget spent, or still
+                    // inside its budget: never declare the stream unavailable.
+                    if (flowing) {
+                        if (codecRebuildsThisTune >= MAX_CODEC_REBUILDS_PER_TUNE &&
+                            elapsedMs >= coldStartCeilingMs
+                        ) {
+                            Log.w(
+                                TAG,
+                                "[NO-DATA] bytes flowing but no decoded progress after " +
+                                    "$codecRebuildsThisTune rebuilds ch=$currentChannelId; surfacing unavailable",
+                            )
+                            markStreamUnavailable()
+                        }
+                        continue
+                    }
+                }
                 if (coldStartUrl != null && p.playWhenReady && !hasReachedPlaybackRestart &&
                     !videoFrameRendered && p.playbackState == Player.STATE_BUFFERING &&
                     p.currentPosition <= 0L && p.bufferedPosition <= 0L &&
@@ -5271,6 +5401,10 @@ class AerioExoPlayerHolder @Inject constructor(
         private const val DECODER_RETRY_WINDOW_MS = 3_000L
         /** GH #107: full player + surface rebuilds allowed per window. */
         private const val MAX_FULL_REBUILDS = 2
+        private const val MAX_CODEC_REBUILDS_PER_TUNE = 2
+        /** After a reported codec error, how long a flowing feed may go
+         *  without decoded progress before the rebuild. */
+        private const val CODEC_ERROR_REBUILD_MS = 3_000L
         /** GH #107: rolling window the rebuild budget is counted in. */
         private const val FULL_REBUILD_WINDOW_MS = 90_000L
         /** GH #107: settle time between dropping the old surface and tuning

@@ -240,6 +240,13 @@ class PlaybackTracer {
         return LoadingSnapshot(connected = at != 0L || bytes > 0L, connectedAtMs = at, bytes = bytes)
     }
 
+    /** Bytes read since the last [markTuneStart] and ms since the newest
+     *  one; the live NO-DATA net uses them to tell network silence from a
+     *  decoder that stopped consuming a flowing feed. */
+    fun feedSinceTune(): Pair<Long, Long> = synchronized(feedLock) {
+        feedBytesTotal to (now() - lastByteAtMs)
+    }
+
     /** Fired once per tune, on a loader thread, when the FIRST byte arrives.
      *  [LiveStreamFailover] cancels its first-byte deadline against it. */
     @Volatile var onFirstByte: (() -> Unit)? = null
