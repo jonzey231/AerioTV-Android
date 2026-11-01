@@ -48,10 +48,20 @@ class SetupSourceCoordinator @Inject constructor(
         val pid = withContext(ProfileScope.defaultOnly()) {
             playlistDao.allOnce().firstOrNull { it.isActive && it.isDispatcharrDirectConnect() }?.id
         } ?: return null
-        val token = drive.ensureSignedIn() ?: return null
-        val d = drive.readSharedSummary(token) ?: return null
+        val token = drive.ensureSignedIn()
+        if (token == null && !drive.needsSignIn.value) return null // never signed in: no Drive side
+        val d = token?.let { drive.readSharedSummary(it) }
+        if (token == null) Log.w(TAG, SetupSourceChoice.driveProbeFailedLine(DriveNeedsSignInException()))
         val x = dsync.get().serverSummary(pid) ?: return null
-        val decision = SetupSourceChoice.decide(d, x)
+        val decision = SetupSourceChoice.decideKnown(d, x) ?: run {
+            // Unknown Drive (section 10a): do not decide. Dispatcharr goes on
+            // alone; shared Drive files wait, and the probe runs again once
+            // Drive answers (each Dispatcharr pull, or signing in again).
+            drive.markDriveUnknown()
+            Log.i(TAG, "[SYNC] setup source drive=unknown dsync=${x.categories.values.sumOf { it.rows }} rows decision=none (retry when Drive works)")
+            return null
+        }
+        if (d == null) return null
         // Rule 5: no silent converge while this choice is open (the prompt decides).
         drive.setupChoicePending = decision is SetupSourceChoice.Decision.Ask
         Log.i(TAG, "[SYNC] setup source drive=${d.categories.values.sumOf { it.rows }} rows dsync=${x.categories.values.sumOf { it.rows }} rows decision=${SetupSourceChoice.decisionName(decision)}")
@@ -67,6 +77,7 @@ class SetupSourceCoordinator @Inject constructor(
     suspend fun choose(source: SetupSourceChoice.Source, playlistId: String, ignoreOwnership: Boolean = false) {
         Log.i(TAG, "[SYNC] setup source chosen: $source")
         drive.setupChoicePending = false
+        drive.clearDriveUnknown()
         when (source) {
             SetupSourceChoice.Source.Drive -> {
                 drive.clearReplaceWaits()
@@ -116,6 +127,35 @@ class SetupSourceCoordinator @Inject constructor(
             drive.replaceBackupNow()
         }
     }
+
+    /**
+     * Unknown Drive retry (section 10a): the earlier probe could not read
+     * Drive. Probe again; a readable Drive decides now (UseDispatcharr or
+     * UseDrive, both providers already on). Ask stays pending for the prompt
+     * the Sync screen opens. Still unreadable: stay unknown.
+     */
+    suspend fun retryUnknownDrive() {
+        if (!drive.driveUnknown() || retrying) return
+        retrying = true
+        try {
+            val p = probe() ?: return
+            when (p.decision) {
+                SetupSourceChoice.Decision.UseDispatcharr -> {
+                    choose(SetupSourceChoice.Source.Dispatcharr, p.playlistId)
+                    afterDispatcharrOn()
+                }
+                SetupSourceChoice.Decision.UseDrive -> choose(SetupSourceChoice.Source.Drive, p.playlistId, ignoreOwnership = true)
+                is SetupSourceChoice.Decision.Ask -> Log.i(TAG, "[SYNC] setup source needs the prompt: open Settings > Sync")
+            }
+        } finally {
+            retrying = false
+        }
+    }
+
+    @Volatile private var retrying = false
+
+    /** The Sync screen opens the prompt for a pending unknown-Drive choice. */
+    fun driveUnknownPending(): Boolean = drive.driveUnknown()
 
     /** No choice was needed or possible: apply whatever Drive held and carry on as before. */
     suspend fun releaseHeld() {

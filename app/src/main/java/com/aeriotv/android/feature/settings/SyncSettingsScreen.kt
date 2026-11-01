@@ -133,6 +133,7 @@ fun SyncSettingsScreen(
     val lastPush by viewModel.lastPushAt.collectAsStateWithLifecycle(initialValue = 0L)
     val lastPull by viewModel.lastPullAt.collectAsStateWithLifecycle(initialValue = 0L)
     val statusObj by viewModel.driveStatus.collectAsState()
+    val driveNeedsSignIn by viewModel.driveNeedsSignIn.collectAsState()
     val clearStatus by viewModel.clearStatus.collectAsState()
     val pushStatus by viewModel.pushStatus.collectAsState()
     val pullStatus by viewModel.pullStatus.collectAsState()
@@ -210,6 +211,11 @@ fun SyncSettingsScreen(
     // Silently restore a persisted Drive session on open so the screen shows
     // signed-in (and Push/Pull work) without a manual re-login.
     LaunchedEffect(Unit) { viewModel.restoreSessionIfPossible() }
+    // Unknown-Drive setup choice (section 10a): once Drive answers, the probe
+    // decides here, or opens the prompt when both sides differ.
+    LaunchedEffect(statusObj, dsyncOn, masterEnabled) {
+        if (statusObj is DriveSyncManager.Status.SignedIn && dsyncOn && masterEnabled && viewModel.driveUnknownPending()) enableSecond(true) {}
+    }
 
     // Action results are point-in-time feedback; don't let a stale "Synced 5
     // categories" line greet the next visit (PlaylistDetailScreen pattern).
@@ -288,7 +294,7 @@ fun SyncSettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (!signedIn) {
+            if (!signedIn && !driveNeedsSignIn) {
                 item { SignedOutWelcomeBanner() }
             }
             item {
@@ -377,7 +383,31 @@ fun SyncSettingsScreen(
             // Sign-in / sign-out lives in its own row below the card so the
             // button has breathing room instead of getting squeezed into the
             // right edge of a multi-line description row.
+            // Drive rejected the token and a silent refresh failed: one line
+            // under the Drive section, with the sign-in and Sign Out controls.
+            if (driveNeedsSignIn) {
+                item {
+                    Text(
+                        text = DRIVE_SIGN_IN_AGAIN,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+            }
             item {
+                if (driveNeedsSignIn && !signedIn) {
+                    SignOutButton(
+                        busy = inFlight,
+                        onClick = {
+                            if (inFlight) return@SignOutButton
+                            viewModel.signOut()
+                            Toast.makeText(context, "Signed out of Drive.", Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 if (signedIn) {
                     SignOutButton(
                         // Stays focusable while in flight (a disabled button
@@ -1212,3 +1242,5 @@ private fun CategoryDeleteButton(
     }
 }
 
+/** One-line notice under the Drive section when Drive needs the user to sign in again. */
+const val DRIVE_SIGN_IN_AGAIN = "Sign in to Google Drive again"

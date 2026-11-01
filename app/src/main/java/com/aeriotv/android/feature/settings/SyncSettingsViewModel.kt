@@ -141,6 +141,8 @@ class SyncSettingsViewModel @Inject constructor(
     val lastPushAt: Flow<Long> = prefs.syncLastPushAt
     val lastPullAt: Flow<Long> = prefs.syncLastPullAt
     val driveStatus: StateFlow<DriveSyncManager.Status> = sync.status
+    val driveNeedsSignIn: StateFlow<Boolean> = sync.needsSignIn
+    fun driveUnknownPending(): Boolean = setupSource.driveUnknownPending()
 
     /** Per-category progress for the onboarding restore screen; populated by
      *  [restoreFromDrive] (which routes through the tracked pull). */

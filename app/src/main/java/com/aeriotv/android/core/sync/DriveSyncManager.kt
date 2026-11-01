@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -58,6 +59,8 @@ class DriveSyncManager @Inject constructor(
     private val providersStore: SyncProvidersStore,
     /** Rule 4 canonical ids (DriveCanon): Dispatcharr ids written next to local ids. */
     private val idLookup: DriveIdLookup,
+    /** Rule 4 retry after an unknown-Drive probe (Provider: the coordinator depends on this class). */
+    private val setupCoordinator: javax.inject.Provider<SetupSourceCoordinator>,
 ) {
     /** The record every file of the current push carries (envelope.syncProviders). */
     @Volatile private var pushProviders: SyncProvidersRecord? = null
@@ -67,8 +70,26 @@ class DriveSyncManager @Inject constructor(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    private val driveClient = DriveAppDataClient(okHttp)
     private val auth = GoogleDriveAuth(context)
+    private val authState = context.getSharedPreferences("aerio_drive_auth", Context.MODE_PRIVATE)
+    private val refreshLock = kotlinx.coroutines.sync.Mutex()
+    /** The last token a refresh replaced, and its replacement: callers holding the stale one switch over. */
+    @Volatile private var replaced: Pair<String, String>? = null
+    /** Wall clock after which the in-memory token is not trusted (same budget as the persisted one). */
+    @Volatile private var tokenExpiry: Long = 0L
+
+    private val _needsSignIn = MutableStateFlow(authState.getBoolean(K_NEEDS_SIGN_IN, false))
+    /** Drive rejected the token and a silent refresh could not fix it: the Sync screen asks the user to sign in again. */
+    val needsSignIn: StateFlow<Boolean> = _needsSignIn.asStateFlow()
+
+    private val authHandler = object : DriveAuthHandler {
+        override fun needsSignIn(): Boolean = _needsSignIn.value
+        override fun current(token: String): String = replaced?.takeIf { it.first == token }?.second ?: token
+        override suspend fun refresh(stale: String): String? = refreshAfter401(stale)
+        override fun markNeedsSignIn(reason: String) = setNeedsSignIn(reason)
+    }
+
+    private val driveClient = DriveAppDataClient(okHttp, authHandler)
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
@@ -163,9 +184,15 @@ class DriveSyncManager @Inject constructor(
      *      callers just skip instead of popping a sheet.
      */
     suspend fun ensureSignedIn(): String? {
-        (status.value as? Status.SignedIn)?.let { return it.accessToken }
+        // Drive rejected the token and the silent refresh failed: no call goes
+        // out until the user signs in again (Settings > Sync notice).
+        if (_needsSignIn.value) return null
+        // The in-memory token used to live for the whole process; it now
+        // honors the same expiry as the persisted one.
+        (status.value as? Status.SignedIn)?.let { if (System.currentTimeMillis() < tokenExpiry) return it.accessToken }
         appPreferences.syncTokenOnce()?.let { (saved, expiry) ->
             if (System.currentTimeMillis() < expiry) {
+                tokenExpiry = expiry
                 _status.value = Status.SignedIn(saved)
                 return saved
             }
@@ -182,15 +209,61 @@ class DriveSyncManager @Inject constructor(
 
     /** Persist the token with a conservative expiry and flip status to signed-in. */
     private suspend fun setSignedIn(token: String) {
-        appPreferences.saveSyncToken(token, System.currentTimeMillis() + TOKEN_TTL_MS)
+        val expiry = System.currentTimeMillis() + TOKEN_TTL_MS
+        appPreferences.saveSyncToken(token, expiry)
+        tokenExpiry = expiry
         _status.value = Status.SignedIn(token)
+        if (_needsSignIn.value) {
+            _needsSignIn.value = false
+            authState.edit().remove(K_NEEDS_SIGN_IN).commit()
+            Log.i(TAG, "[DRIVE] signed in again; Drive calls resume")
+        }
+    }
+
+    /**
+     * A Drive call answered 401 with [stale]. Clears it from the Play
+     * services cache (authorize() would hand the same token back otherwise),
+     * then asks for a new one with no UI. Concurrent 401s share one refresh.
+     * Null: no working token without the user (the caller marks needs sign-in).
+     */
+    private suspend fun refreshAfter401(stale: String): String? = refreshLock.withLock {
+        replaced?.takeIf { it.first == stale }?.let { return@withLock it.second }
+        if (_needsSignIn.value) return@withLock null
+        Log.i(TAG, "[DRIVE] HTTP 401: refreshing the access token once")
+        runCatching { auth.clearToken(stale) }
+        appPreferences.clearSyncToken()
+        tokenExpiry = 0L
+        val fresh = if (!SyncConfig.isConfigured()) null
+        else runCatching { auth.requestDriveAuthorization() }.getOrNull()?.accessToken
+        if (fresh == null || fresh == stale) {
+            Log.w(TAG, "[DRIVE] token refresh failed: ${if (fresh == null) "no token without sign-in" else "same token returned"}")
+            return@withLock null
+        }
+        replaced = stale to fresh
+        setSignedIn(fresh)
+        Log.i(TAG, "[DRIVE] token refreshed after 401")
+        fresh
+    }
+
+    private fun setNeedsSignIn(reason: String) {
+        if (_needsSignIn.value) return
+        _needsSignIn.value = true
+        authState.edit().putBoolean(K_NEEDS_SIGN_IN, true).commit()
+        _status.value = Status.SignedOut
+        tokenExpiry = 0L
+        Log.w(TAG, "[DRIVE] needs sign-in: $reason; Drive calls stop until the user signs in again")
     }
 
     suspend fun signOut() {
         runCatching { auth.signOut() }
         appPreferences.setSyncAccountEmail("")
         appPreferences.clearSyncToken()
+        tokenExpiry = 0L
         _status.value = Status.SignedOut
+        if (_needsSignIn.value) {
+            _needsSignIn.value = false
+            authState.edit().remove(K_NEEDS_SIGN_IN).commit()
+        }
     }
 
     /** Drop every appData file. Local DB rows are untouched (iOS parity). */
@@ -316,6 +389,12 @@ class DriveSyncManager @Inject constructor(
             Log.i(TAG, "[DRIVE] push ${category.name} held: waiting for the setup choice")
             return true
         }
+        // Unknown Drive (the setup probe failed): no choice was made, so no
+        // shared file goes up until the probe reads Drive and decides.
+        if (driveUnknown() && shared) {
+            Log.i(TAG, "[DRIVE] push ${category.name} held: Drive state unknown (setup probe failed)")
+            return true
+        }
         val payload = when (category) {
             SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
             SyncCategory.WatchProgress -> json.encodeToString(withCanonicalIds(buildWatchProgressSnapshot()))
@@ -336,8 +415,12 @@ class DriveSyncManager @Inject constructor(
                 clearReplaceWait(category)
             } else {
                 val st = runCatching { dispatcharrSync.get().driveOrderState() }.getOrNull()
-                val server = st?.server?.categories?.mapValues { it.value.rows }.orEmpty()
-                val hold = SetupSourceChoice.freshDeviceHold(SetupSourceChoice.namesInFile(category), st?.read, server, local)
+                // Released once the Dispatcharr pull of each name completed: after
+                // that, local is the Dispatcharr copy whatever it counts.
+                val scopes = appPreferences.syncScopesOnce()
+                val names = SetupSourceChoice.namesInFile(category)
+                    .filter { n -> SetupSourceChoice.itemId(n)?.let { !SetupSourceChoice.itemOff(scopes, it) } ?: true }
+                val hold = SetupSourceChoice.freshDeviceHold(names, st?.read)
                 if (hold != null) {
                     Log.i(TAG, "[DRIVE] push ${category.name} held: $hold (fresh-device order)")
                     return true
@@ -381,6 +464,15 @@ class DriveSyncManager @Inject constructor(
                 out["collections"] = DriveCanon.collectionsCategory(p, ids)
                 out["hiddenGroups"] = DriveCanon.hiddenGroupsCategory(p)
                 out["groupOrder"] = DriveCanon.groupOrderCategory(p)
+                // Settings too, counted the way the probe counts them (it was
+                // missing, so every push line and hold read settings as 0).
+                val scopes = appPreferences.syncScopesOnce()
+                val lanes = appPreferences.driveLanesAsWire(
+                    mapOf(SyncScope.LANE_ALL to p.keys, SyncScope.LANE_TV to p.tv, SyncScope.LANE_MOBILE to p.mobile),
+                    idLookup.activeDispatcharr()?.id,
+                )
+                val (n, f) = DriveCanon.dsyncSettings(DriveCanon.lanesOn(lanes) { SetupSourceChoice.nameOff(scopes, it) })
+                out["settings"] = SetupSourceChoice.Category(n, p.envelope.lastModified, f)
             }
             else -> Unit
         }
@@ -419,6 +511,10 @@ class DriveSyncManager @Inject constructor(
         // Rule 4: a shared category waits while the setup choice is pending.
         if (sharedHeld() && category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES) {
             Log.i(TAG, "[DRIVE] pull ${category.name} held: waiting for the setup choice")
+            return PullOutcome.Owned
+        }
+        if (!ignoreOwnership && driveUnknown() && category in com.aeriotv.android.core.sync.dsync.DsyncCoexistence.SHARED_CATEGORIES) {
+            Log.i(TAG, "[DRIVE] pull ${category.name} held: Drive state unknown (setup probe failed)")
             return PullOutcome.Owned
         }
         // Coexistence Rule 1 (docs/DispatcharrSyncSchema.md): Drive still
@@ -513,6 +609,25 @@ class DriveSyncManager @Inject constructor(
         if (!setupState.contains(K_HOLD)) return
         setupState.edit().remove(K_HOLD).commit()
         Log.i(TAG, "[DRIVE] setup hold released")
+    }
+
+    /**
+     * The setup probe could not read Drive while Dispatcharr Sync could be
+     * read (section 10a, unknown Drive): nothing is decided. Shared files
+     * are neither pushed nor converged until a probe reads Drive again.
+     */
+    fun markDriveUnknown() {
+        if (driveUnknown()) return
+        setupState.edit().putBoolean(K_DRIVE_UNKNOWN, true).commit()
+        Log.i(TAG, "[DRIVE] Drive state unknown: shared files wait for a working setup probe")
+    }
+
+    fun driveUnknown(): Boolean = setupState.getBoolean(K_DRIVE_UNKNOWN, false)
+
+    fun clearDriveUnknown() {
+        if (!driveUnknown()) return
+        setupState.edit().remove(K_DRIVE_UNKNOWN).commit()
+        Log.i(TAG, "[DRIVE] Drive state known again")
     }
 
     /** Apply the Drive snapshot's shared categories now (the user chose Google Drive). */
@@ -610,7 +725,9 @@ class DriveSyncManager @Inject constructor(
     /**
      * Read-only probe for SetupSourceChoice: the Drive snapshot's shared
      * categories, summarized. Nothing is applied. Null when Drive could not
-     * be read; a missing file reads as an empty category.
+     * be read (401, HTTP error, network, needs sign-in): unknown, never
+     * empty. Only a listing Drive answered can read a missing file as an
+     * empty category.
      */
     suspend fun readSharedSummary(token: String): SetupSourceChoice.Summary? = runCatching {
         val files = driveClient.listAll(token).associate { (id, name) -> name to id }
@@ -666,7 +783,7 @@ class DriveSyncManager @Inject constructor(
         val kept = SetupSourceChoice.forDevice(SetupSourceChoice.Summary(out), { SetupSourceChoice.itemOff(scopes, it) }).categories
         Log.i(TAG, "[DRIVE] setup probe ${kept.entries.joinToString { "${it.key}=${it.value.rows}" }.ifEmpty { "empty" }}")
         SetupSourceChoice.Summary(kept, lastWrite = kept.values.maxOfOrNull { it.updatedAt })
-    }.onFailure { Log.w(TAG, "[DRIVE] setup probe failed: ${it.javaClass.simpleName}") }.getOrNull()
+    }.onFailure { Log.w(TAG, SetupSourceChoice.driveProbeFailedLine(it)) }.getOrNull()
 
     // ── Rule 5: convergence with Dispatcharr Sync ─────────────────────────
 
@@ -699,8 +816,18 @@ class DriveSyncManager @Inject constructor(
         }
         if (!gates) return emptyList()
         if (!runCatching { dispatcharrSync.get().ownsCategory(SyncCategory.Favorites) }.getOrDefault(false)) return emptyList()
+        // Unknown Drive: no converge push. Retry the setup probe instead; it
+        // decides once Drive answers.
+        if (driveUnknown()) {
+            if (!_needsSignIn.value) runCatching { setupCoordinator.get().retryUnknownDrive() }
+                .onFailure { Log.w(TAG, "[SYNC] setup probe retry failed: ${it.javaClass.simpleName}") }
+            return emptyList()
+        }
         val token = ensureSignedIn() ?: return emptyList()
-        val d = readSharedSummary(token) ?: return emptyList()
+        val d = readSharedSummary(token) ?: run {
+            Log.i(TAG, "[SYNC] converge skipped: Drive unreadable (unknown, not empty)")
+            return emptyList()
+        }
         val last = SetupSourceChoice.SHARED.mapNotNull { n -> convergeState.getString(convergeKey(playlistId, n), null)?.let { n to it } }.toMap()
         val plan = SetupSourceChoice.convergePlan(d, dsync, skip, last)
         val skipped = SetupSourceChoice.convergeSkips(d, dsync, skipReasons, last)
@@ -1466,6 +1593,8 @@ class DriveSyncManager @Inject constructor(
          * that's about to expire mid-sync. */
         private const val TOKEN_TTL_MS = 50L * 60L * 1000L
         private const val K_HOLD = "holdShared"
+        private const val K_NEEDS_SIGN_IN = "needsSignIn"
+        private const val K_DRIVE_UNKNOWN = "driveUnknown"
         /** An abandoned setup choice stops holding Drive after 30 minutes. */
         private const val HOLD_TTL_MS = 30L * 60L * 1000L
     }

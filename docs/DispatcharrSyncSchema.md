@@ -879,16 +879,45 @@ Fresh-device order (2026-11-01, Dispatcharr chosen, prompt or automatic
 UseDispatcharr). The choice arms a persisted wait on every shared Drive
 file before any hold is released. The first Drive push of a file (replace,
 follow, worker, or converge) goes out only when, for every shared category
-it carries that this device syncs: the Dispatcharr pull applied that key on
-this device this session (or the key is absent on the server), and this
-device holds at least one canonical row whenever the server copy has any.
-Otherwise the file is not pushed and logs `[DRIVE] push <Category> held:
-<category> not pulled yet|<category> empty here, <n> on Dispatcharr|Dispatcharr
-pull not done (fresh-device order)`; the pull's Drive follow pushes it once
-the condition holds. So an empty fresh device never overwrites a populated
-backup. The wait clears per file on its first push, on a Google Drive
-choice, or when Dispatcharr Sync is off. A converge push of a waiting file
-is not remembered as pushed, so the next converge retries it.
+it carries that this device syncs, the Dispatcharr pull of that key has
+completed on this device this session (applied, merged, kept local, not
+newer, seeded from local, or absent on the server). A completed pull
+releases the file whatever the row counts say: after it, local is the
+Dispatcharr copy (2026-11-01 revision; the earlier count check held a phone
+that was set up all along forever, because its local count left settings
+out). Otherwise the file is not pushed and logs `[DRIVE] push <Category>
+held: <category> not pulled yet|Dispatcharr pull not done (fresh-device
+order)`; the pull's Drive follow pushes it once the pull completes. So a
+fresh device never overwrites a populated backup before it has the
+Dispatcharr copy. The wait clears per file on its first push, on a Google
+Drive choice, or when Dispatcharr Sync is off. A converge push of a
+waiting file is not remembered as pushed, so the next converge retries it.
+
+Unknown Drive (2026-11-01). A Drive read that fails (HTTP 401, any other
+HTTP error, network, or Drive needing sign-in) is unknown, never empty:
+the listing throws instead of returning no files, and a failed file
+lookup never leads to a create. The setup probe logs `[DRIVE] setup probe
+failed: <reason class> (treated as unknown, not empty)` and the decide
+rules do not decide: no UseDispatcharr with replace, no forced replace,
+no converge push, and no "next push replaces backup". Log: `[SYNC] setup
+source drive=unknown dsync=<n> rows decision=none (retry when Drive
+works)`. The flow continues on Dispatcharr Sync alone; shared Drive files
+are neither pushed nor pulled (`[DRIVE] push <Category> held: Drive state
+unknown (setup probe failed)`), persisted across restarts. The probe runs
+again after each complete Dispatcharr pull (Rule 5 entry) and when the
+Sync screen sees Drive signed in; a readable Drive then decides as usual
+(Ask waits for the prompt on the Sync screen). Converge skips with
+`[SYNC] converge skipped: Drive unreadable (unknown, not empty)` when its
+own Drive read fails.
+
+Drive token (2026-11-01). Every Drive call that gets a 401 refreshes the
+access token once (clearing it from the platform token cache first, since
+the cached token would otherwise come back unchanged) and retries once.
+If the refresh fails or the retry gets a 401 too, Drive is marked as
+needing sign-in (persisted): no further Drive call goes out, the Sync
+screen shows "Sign in to Google Drive again" as one line under the Drive
+section with the sign-in and Sign Out controls, and signing in again
+clears it. The in-memory token honors the same expiry as the saved one.
 
 Rule 5: convergence (2026-11-01). With Google Drive and Dispatcharr Sync
 both on, the shared categories stay equal on both sides on every device,
@@ -957,7 +986,10 @@ Apple mirrors Rule 5 with iCloud in place of Drive (pending in the Apple
 copy of this document). The Apple copy must also mirror the canonical-id
 requirement for VOD rows and the forced-push translation order above, and
 (2026-11-01) the canonical-id rule for favorites and recents, the immediate
-backup replace on a Dispatcharr choice, and the fresh-device order.
+backup replace on a Dispatcharr choice, and the fresh-device order. The
+Apple copy must mirror the unknown-Drive rule (unknown iCloud: a failed
+read is never empty, nothing is decided) and the hold release rule (a
+completed pull releases the fresh-device hold regardless of counts).
 
 ## 10b. Sync providers record (`syncProviders`)
 

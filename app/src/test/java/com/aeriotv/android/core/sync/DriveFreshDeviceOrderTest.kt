@@ -39,27 +39,33 @@ class DriveFreshDeviceOrderTest {
     @Test fun freshDeviceWaitsForThePullBeforeItsFirstPush() {
         val names = SetupSourceChoice.namesInFile(SyncCategory.WatchProgress)
         // No complete Dispatcharr pull yet: wait.
-        assertNotNull(SetupSourceChoice.freshDeviceHold(names, null, mapOf("progress" to 1), mapOf("progress" to 0)))
+        assertNotNull(SetupSourceChoice.freshDeviceHold(names, null))
         // Pulled but not applied (catalog not ready): wait.
-        assertEquals("progress not pulled yet", SetupSourceChoice.freshDeviceHold(names, setOf("favorites"), mapOf("progress" to 1), mapOf("progress" to 0)))
-        // Applied but this device still has none of the server rows: an empty
-        // fresh device never overwrites the populated backup.
-        assertEquals("progress empty here, 1 on Dispatcharr", SetupSourceChoice.freshDeviceHold(names, setOf("progress"), mapOf("progress" to 1), mapOf("progress" to 0)))
-        // Applied and seeded: push.
-        assertNull(SetupSourceChoice.freshDeviceHold(names, setOf("progress"), mapOf("progress" to 1), mapOf("progress" to 1)))
-        // Known empty on the server: an empty push is the true copy.
-        assertNull(SetupSourceChoice.freshDeviceHold(names, setOf("progress"), mapOf("progress" to 0), mapOf("progress" to 0)))
-        assertNull(SetupSourceChoice.freshDeviceHold(names, setOf("progress"), emptyMap(), mapOf("progress" to 0)))
-        // Item off on this device (in neither map): nothing to wait for.
-        assertNull(SetupSourceChoice.freshDeviceHold(names, null, emptyMap(), emptyMap()))
+        assertEquals("progress not pulled yet", SetupSourceChoice.freshDeviceHold(names, setOf("favorites")))
+        // Pull completed: released, whatever the local count reads.
+        assertNull(SetupSourceChoice.freshDeviceHold(names, setOf("progress")))
+        // Item off on this device (no names): nothing to wait for.
+        assertNull(SetupSourceChoice.freshDeviceHold(emptyList(), null))
     }
 
     @Test fun preferencesFileWaitsForEveryCategoryItCarries() {
         val names = SetupSourceChoice.namesInFile(SyncCategory.Preferences)
-        val server = mapOf("recents" to 9, "collections" to 0, "hiddenGroups" to 0, "groupOrder" to 4)
-        val local = mapOf("recents" to 9, "collections" to 0, "hiddenGroups" to 0, "groupOrder" to 0)
-        assertEquals("groupOrder empty here, 4 on Dispatcharr", SetupSourceChoice.freshDeviceHold(names, server.keys, server, local))
-        assertNull(SetupSourceChoice.freshDeviceHold(names, server.keys, server, local + ("groupOrder" to 4)))
+        assertEquals("settings not pulled yet",
+            SetupSourceChoice.freshDeviceHold(names, setOf("recents", "collections", "hiddenGroups", "groupOrder")))
+        assertNull(SetupSourceChoice.freshDeviceHold(names, names.toSet()))
+    }
+
+    /**
+     * Field run 2026-11-01 (phone set up all along): "settings empty here, 7
+     * on Dispatcharr" and "progress empty here, 1 on Dispatcharr" repeated
+     * forever after every pull had completed. A completed pull releases the
+     * hold; no local count can keep it.
+     */
+    @Test fun completedPullReleasesTheHoldRegardlessOfCounts() {
+        val read = SetupSourceChoice.SHARED.toSet()
+        DsyncCoexistence.SHARED_CATEGORIES.forEach { file ->
+            assertNull(file.name, SetupSourceChoice.freshDeviceHold(SetupSourceChoice.namesInFile(file), read))
+        }
     }
 
     @Test fun pushLineNamesTheFileAndTheReason() {

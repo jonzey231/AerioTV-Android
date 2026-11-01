@@ -105,6 +105,25 @@ class GoogleDriveAuth(private val context: Context) {
         }
     }
 
+    /**
+     * Drop [token] from Google Play services' token cache. authorize() hands
+     * back its cached access token without checking it, so after Drive
+     * rejects one (401) the cache must be cleared first or the "refresh"
+     * returns the same rejected token.
+     */
+    suspend fun clearToken(token: String) {
+        val client = Identity.getAuthorizationClient(context)
+        val req = com.google.android.gms.auth.api.identity.ClearTokenRequest.builder().setToken(token).build()
+        suspendCancellableCoroutine<Unit> { cont ->
+            client.clearToken(req)
+                .addOnSuccessListener { if (cont.isActive) cont.resume(Unit) }
+                .addOnFailureListener { t ->
+                    Log.w(TAG, "clearToken failed: ${t.javaClass.simpleName}")
+                    if (cont.isActive) cont.resume(Unit)
+                }
+        }
+    }
+
     /** Parse the activity result from the Drive scope consent flow. */
     fun extractAccessToken(data: android.content.Intent?): String? {
         if (data == null) return null

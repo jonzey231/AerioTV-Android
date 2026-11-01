@@ -142,23 +142,40 @@ object SetupSourceChoice {
 
     /**
      * Fresh-device order (Rule 4, Dispatcharr chosen; section 10a): the first
-     * Drive push of [names] (one Drive file) waits until Dispatcharr Sync has
-     * applied each of them on this device, so an empty fresh device never
-     * overwrites a populated backup. [read] is the set of shared keys the
-     * Dispatcharr pull applied this session (null: no session or no complete
-     * pull yet); [server] and [local] are canonical row counts per name.
-     * Names off on this device (absent from both maps) are not waited on.
-     * Null means push now; otherwise the counts-only reason it waits.
+     * Drive push of [names] (one Drive file, only the names this device
+     * syncs) waits until the Dispatcharr pull of each of them has completed
+     * on this device, so a fresh device never overwrites a populated backup
+     * before it has the Dispatcharr copy. [read] is the set of shared keys
+     * whose pull completed this session (null: no session or no complete
+     * pull yet). Once a name's pull completed it is released whatever the
+     * row counts say: after a completed pull, local IS the Dispatcharr copy
+     * (field run 2026-11-01: a count-based "empty here" held a set-up phone
+     * forever because the local count missed settings and a progress row).
+     * Null means push now; otherwise the reason it waits.
      */
-    fun freshDeviceHold(names: List<String>, read: Set<String>?, server: Map<String, Int>, local: Map<String, Int>): String? {
-        val live = names.filter { it in server || it in local }
-        if (live.isEmpty()) return null
+    fun freshDeviceHold(names: List<String>, read: Set<String>?): String? {
+        if (names.isEmpty()) return null
         if (read == null) return "Dispatcharr pull not done"
-        live.firstOrNull { it !in read }?.let { return "$it not pulled yet" }
-        live.firstOrNull { (server[it] ?: 0) > 0 && (local[it] ?: 0) <= 0 }?.let {
-            return "$it empty here, ${server[it]} on Dispatcharr"
-        }
+        names.firstOrNull { it !in read }?.let { return "$it not pulled yet" }
         return null
+    }
+
+    /**
+     * Rule 4 with an unknown side (section 10a): a Drive probe that failed
+     * ([drive] null) is unknown, never empty, so nothing is decided (no
+     * UseDispatcharr with replace, no forced replace). Null: do not decide.
+     */
+    fun decideKnown(drive: Summary?, dsync: Summary?): Decision? =
+        if (drive == null || dsync == null) null else decide(drive, dsync)
+
+    /** The setup probe failure line: the reason class only. */
+    fun driveProbeFailedLine(t: Throwable): String = "[DRIVE] setup probe failed: ${probeReason(t)} (treated as unknown, not empty)"
+
+    fun probeReason(t: Throwable): String = when (t) {
+        is DriveAuthException -> "Unauthorized"
+        is DriveNeedsSignInException -> "NeedsSignIn"
+        is DriveHttpException -> "Http${t.code}"
+        else -> t.javaClass.simpleName.ifEmpty { "Error" }
     }
 
     /** The per-category Drive push line (counts only): "(converge)", "(replace)", "(follow recents local, recents pull)". */
