@@ -446,9 +446,14 @@ private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when 
     is SearchViewModel.Result.Epg -> {
         val range = timeFmt().format(Date(result.programme.startMillis)) +
             " - " + timeFmt().format(Date(result.programme.endMillis))
-        // The XMLTV program icon the guide already stores (the program info
-        // card's feed art); no extra fetch.
-        val programArt = result.programme.iconUrl?.takeIf { it.isNotBlank() }
+        // Program art the app already holds, no extra fetch: the art the
+        // guide banner resolved this session (what the program info card opens
+        // with), then the XMLTV / grid program icon the EPG model stores.
+        val programArt = com.aeriotv.android.feature.livetv.grid.cachedPreviewArt(
+            result.programme.dispatcharrProgramId,
+            result.programme.title,
+        )?.takeIf { it.isNotBlank() }
+            ?: result.programme.iconUrl?.takeIf { it.isNotBlank() }
         ResultDisplay(
             title = result.programme.title,
             subtitle = listOfNotNull(
