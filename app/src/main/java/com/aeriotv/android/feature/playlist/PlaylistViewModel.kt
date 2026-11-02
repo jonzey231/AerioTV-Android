@@ -70,6 +70,8 @@ class PlaylistViewModel @Inject constructor(
     // waiting out the 20 s settle delay (see AppSettleGate.awaitGuidePainted).
     private val settleGate: com.aeriotv.android.core.app.AppSettleGate,
     private val profileManager: com.aeriotv.android.core.profiles.ProfileManager,
+    @dagger.hilt.android.qualifiers.ApplicationContext
+    private val appContext: android.content.Context,
 ) : ViewModel() {
 
     enum class Phase { Bootstrapping, NeedsUrl, ChannelsReady }
@@ -214,6 +216,8 @@ class PlaylistViewModel @Inject constructor(
          * making quick app revisits zero-network.
          */
         private const val EPG_CACHE_TTL_MS = 30L * 60L * 1000L
+        /** GH #147: last resume-triggered refresh, process-wide. */
+        private val lastResumeRefreshAtMs = java.util.concurrent.atomic.AtomicLong(0L)
         /** ensureGuideRange: a request at most this far past the built
          *  window's end (the clock moved since the build) needs no rebuild. */
         private const val GUIDE_RANGE_SLACK_MS = 15L * 60L * 1000L
@@ -414,7 +418,57 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
+    /**
+     * GH #147: process-level foreground returns. The MAIN destination's own
+     * ON_START check misses a resume while the player route is on top, and
+     * its 30 min channel rule is not the user's refresh interval. Adding the
+     * observer while the process is already started delivers one catch-up
+     * onStart, which is the cold launch and is skipped.
+     */
+    private val processStartObserver = object : androidx.lifecycle.DefaultLifecycleObserver {
+        private var first = true
+        override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+            if (first) { first = false; return }
+            onAppResumed()
+        }
+    }
+
+    private fun onAppResumed() {
+        viewModelScope.launch {
+            val s = _state.value
+            if (s.isLoading || s.channels.isEmpty()) return@launch
+            val active = repository.activePlaylist() ?: return@launch
+            val newest = runCatching { repository.newestChannelFetch(active.id) }.getOrNull() ?: return@launch
+            val ageMs = System.currentTimeMillis() - newest
+            val rule = com.aeriotv.android.core.data.sync.ResumeRefreshRule
+            val interval = rule.intervalMins(
+                appPreferences.backgroundRefreshType.first(),
+                appPreferences.backgroundRefreshIntervalMins.first(),
+            )
+            if (!rule.isDue(ageMs, interval)) return@launch
+            if (!rule.unmetered(appContext) || !rule.batteryNotLow(appContext)) {
+                Log.i(TAG, "[REFRESH] resume: last refresh ${rule.formatAge(ageMs)} > interval $interval; waiting for unmetered network and battery")
+                return@launch
+            }
+            // One refresh per resume even if more than one instance of this
+            // view model is alive.
+            val now = System.currentTimeMillis()
+            val prev = lastResumeRefreshAtMs.get()
+            if (now - prev < 60_000L || !lastResumeRefreshAtMs.compareAndSet(prev, now)) return@launch
+            Log.i(TAG, "[REFRESH] resume: last refresh ${rule.formatAge(ageMs)} > interval $interval; refreshing")
+            silentChannelRefresh("resume")
+            // The guide keeps its own freshness rule.
+            refreshEpgIfStale()
+        }
+    }
+
+    override fun onCleared() {
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.removeObserver(processStartObserver)
+        super.onCleared()
+    }
+
     init {
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(processStartObserver)
         bootstrap()
         // Profiles: a profile switch reloads the channel list, groups and VOD
         // for the new Dispatcharr user through the same path as a playlist
