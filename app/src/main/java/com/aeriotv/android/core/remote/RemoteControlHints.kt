@@ -248,11 +248,15 @@ object RemoteControlHints {
             // MainActivity dispatches the guide Play/Pause and Hold Right slots
             // from this same map while the mini is up, so the named button is
             // the one that expands it.
-            map.guideSlotFor(GuideRemoteAction.RESUME_PLAYER)?.let {
-                add(RemoteHint(slotLabel(it), "Full screen"))
+            // One "Full screen" entry only, and "Close" for the mini: five
+            // pairs clipped the last one at 1080p (Streamer 2026-11-02).
+            if (none { it.action == "Full screen" }) {
+                map.guideSlotFor(GuideRemoteAction.RESUME_PLAYER)?.let {
+                    add(RemoteHint(slotLabel(it), "Full screen"))
+                }
             }
             map.guideSlotFor(GuideRemoteAction.CLOSE_MINI_PLAYER)?.let {
-                add(RemoteHint(slotLabel(it), "Close mini"))
+                add(RemoteHint(slotLabel(it), "Close"))
             }
         }
     }.take(MAX_PAIRS)
