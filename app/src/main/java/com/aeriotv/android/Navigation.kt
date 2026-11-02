@@ -486,6 +486,11 @@ fun AerioTVNavHost(
     androidx.compose.runtime.SideEffect {
         if (mainIsTopState.value != mainIsTopNow) mainIsTopState.value = mainIsTopNow
     }
+    // GH #162: the pushed Search route plays a live result through the SAME
+    // channel-tap path as the guide (play-where prompt, radio, mini), which is
+    // built inside MAIN. MAIN publishes its latest handler here; the player is
+    // pushed on top of Search, so Back returns to the results.
+    val mainChannelTap = remember { mutableStateOf<((M3UChannel) -> Unit)?>(null) }
     CompositionLocalProvider(LocalMainIsTopDestination provides mainIsTopState) {
     Box(modifier = Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = Routes.PLAYLIST_GRAPH) {
@@ -1460,8 +1465,7 @@ fun AerioTVNavHost(
                         launchSingleTop = true
                     }
                 }
-                MainScaffold(
-                    onChannelClick = { channel ->
+                val mainOnChannelClick: (M3UChannel) -> Unit = tap@{ channel ->
                         // Cast play-where prompt: with a Google Cast session
                         // active, ask Play Here / Play on <receiver>. The
                         // companion link keeps its direct behavior.
@@ -1488,7 +1492,7 @@ fun AerioTVNavHost(
                         ) {
                             tuneSettingsVm.setLastWatchedChannelId(channel.id)
                             tuneSettingsVm.recordRecentChannel(channel.id)
-                            return@MainScaffold
+                            return@tap
                         }
                         android.util.Log.i(
                             "AerioCast",
@@ -1504,7 +1508,10 @@ fun AerioTVNavHost(
                                 playOnReceiver = { channelPlay(channel, false) },
                             )
                         }
-                    },
+                }
+                androidx.compose.runtime.SideEffect { mainChannelTap.value = mainOnChannelClick }
+                MainScaffold(
+                    onChannelClick = mainOnChannelClick,
                     // Cast card flips / Switch and the Change Cast Device
                     // handoff already target the receiver: no prompt.
                     onCastChannel = { channel -> channelPlay(channel, false) },
@@ -2155,6 +2162,15 @@ fun AerioTVNavHost(
                     },
                     onMovieClick = { uuid -> navController.navigate(Routes.movieDetail(uuid)) },
                     onSeriesClick = { id -> navController.navigate(Routes.seriesDetail(id)) },
+                    onPlayChannel = { id ->
+                        val channel = playlistVm.state.value.channels.firstOrNull { it.id == id }
+                        val tap = mainChannelTap.value
+                        when {
+                            channel == null -> Unit
+                            tap != null -> tap(channel)
+                            else -> navController.navigate(Routes.player(channel.id)) { launchSingleTop = true }
+                        }
+                    },
                 )
             }
 

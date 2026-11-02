@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -79,6 +80,12 @@ fun SearchScreen(
     onMovieClick: (uuid: String) -> Unit,
     onSeriesClick: (id: Int) -> Unit,
     /**
+     * GH #162: a result for a program airing NOW opens its channel (the user
+     * searched for something to watch); a future program still jumps to its
+     * guide cell. Null keeps the guide jump for every EPG result.
+     */
+    onPlayChannel: ((channelId: String) -> Unit)? = null,
+    /**
      * Both false when hosted as the TV nav-bar Search TAB (Logan 2026-08-06)
      * rather than a pushed route: there is no screen to pop (the arrow would
      * lie; remote Back still fires [onBack] to return to Live TV), and the
@@ -95,8 +102,20 @@ fun SearchScreen(
 
     val fieldFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    if (autoFocusField) {
-        LaunchedEffect(Unit) { runCatching { fieldFocus.requestFocus() } }
+    // GH #162: restore the list position and the opened row's focus when the
+    // screen comes back from a detail or player route.
+    val listState = rememberLazyListState(viewModel.listIndex, viewModel.listOffset)
+    val restoreKey = remember { viewModel.lastOpenedKey }
+    val restoreFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (restoreKey != null && state.results.any { it.key == restoreKey }) {
+            android.util.Log.i("AerioSearch", "[SEARCH] restore results=${state.results.size} index=${viewModel.listIndex}")
+            // One frame so the restored row is laid out before focusing it.
+            kotlinx.coroutines.delay(50)
+            runCatching { restoreFocus.requestFocus() }
+        } else if (autoFocusField) {
+            runCatching { fieldFocus.requestFocus() }
+        }
     }
 
     Column(
@@ -173,6 +192,7 @@ fun SearchScreen(
                 subtitle = "Try a different search term or change the scope filter.",
             )
             else -> LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 8.dp, horizontal = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -180,10 +200,21 @@ fun SearchScreen(
                 items(state.results, key = { it.key }) { result ->
                     ResultRow(
                         result = result,
+                        focusRequester = if (result.key == restoreKey) restoreFocus else null,
                         onClick = {
+                            viewModel.lastOpenedKey = result.key
+                            viewModel.listIndex = listState.firstVisibleItemIndex
+                            viewModel.listOffset = listState.firstVisibleItemScrollOffset
                             when (result) {
-                                is SearchViewModel.Result.Epg ->
-                                    onEpgResult(result.programme.channelId, result.programme.startMillis)
+                                is SearchViewModel.Result.Epg -> {
+                                    val channelId = result.channelRowId
+                                    if (result.isLive && channelId != null && onPlayChannel != null) {
+                                        android.util.Log.i("AerioSearch", "[SEARCH] live result: open channel")
+                                        onPlayChannel(channelId)
+                                    } else {
+                                        onEpgResult(result.programme.channelId, result.programme.startMillis)
+                                    }
+                                }
                                 is SearchViewModel.Result.Movie -> onMovieClick(result.movie.uuid)
                                 is SearchViewModel.Result.Series -> onSeriesClick(result.series.id)
                             }
@@ -221,7 +252,11 @@ private fun ScopeChip(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ResultRow(result: SearchViewModel.Result, onClick: () -> Unit) {
+private fun ResultRow(
+    result: SearchViewModel.Result,
+    focusRequester: FocusRequester? = null,
+    onClick: () -> Unit,
+) {
     val display = resultDisplay(result)
     val title = display.title
     val subtitle = display.subtitle
@@ -243,6 +278,7 @@ private fun ResultRow(result: SearchViewModel.Result, onClick: () -> Unit) {
                 if (focused) Modifier.border(2.dp, Color.White, RoundedCornerShape(10.dp))
                 else Modifier,
             )
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

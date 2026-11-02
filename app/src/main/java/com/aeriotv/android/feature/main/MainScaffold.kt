@@ -2408,6 +2408,11 @@ private fun MainTabContent(
                     onEpgResult = { channelKey, startMillis ->
                         viewModel.requestGuideJump(channelKey, startMillis)
                     },
+                    // GH #162: a live result plays its channel (Shield report:
+                    // every channel result landed on the guide instead).
+                    onPlayChannel = { id ->
+                        viewModel.state.value.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+                    },
                     onMovieClick = onMovieClick,
                     onSeriesClick = onSeriesClick,
                     showBackButton = false,

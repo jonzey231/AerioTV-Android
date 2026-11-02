@@ -58,6 +58,9 @@ class SearchViewModel @Inject constructor(
              *  Null when no channel matches the programme's key. */
             val channelName: String? = null,
             val channelLogo: String? = null,
+            /** [M3UChannel.id] of the matched channel (GH #162): a live
+             *  result plays this channel instead of jumping to the guide. */
+            val channelRowId: String? = null,
         ) : Result {
             override val key = "epg-${programme.channelId}-${programme.startMillis}"
             val isLive: Boolean
@@ -84,6 +87,18 @@ class SearchViewModel @Inject constructor(
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var searchJob: Job? = null
+
+    /*
+     * GH #162 (Streamer): Back from an item opened out of the results must
+     * land on the same results. The query and results already live here; the
+     * list position and the opened row are kept here too, because the TV
+     * Search tab leaves composition while a detail or player route is on
+     * top and the remembered list state went with it.
+     */
+    var listIndex: Int = 0
+    var listOffset: Int = 0
+    /** [Result.key] of the row last opened; focus returns to it on TV. */
+    var lastOpenedKey: String? = null
 
     fun onQueryChange(value: String) {
         _state.update { it.copy(query = value) }
@@ -143,6 +158,7 @@ class SearchViewModel @Inject constructor(
                     programme = prog,
                     channelName = ch?.name?.takeIf { it.isNotBlank() },
                     channelLogo = ch?.tvgLogo?.takeIf { it.isNotBlank() },
+                    channelRowId = ch?.id,
                 )
             }
     }
