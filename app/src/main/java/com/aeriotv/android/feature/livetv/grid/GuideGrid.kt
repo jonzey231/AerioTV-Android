@@ -882,12 +882,15 @@ private fun GridRow(
     val railSmallBandNumberStyle = TextStyle(color = tertiary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     // TalkBack: one node per row (channel + what is on now). Read in
     // composition on the 30 s tick only, never per press.
-    val rowDescription = remember(channel.id, nowMs / 60_000L) {
+    // The search match line is drawn on the Canvas, so it joins the row's
+    // description here for screen readers.
+    val rowDescription = remember(channel.id, nowMs / 60_000L, searchMatchText) {
         val onNow = state.rows.cellAt(row, nowMs)?.takeIf { !it.isPlaceholder }?.title
         buildString {
             channel.channelNumber?.let { append(it).append(", ") }
             append(channel.name)
             if (onNow != null) append(", now: ").append(onNow)
+            if (searchMatchText != null) append(", matched: ").append(searchMatchText)
         }
     }
     Canvas(
