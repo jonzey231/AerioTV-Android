@@ -2303,6 +2303,7 @@ fun SwitchStreamSheet(
     // a 340 px fling 0.35 s long) used to hand its leftover to the sheet and
     // dismiss it. Only a tap outside (scrim), Back, or Finish ends it.
     var rowDragging by remember { mutableStateOf(false) }
+    var rowLifted by remember { mutableStateOf(false) }
     val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
     val canReorderList = canReorder && streams.size > 1
     // Touch Reorder mode (Apple parity: "Reorder", reading "Finish" while on).
@@ -2327,25 +2328,24 @@ fun SwitchStreamSheet(
         onDismiss = { if (!rowDragging) dismissFrom("outside-or-back") },
         sheetGesturesEnabled = !reorderMode && !rowDragging,
     ) {
-        // verticalScroll so channels with many streams (users keep 2-20) are all
-        // reachable; FormFactorModal caps the modal height, which otherwise just
-        // clipped the rows past the fold (only ~7 were selectable). Works for
-        // touch and for TV D-pad (focusing an off-screen row scrolls it in).
-        Column(
-            modifier = Modifier
-                .padding(horizontal = 20.dp, vertical = 4.dp)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            androidx.compose.foundation.layout.Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+        // Header pinned above the scrolling rows: the title no longer scrolls
+        // away on long lists, and the subtitle is the reorder hint (TV: the
+        // pick-up keys while a row is lifted). Not focusable, fixed height.
+        val subtitle = when {
+            !canReorderList -> null
+            isTv && rowLifted -> "Up / Down to move, OK to place, Back to cancel"
+            isTv -> "Long press to select and reorder"
+            else -> "Drag the handle to reorder"
+        }
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+            androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "Switch Stream",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center).padding(horizontal = 88.dp),
                 )
                 if (canReorderList && !isTv) {
                     androidx.compose.material3.TextButton(
@@ -2357,11 +2357,32 @@ fun SwitchStreamSheet(
                                 reordering = true
                             }
                         },
+                        modifier = Modifier.align(Alignment.CenterEnd),
                     ) {
                         Text(if (reordering) "Finish" else "Reorder")
                     }
                 }
             }
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                )
+            }
+        // verticalScroll so channels with many streams (users keep 2-20) are all
+        // reachable; FormFactorModal caps the modal height, which otherwise just
+        // clipped the rows past the fold (only ~7 were selectable). Works for
+        // touch and for TV D-pad (focusing an off-screen row scrolls it in).
+        // weight(fill = false) bounds the rows under the pinned header.
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+        ) {
             Spacer(Modifier.height(12.dp))
             if (streams.isEmpty()) {
                 Text(
@@ -2383,6 +2404,7 @@ fun SwitchStreamSheet(
                     },
                     touchReordering = reorderMode,
                     onPendingOrder = { pendingOrder = it },
+                    onLiftedChange = { rowLifted = it },
                 )
             } else {
                 streams.forEach { stream ->
@@ -2401,6 +2423,7 @@ fun SwitchStreamSheet(
                 )
             }
             Spacer(Modifier.height(12.dp))
+        }
         }
     }
 }

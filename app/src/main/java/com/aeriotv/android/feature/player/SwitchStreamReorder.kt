@@ -79,6 +79,9 @@ internal fun ReorderableStreamList(
     /** Touch: the full id order after each drop. The sheet saves it ONCE when
      *  Reorder mode ends (Finish or dismiss), not per drop. */
     onPendingOrder: (List<Int>) -> Unit = {},
+    /** TV: true while a row is lifted, so the sheet header swaps its subtitle
+     *  to the move / place / cancel hint. */
+    onLiftedChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val isTv = remember(context) { context.isTelevision() }
@@ -95,6 +98,8 @@ internal fun ReorderableStreamList(
     var liftedId by remember { mutableStateOf<Int?>(null) }
     // A long press lifts while OK is still held; its KeyUp must not place.
     var swallowOkUp by remember { mutableStateOf(false) }
+    val latestOnLiftedChange by rememberUpdatedState(onLiftedChange)
+    androidx.compose.runtime.LaunchedEffect(liftedId != null) { latestOnLiftedChange(liftedId != null) }
     androidx.compose.runtime.LaunchedEffect(streams, saving, dragIndex, holdLocal, liftedId) {
         if (!saving && dragIndex < 0 && !holdLocal && liftedId == null) {
             order = streams
@@ -356,13 +361,6 @@ internal fun ReorderableStreamList(
         }
         }
     }
-    }
-    if (isTv) {
-        com.aeriotv.android.ui.tv.TvRemoteHintStrip(
-            hints = if (liftedId != null) com.aeriotv.android.core.remote.RemoteControlHints.pickUpHints()
-            else com.aeriotv.android.core.remote.RemoteControlHints.pickUpEntryHints(),
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
     }
 }
 

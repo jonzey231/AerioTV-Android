@@ -138,22 +138,6 @@ object RemoteControlHints {
         RemoteSlot.BACK_LONG -> "Hold Back"
     }
 
-    /** Switch Stream pick-up reorder (TV): the fixed D-pad keys while a row is
-     *  lifted. Sheets read the physical keys, not the player map, so the names
-     *  come from [slotLabel] like every other strip. */
-    fun pickUpHints(): List<RemoteHint> = listOf(
-        RemoteHint("${slotLabel(RemoteSlot.UP_SHORT)}/${slotLabel(RemoteSlot.DOWN_SHORT)}", "Move"),
-        RemoteHint(PICKUP_SELECT, "Place"),
-        RemoteHint(slotLabel(RemoteSlot.BACK_SHORT), "Cancel"),
-    )
-
-    /** Resting Switch Stream sheet (TV admins): how to lift a row. */
-    fun pickUpEntryHints(): List<RemoteHint> = listOf(RemoteHint("Hold $PICKUP_SELECT", "Reorder"))
-
-    /** Sheets read the physical center key; the player map does not remap
-     *  it inside a sheet, so the sheet copy names it "Select". */
-    private const val PICKUP_SELECT = "Select"
-
     /** Strip wording for a guide action; null = nothing worth advertising. */
     private fun guideStripAction(action: GuideRemoteAction, sidebarGroups: Boolean): String? =
         when (action) {
