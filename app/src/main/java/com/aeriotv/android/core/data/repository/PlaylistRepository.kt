@@ -4173,8 +4173,8 @@ class PlaylistRepository @Inject constructor(
             channels
                 .filter { !it.uuid.isNullOrBlank() }
                 .sortedWith(compareBy(
-                    { it.channelNumber ?: Double.MAX_VALUE },
-                    { it.name.lowercase() },
+                    { it.displayChannelNumber ?: Double.MAX_VALUE },
+                    { it.displayName.lowercase() },
                 ))
                 .map { ch ->
                     // Stable ID derived from Dispatcharr's server UUID so the
@@ -4183,9 +4183,9 @@ class PlaylistRepository @Inject constructor(
                     // every fetch and orphaned existing FavoriteChannel rows.
                     M3UChannel(
                         id = "disp:${ch.uuid!!}",
-                        name = ch.name,
+                        name = ch.displayName,
                         url = dispatcharrClient.streamUrl(base, ch.uuid!!),
-                        groupTitle = ch.channelGroupId?.let { groups[it] }.orEmpty(),
+                        groupTitle = ch.displayChannelGroupId?.let { groups[it] }.orEmpty(),
                         tvgID = dispatcharrGuideKey(ch, epgDataById, epgSourceTypeById),
                         // GH #53: when the guide key above had to become the
                         // channel UUID, the channel's own tvg-id is still a
@@ -4193,13 +4193,13 @@ class PlaylistRepository @Inject constructor(
                         // custom XMLTV the user configured). Carry it so
                         // buildChannelEpgKeyBridge can still route those
                         // programmes onto this channel.
-                        rawAttributes = ch.tvgId?.trim()
+                        rawAttributes = ch.displayTvgId?.trim()
                             ?.takeIf { it.isNotBlank() }
                             ?.let { mapOf("tvg-id" to it) }
                             .orEmpty(),
-                        tvgName = ch.name,
-                        tvgLogo = ch.logoId?.let { dispatcharrClient.logoUrl(base, it) }.orEmpty(),
-                        channelNumber = ch.channelNumber?.formatChannelNumber(),
+                        tvgName = ch.displayName,
+                        tvgLogo = ch.displayLogoId?.let { dispatcharrClient.logoUrl(base, it) }.orEmpty(),
+                        channelNumber = ch.displayChannelNumber?.formatChannelNumber(),
                         dispatcharrChannelId = ch.id,
                         // Catch-up (task #133): Dispatcharr's /timeshift/
                         // endpoint identifies the channel by Channel.id (its
@@ -4386,7 +4386,7 @@ internal fun dispatcharrGuideKey(
     sourceTypeById: Map<Int, String?>?,
 ): String {
     val uuid = channel.uuid.orEmpty()
-    val legacyKey = channel.tvgId?.trim()?.takeIf { it.isNotBlank() } ?: uuid
+    val legacyKey = channel.displayTvgId?.trim()?.takeIf { it.isNotBlank() } ?: uuid
     // No metadata at all: keep the previous behaviour rather than guess.
     if (epgDataById == null) return legacyKey
     val assignmentId = channel.effectiveEpgDataId ?: channel.epgDataId

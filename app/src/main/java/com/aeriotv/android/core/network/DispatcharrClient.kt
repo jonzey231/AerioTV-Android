@@ -2736,7 +2736,34 @@ data class DispatcharrChannel(
     /** Read-only: [isRadio] after the channel-profile override. Preferred. */
     @SerialName("effective_is_radio")
     val effectiveIsRadio: Boolean? = null,
+    /*
+     * GH #160 / Apple #97: Dispatcharr's ChannelSerializer returns the raw
+     * provider columns (name, channel_number, logo_id, channel_group_id,
+     * tvg_id) next to `effective_*` fields that coalesce the user's
+     * ChannelOverride over them. Its own M3U and XC outputs render the
+     * effective values, so Direct Connect read the raw provider value of an
+     * auto-synced channel where M3U showed the override. All nullable so
+     * servers without overrides still parse; the accessors below fall back
+     * to the raw column.
+     */
+    @SerialName("effective_name")
+    val effectiveName: String? = null,
+    @SerialName("effective_channel_number")
+    val effectiveChannelNumber: Double? = null,
+    @SerialName("effective_logo_id")
+    val effectiveLogoId: Int? = null,
+    @SerialName("effective_channel_group_id")
+    val effectiveChannelGroupId: Int? = null,
+    @SerialName("effective_tvg_id")
+    val effectiveTvgId: String? = null,
 ) {
+    /** Channel-level values with the user's override applied (GH #160). */
+    val displayName: String get() = effectiveName?.takeIf { it.isNotBlank() } ?: name
+    val displayChannelNumber: Double? get() = effectiveChannelNumber ?: channelNumber
+    val displayLogoId: Int? get() = effectiveLogoId ?: logoId
+    val displayChannelGroupId: Int? get() = effectiveChannelGroupId ?: channelGroupId
+    val displayTvgId: String? get() = effectiveTvgId?.takeIf { it.isNotBlank() } ?: tvgId
+
     /** effective_is_radio, falling back to is_radio on servers without it. */
     val radio: Boolean get() = effectiveIsRadio ?: isRadio ?: false
 }
