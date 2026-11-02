@@ -2335,7 +2335,9 @@ fun SwitchStreamSheet(
             !canReorderList -> null
             isTv && rowLifted -> "Up / Down to move, OK to place, Back to cancel"
             isTv -> "Long press to select and reorder"
-            else -> "Drag the handle to reorder"
+            // Phones and tablets: the handles appear only in Reorder mode.
+            reordering -> "Drag the handle to reorder"
+            else -> "Tap Reorder to change the stream order"
         }
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
             androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
@@ -2418,8 +2420,8 @@ fun SwitchStreamSheet(
             // Apple SwitchStreamView footer, phones and tablets only.
             if (streams.isNotEmpty() && !isTv) {
                 com.aeriotv.android.ui.settings.SettingsSectionFooter(
-                    text = (footerText ?: "Switches the active upstream for this channel. The picture follows in a few seconds.") +
-                        if (canReorderList) " Tap Reorder to change the stream priority." else "",
+                    // The reorder hint lives in the subtitle now; no repeat here.
+                    text = footerText ?: "Switches the active upstream for this channel. The picture follows in a few seconds.",
                 )
             }
             Spacer(Modifier.height(12.dp))

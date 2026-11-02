@@ -2099,10 +2099,35 @@ fun PlayerScreen(
     // during the outage auto-hides again. Without it in the keys, the
     // controls stayed stuck up after the stream came back (Streamer test
     // 2026-07-12).
-    LaunchedEffect(chromeVisible, lastInteractionAt, interactionLocked, streamUnavailable) {
+    // GH #148: a paused live channel showed a frozen frame with no controls,
+    // and a pause press never revealed them. Match recordings and VOD: any
+    // pause (Play/Pause, Select, the chrome button, a media key) shows the
+    // chrome and holds it while paused; resume restarts the countdown. Read
+    // from the player itself so every pause path is covered, on TV and touch.
+    var livePaused by remember { mutableStateOf(false) }
+    val pauseLifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(Unit) {
+        pauseLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                val p = exoHolder.player
+                livePaused = p != null && !p.playWhenReady &&
+                    p.playbackState != androidx.media3.common.Player.STATE_IDLE
+                delay(200)
+            }
+        }
+    }
+    LaunchedEffect(livePaused) {
+        if (livePaused) {
+            if (!chromeVisible) chromeReason = "paused"
+            chromeVisible = true
+        } else {
+            reportInteraction()
+        }
+    }
+    LaunchedEffect(chromeVisible, lastInteractionAt, interactionLocked, streamUnavailable, livePaused) {
         // Never auto-hide while the stream is unavailable: the chrome hosts the
         // Retry control the user needs, so it must stay put during an outage.
-        if (chromeVisible && !interactionLocked && !streamUnavailable) {
+        if (chromeVisible && !interactionLocked && !streamUnavailable && !livePaused) {
             delay(PLAYER_CHROME_HIDE_MS)
             chromeReason = "timer"
             chromeVisible = false
