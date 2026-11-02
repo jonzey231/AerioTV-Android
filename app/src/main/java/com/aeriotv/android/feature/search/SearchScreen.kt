@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,6 +49,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -144,6 +147,7 @@ fun SearchScreen(
                 modifier = Modifier
                     .weight(1f)
                     .focusRequester(fieldFocus)
+                    .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("search:field") }
                     // On Android TV the field otherwise traps D-pad DOWN, so once
                     // the on-screen keyboard is dismissed there is no way to reach
                     // the scope chips / results with the remote. Hand focus down
@@ -177,6 +181,7 @@ fun SearchScreen(
                     selected = scope == state.scope,
                     onClick = { viewModel.onScopeChange(scope) },
                     focusRequester = if (scope == state.scope) chipFocus else null,
+                    upTarget = fieldFocus,
                 )
             }
         }
@@ -203,10 +208,14 @@ fun SearchScreen(
                 contentPadding = PaddingValues(vertical = 8.dp, horizontal = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(state.results, key = { it.key }) { result ->
+                itemsIndexed(state.results, key = { _, it -> it.key }) { index, result ->
                     ResultRow(
                         result = result,
                         focusRequester = if (result.key == restoreKey) restoreFocus else null,
+                        // Up from the first row lands on the selected scope chip,
+                        // not the nav bar (Streamer 2026-11-02).
+                        upTarget = if (index == 0) chipFocus else null,
+                        traceName = "search:row$index",
                         onClick = {
                             viewModel.lastOpenedKey = result.key
                             viewModel.listIndex = listState.firstVisibleItemIndex
@@ -238,15 +247,18 @@ private fun ScopeChip(
     selected: Boolean,
     onClick: () -> Unit,
     focusRequester: FocusRequester? = null,
+    upTarget: FocusRequester? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    if (focused) LaunchedEffect(Unit) { com.aeriotv.android.ui.tv.TvFocusTrace.focus("pill:$label") }
     Text(
         text = label,
         style = MaterialTheme.typography.labelLarge,
         color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
             .clip(RoundedCornerShape(50))
             .background(
                 if (selected) MaterialTheme.colorScheme.primary
@@ -267,6 +279,8 @@ private fun ScopeChip(
 private fun ResultRow(
     result: SearchViewModel.Result,
     focusRequester: FocusRequester? = null,
+    upTarget: FocusRequester? = null,
+    traceName: String = "search:row",
     onClick: () -> Unit,
 ) {
     val display = resultDisplay(result)
@@ -276,6 +290,7 @@ private fun ResultRow(
     val icon = display.icon
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    if (focused) LaunchedEffect(Unit) { com.aeriotv.android.ui.tv.TvFocusTrace.focus(traceName) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -291,6 +306,7 @@ private fun ResultRow(
                 else Modifier,
             )
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
