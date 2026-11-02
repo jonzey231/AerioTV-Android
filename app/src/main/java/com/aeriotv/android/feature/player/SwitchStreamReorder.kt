@@ -2,6 +2,8 @@ package com.aeriotv.android.feature.player
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -19,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -49,16 +50,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.util.Log
 import com.aeriotv.android.core.pip.isTelevision
-import com.aeriotv.android.ui.scale.DropdownMenu
 
 /**
  * Switch Stream rows for Dispatcharr ADMINS: the same radio rows, plus a way
  * to change the channel's stream order. Touch drags a handle (no menu, no
- * long press: the row itself only selects); TV opens a Move Up / Move Down
- * menu from the row's options button or a long press. Every committed move
- * hands the FULL new id order to [onReorder]. On TV [saving] disables further
- * moves while the PATCH is in flight; touch drags stay live (the host
- * serializes saves) so a drag started right after a drop is not lost.
+ * long press: the row itself only selects); TV lifts the row into pick-up
+ * mode from its options button or a long press (Up/Down move it, OK places,
+ * Back cancels; state in [PickUpReorder]). A TV place hands the FULL new id
+ * order to [onReorder] once. On TV [saving] blocks a new pick-up while the
+ * PATCH is in flight without disabling the focused control; touch drags stay
+ * live (the host serializes saves) so a drag started right after a drop is
+ * not lost.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -88,8 +90,16 @@ internal fun ReorderableStreamList(
     // order and the drag index, and the drag died. It applies on the drop.
     // Touch Reorder mode keeps the local order until Finish saves it.
     val holdLocal = !isTv && touchReordering
-    androidx.compose.runtime.LaunchedEffect(streams, saving, dragIndex, holdLocal) {
-        if (!saving && dragIndex < 0 && !holdLocal) order = streams
+    // TV pick-up: the lifted stream id (null = resting) and the pure state.
+    val pick = remember { PickUpReorder(streams) }
+    var liftedId by remember { mutableStateOf<Int?>(null) }
+    // A long press lifts while OK is still held; its KeyUp must not place.
+    var swallowOkUp by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(streams, saving, dragIndex, holdLocal, liftedId) {
+        if (!saving && dragIndex < 0 && !holdLocal && liftedId == null) {
+            order = streams
+            pick.reset(streams)
+        }
     }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var rowHeightPx by remember { mutableFloatStateOf(1f) }
@@ -100,11 +110,31 @@ internal fun ReorderableStreamList(
     val latestOnDragActive by rememberUpdatedState(onDragActiveChange)
     val latestOnPendingOrder by rememberUpdatedState(onPendingOrder)
 
-    fun move(from: Int, to: Int) {
-        if (saving || from !in order.indices || to !in order.indices || from == to) return
-        val next = order.toMutableList().apply { add(to, removeAt(from)) }
-        order = next
-        onReorder(next.map { it.id })
+    fun startPickUp(stream: StreamOption, viaLongPress: Boolean) {
+        if (saving || liftedId != null) return
+        pick.reset(order)
+        val at = order.indexOfFirst { it.id == stream.id }
+        if (!pick.start(at)) return
+        swallowOkUp = viaLongPress
+        liftedId = stream.id
+        Log.i(SWITCH_TAG, "[SwitchStream] pick-up start id=${stream.id} at=$at")
+    }
+    fun movePickUp(delta: Int) {
+        if (pick.move(delta)) order = pick.order
+    }
+    fun dropPickUp() {
+        val d = pick.drop() ?: return
+        liftedId = null
+        order = d.order
+        Log.i(SWITCH_TAG, "[SwitchStream] pick-up drop id=${d.item.id} from=${d.from} to=${d.to} save=${d.changed}")
+        if (d.changed) onReorder(d.order.map { it.id })
+    }
+    fun cancelPickUp() {
+        val id = liftedId ?: return
+        val from = pick.cancel()
+        liftedId = null
+        order = pick.order
+        Log.i(SWITCH_TAG, "[SwitchStream] pick-up cancel id=$id from=$from")
     }
 
     if (saving) {
@@ -122,28 +152,42 @@ internal fun ReorderableStreamList(
       // (and its pointerInput) alive. Unkeyed, the slot's handle restarted on
       // the first swap, the gesture died, and the sheet took the finger.
       androidx.compose.runtime.key(stream.id) {
-        var menuOpen by remember(stream.id) { mutableStateOf(false) }
         // TV D-pad: the options button sits INSIDE the row's bounds, so a
         // directional search from the focused row rejects it (Compose never
         // offers a candidate the focused node contains; same reason as the
         // GH #79 reveal button in TvFocus.kt). Right from the row and Left
         // from the button are routed explicitly instead.
         val rowFocus = remember(stream.id) { FocusRequester() }
-        val moreFocus = remember(stream.id) { FocusRequester() }
         var rowFocused by remember(stream.id) { mutableStateOf(false) }
         val dragging = dragIndex == index
         if (isTv) {
+            val lifted = liftedId == stream.id
+            val dimmed = liftedId != null && !lifted
+            val bring = remember(stream.id) { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+            // Keep the lifted row focused and fully visible after every move
+            // (the keyed slot moves, and the scroll must follow it).
+            androidx.compose.runtime.LaunchedEffect(lifted, index) {
+                if (lifted) {
+                    runCatching { rowFocus.requestFocus() }
+                    runCatching { bring.bringIntoView() }
+                }
+            }
             // TV (Apple TV parity): the row (radio + title) is ONE focus stop
             // whose ring hugs the row content, and the options button is a
             // visibly separate rounded button to its right with its own ring.
             // Right from the row reaches it, Left leaves it. Long press on the
-            // row still opens the same Move Up / Move Down menu.
+            // row (or the options button) lifts it into pick-up mode.
             val shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(androidx.compose.foundation.layout.IntrinsicSize.Min)
-                    .padding(vertical = 3.dp),
+                    .padding(vertical = 3.dp)
+                    .graphicsLayer {
+                        val sc = if (lifted) 1.03f else 1f
+                        scaleX = sc; scaleY = sc
+                        alpha = if (dimmed) 0.5f else 1f
+                    },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
@@ -151,13 +195,38 @@ internal fun ReorderableStreamList(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
+                        .bringIntoViewRequester(bring)
                         .clip(shape)
+                        .then(
+                            if (lifted) Modifier
+                                .background(MaterialTheme.colorScheme.surfaceVariant, shape)
+                                .border(2.dp, MaterialTheme.colorScheme.primary, shape)
+                            else Modifier,
+                        )
                         .dpadFocusRing(shape, washTint = MaterialTheme.colorScheme.primary)
                         .focusRequester(rowFocus)
                         .onPreviewKeyEvent { event ->
-                            rowFocused && !saving &&
-                                event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight &&
-                                runCatching { moreFocus.requestFocus() }.isSuccess
+                            if (lifted) {
+                                // Lifted: Up/Down move (hold repeats via the
+                                // system key repeat), OK places, Back cancels;
+                                // everything else is swallowed so focus and
+                                // the sheet stay put.
+                                val down = event.type == KeyEventType.KeyDown
+                                when (event.key) {
+                                    Key.DirectionUp -> { if (down) movePickUp(-1) }
+                                    Key.DirectionDown -> { if (down) movePickUp(1) }
+                                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                                        if (event.type == KeyEventType.KeyUp) {
+                                            if (swallowOkUp) swallowOkUp = false else dropPickUp()
+                                        }
+                                    }
+                                    Key.Back, Key.Escape -> { if (!down) cancelPickUp() }
+                                    else -> Unit
+                                }
+                                true
+                            } else {
+                                false
+                            }
                         }
                         .onFocusChanged {
                             rowFocused = it.isFocused
@@ -166,7 +235,7 @@ internal fun ReorderableStreamList(
                         }
                         .combinedClickable(
                             onClick = { onSelect(stream.id) },
-                            onLongClick = { if (!saving) menuOpen = true },
+                            onLongClick = { startPickUp(stream, viaLongPress = true) },
                         )
                         .padding(vertical = 6.dp)
                         .padding(end = 12.dp),
@@ -185,38 +254,13 @@ internal fun ReorderableStreamList(
                         color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.weight(1f),
                     )
-                }
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(56.dp)
-                        .clip(shape)
-                        .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f), shape)
-                        .dpadFocusRing(shape, washTint = MaterialTheme.colorScheme.primary)
-                        .focusRequester(moreFocus)
-                        .onPreviewKeyEvent { event ->
-                            event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft &&
-                                runCatching { rowFocus.requestFocus() }.isSuccess
-                        }
-                        .onFocusChanged {
-                            if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("switch:more$index")
-                            else com.aeriotv.android.ui.tv.TvFocusTrace.blurred("switch:more$index")
-                        }
-                        .clickable(enabled = !saving) { menuOpen = true },
-                ) {
-                    Icon(
-                        Icons.Filled.MoreVert,
-                        contentDescription = "Stream Order Options",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                    )
-                    StreamMoveMenu(
-                        expanded = menuOpen,
-                        onDismiss = { menuOpen = false },
-                        canMoveUp = index > 0,
-                        canMoveDown = index < order.lastIndex,
-                        onMove = { delta -> menuOpen = false; move(index, index + delta) },
-                    )
+                    if (lifted) {
+                        Text(
+                            text = "Moving",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
             }
         } else {
@@ -315,25 +359,12 @@ internal fun ReorderableStreamList(
         }
     }
     }
-}
-
-@Composable
-private fun StreamMoveMenu(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMove: (Int) -> Unit,
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        // Header so the TV entry reads "Reorder" like the phone and tablet button.
-        DropdownMenuItem(text = { Text("Reorder", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }, onClick = {}, enabled = false)
-        if (canMoveUp) {
-            DropdownMenuItem(text = { Text("Move Up") }, onClick = { onMove(-1) })
-        }
-        if (canMoveDown) {
-            DropdownMenuItem(text = { Text("Move Down") }, onClick = { onMove(1) })
-        }
+    if (isTv) {
+        com.aeriotv.android.ui.tv.TvRemoteHintStrip(
+            hints = if (liftedId != null) com.aeriotv.android.core.remote.RemoteControlHints.pickUpHints()
+            else com.aeriotv.android.core.remote.RemoteControlHints.pickUpEntryHints(),
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
     }
 }
 
