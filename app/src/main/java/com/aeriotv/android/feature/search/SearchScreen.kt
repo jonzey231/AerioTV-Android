@@ -160,6 +160,14 @@ fun SearchScreen(
                             // (Streamer 2026-11-02), leaving scope unreachable.
                             runCatching { chipFocus.requestFocus() }.isSuccess ||
                                 focusManager.moveFocus(FocusDirection.Down)
+                        } else if (event.type == KeyEventType.KeyDown &&
+                            event.key == Key.DirectionUp
+                        ) {
+                            // The single-line field spends Up on moving the
+                            // cursor home, so the nav bar was unreachable from
+                            // it (Streamer 2026-11-02). Leave the content group;
+                            // its exit lands on the selected tab's pill.
+                            focusManager.moveFocus(FocusDirection.Up)
                         } else {
                             false
                         }
