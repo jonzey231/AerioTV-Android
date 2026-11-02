@@ -248,6 +248,11 @@ class TimeshiftDiscontinuityException(
  */
 class TimeshiftDataSource(
     private val writerProvider: () -> TimeshiftWriter?,
+    /** In-buffer seek (Streamer 2026-11-02): when set, a fresh open of the
+     *  stream starts at this wall time instead of the uri's, so a repeated
+     *  rewind is a player seek on the same source, not a new source. */
+    private val seekWallProvider: () -> Long? = { null },
+    private val onSeekOpen: (Long) -> Unit = {},
 ) : DataSource {
 
     companion object {
@@ -266,8 +271,11 @@ class TimeshiftDataSource(
 
     class Factory(
         private val writerProvider: () -> TimeshiftWriter?,
+        private val seekWallProvider: () -> Long? = { null },
+        private val onSeekOpen: (Long) -> Unit = {},
     ) : DataSource.Factory {
-        override fun createDataSource(): DataSource = TimeshiftDataSource(writerProvider)
+        override fun createDataSource(): DataSource =
+            TimeshiftDataSource(writerProvider, seekWallProvider, onSeekOpen)
     }
 
     private var writer: TimeshiftWriter? = null
@@ -285,14 +293,17 @@ class TimeshiftDataSource(
         val w = writerProvider() ?: throw IOException("timeshift buffer not active")
         writer = w
         uri = dataSpec.uri
-        val fromWallMs = dataSpec.uri.getQueryParameter("fromWallMs")?.toLongOrNull()
+        val seekWall = seekWallProvider()
+        val fromWallMs = seekWall
+            ?: dataSpec.uri.getQueryParameter("fromWallMs")?.toLongOrNull()
             ?: w.tailWallMs
         segments = w.segments()
         if (segments.isEmpty()) throw IOException("timeshift buffer empty")
+        if (seekWall != null && dataSpec.position == 0L) onSeekOpen(seekWall)
 
         // GH #65: exact-position open (gap hop). Falls through to the
         // wall-time path if the segment was evicted meanwhile.
-        val atSeg = dataSpec.uri.getQueryParameter("atSeg")
+        val atSeg = if (seekWall != null) null else dataSpec.uri.getQueryParameter("atSeg")
         val atOff = dataSpec.uri.getQueryParameter("atOff")?.toLongOrNull()
         if (atSeg != null && atOff != null) {
             val idx = segments.indexOfFirst { it.file.name == atSeg }
