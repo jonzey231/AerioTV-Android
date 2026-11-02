@@ -332,21 +332,30 @@ fun ChannelListScreen(
 
     // E-1 stage 2 (perf campaign): shared off-main pipeline; see
     // computeDisplayChannels and the twin call site in GuideScreen.
-    val filtered by androidx.compose.runtime.produceState(
-        initialValue = com.aeriotv.android.feature.livetv.computeDisplayChannels(
+    // Program search (Logan 2026-11-01): phones and tablets also match
+    // program titles from the loaded guide map; TV keeps its Search tab.
+    val searchEpg = if (isTv) null else state.epgByChannel
+    val liveSearch by androidx.compose.runtime.produceState(
+        initialValue = com.aeriotv.android.feature.livetv.computeLiveSearch(
             state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
             allGroupsRaw, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
         ),
         state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
         allGroupsRaw, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
+        searchEpg,
     ) {
+        // Per-keystroke search with a short debounce: a newer keystroke
+        // restarts this producer and cancels the pending pass.
+        if (state.searchQuery.isNotBlank()) kotlinx.coroutines.delay(com.aeriotv.android.feature.livetv.LIVE_SEARCH_DEBOUNCE_MS)
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            com.aeriotv.android.feature.livetv.computeDisplayChannels(
+            com.aeriotv.android.feature.livetv.computeLiveSearch(
                 state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
                 allGroupsRaw, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
+                searchEpg,
             )
         }
     }
+    val filtered = liveSearch.channels
 
     // #45: the Add-to-Collection picker + chained New Collection name dialog,
     // opened from a channel row's long-press menu. Dialogs render in their own
@@ -439,7 +448,7 @@ fun ChannelListScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp),
             singleLine = true,
-            placeholder = { Text("Search channels") },
+            placeholder = { Text("Search channels and programs") },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
             // Trailing X clears the query in one tap. iOS UISearchBar has
             // this for free; Compose's OutlinedTextField doesn't, so we
@@ -769,6 +778,7 @@ fun ChannelListScreen(
                         channel = channel,
                         nowProgramme = nowProgramme,
                         programmes = programmes,
+                        searchMatch = liveSearch.programMatches[channel.url],
                         isFavorite = channel.id in favoriteIds,
                         onPlay = { onChannelClick(channel) },
                         onToggleFavorite = { favoritesVm.toggle(channel) },
@@ -1007,6 +1017,9 @@ internal fun ChannelRow(
     nowProgramme: EPGProgramme?,
     programmes: List<EPGProgramme>,
     isFavorite: Boolean,
+    /** Live TV search: the program this row matched through (channel name
+     *  and number did not match). Shown in place of the now line. */
+    searchMatch: EPGProgramme? = null,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
     onShowProgramInfo: (ProgramInfoTarget) -> Unit,
@@ -1364,6 +1377,16 @@ internal fun ChannelRow(
                     val subtitle = nowProgramme?.subTitle?.takeIf {
                         LocalShowProgramSubtitles.current &&
                             !subtitleIsRedundant(it, nowProgramme.title, nowProgramme.description)
+                    }
+                    if (searchMatch != null) {
+                        Text(
+                            text = com.aeriotv.android.feature.livetv.searchMatchLine(searchMatch),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(

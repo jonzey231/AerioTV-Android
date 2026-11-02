@@ -74,7 +74,7 @@ fun EmptyGroupNotice(
             modifier = Modifier.size(if (isTv) 64.dp else 56.dp),
         )
         Text(
-            text = if (isSearching) "No Matching Channels" else "No Channels in This Group",
+            text = if (isSearching) "No Matches" else "No Channels in This Group",
             style = if (isTv) MaterialTheme.typography.headlineSmall
             else MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
@@ -84,7 +84,7 @@ fun EmptyGroupNotice(
         )
         Text(
             text = if (isSearching) {
-                "No channels in this group match that search."
+                "No channels or programs match that search."
             } else {
                 "This group has no channels yet. It fills in as soon as the provider assigns some."
             },

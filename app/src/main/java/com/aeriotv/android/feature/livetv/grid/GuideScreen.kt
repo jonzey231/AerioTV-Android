@@ -353,6 +353,9 @@ fun GuideScreen(
             groups.map { it to com.aeriotv.android.feature.livetv.groupDisplayName(it) } +
             end.map { ChannelCollection.token(it.id) to it.name }
     }
+    // Program search (Logan 2026-11-01): phones and tablets also match
+    // program titles from the loaded guide map; TV keeps its Search tab.
+    val searchEpg = if (isTv) null else state.epgByChannel
     val groupedChannels by produceState(
         initialValue = computeDisplayChannels(
             state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
@@ -360,12 +363,15 @@ fun GuideScreen(
         ),
         state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
         allGroupNames, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
+        searchEpg,
     ) {
+        if (state.searchQuery.isNotBlank()) kotlinx.coroutines.delay(com.aeriotv.android.feature.livetv.LIVE_SEARCH_DEBOUNCE_MS)
         value = withContext(Dispatchers.Default) {
-            computeDisplayChannels(
+            com.aeriotv.android.feature.livetv.computeLiveSearch(
                 state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
                 allGroupNames, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
-            )
+                searchEpg,
+            ).channels
         }
     }
     // favoritesOnly: the starred channels in the user's favorites order,
@@ -1383,7 +1389,7 @@ fun GuideScreen(
                     onValueChange = viewModel::onSearchQueryChange,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     singleLine = true,
-                    placeholder = { Text("Search channels") },
+                    placeholder = { Text("Search channels and programs") },
                     leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                     trailingIcon = if (state.searchQuery.isNotEmpty()) {
                         { IconButton(onClick = { viewModel.onSearchQueryChange("") }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") } }
