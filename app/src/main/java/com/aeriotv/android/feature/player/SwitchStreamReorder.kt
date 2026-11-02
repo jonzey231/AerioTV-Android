@@ -243,6 +243,8 @@ internal fun ReorderableStreamList(
                             text = "Moving",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
+                            // Gap so the label never touches the stream name.
+                            modifier = Modifier.padding(start = 16.dp),
                         )
                     }
                 }

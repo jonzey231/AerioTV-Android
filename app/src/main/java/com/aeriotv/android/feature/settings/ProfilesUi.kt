@@ -678,7 +678,9 @@ fun ProfilesSection(playlistId: String) {
                     trailing = if (isTv) {
                         if (lifted) {
                             {
-                                Text("Moving", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                // Gap so the label never touches the profile name.
+                                Text("Moving", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(start = 16.dp, end = 8.dp))
                             }
                         } else null
                     } else {
