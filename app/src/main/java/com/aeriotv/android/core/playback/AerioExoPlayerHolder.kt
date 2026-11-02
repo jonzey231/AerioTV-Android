@@ -333,6 +333,13 @@ class AerioExoPlayerHolder @Inject constructor(
         // Every member stream answered and none delivered: hand over to the
         // standing Task #150 retry / unavailable ladder.
         liveFailover.onExhausted = { markStreamUnavailable() }
+        // A status read or change_stream is only ever sent while that channel
+        // is the active tune and the player is not IDLE.
+        liveFailover.isTuneActive = { id ->
+            val p = player
+            p != null && p.playbackState != Player.STATE_IDLE && !_streamUnavailable.value &&
+                (currentChannelId ?: currentChannelIdForRebuild) == id
+        }
     }
 
     /** Learned time-to-first-byte per channel, mirrored in memory so the
@@ -4368,9 +4375,10 @@ class AerioExoPlayerHolder @Inject constructor(
             isAdoptedLive = false
             isTimeshifting = false
         }
-        // Disarm the first-byte deadline with the pipeline but KEEP the tried
-        // set: an internal retry is the same tune on the same channel.
-        liveFailover.disarm()
+        // Cancel the first-byte deadline and any in-flight walk step with the
+        // pipeline but KEEP the tried set: an internal retry is the same tune
+        // on the same channel and re-arms through playUrl.
+        liveFailover.halt("player stopped")
         val staleCalls = takeLiveCallTrackers()
         p.stop()
         retireLiveCalls(p, staleCalls)
@@ -5279,6 +5287,7 @@ class AerioExoPlayerHolder @Inject constructor(
         _streamUnavailable.value = true
         failedChannelId = reconnectChannelId
         tracer.recover("stream unavailable; stopping")
+        liveFailover.halt("channel unavailable")
         stop()
     }
 

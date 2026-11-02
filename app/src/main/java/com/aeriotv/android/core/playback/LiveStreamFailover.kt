@@ -89,6 +89,19 @@ class LiveStreamFailover(
      *  holder persists it. Only successes are learned. */
     @Volatile var onLearnFirstByte: ((channelId: String, ms: Int) -> Unit)? = null
 
+    /** True only while [channelId] is the holder's active tune AND the player
+     *  is not IDLE. Checked before every status read and change_stream POST so
+     *  a stopped, unavailable, or abandoned channel is never polled (Streamer
+     *  2026-11-01: status + change_stream 404 every 56 s with the player IDLE
+     *  and the user back in the guide). Null = no gate wired (treated active). */
+    @Volatile var isTuneActive: ((channelId: String) -> Boolean)? = null
+
+    /** Channel whose Dispatcharr session answered change_stream 404 "Channel
+     *  not found". The walk stays off for it until a byte arrives (a live
+     *  session exists again) or a different channel is tuned, so an auto
+     *  retry of a dead channel never re-posts change_stream. */
+    private var goneChannelId: String? = null
+
     private var deadlineJob: Job? = null
     private var stepJob: Job? = null
     private var channelId: String? = null
@@ -134,6 +147,7 @@ class LiveStreamFailover(
             _statusText.value = null
             return
         }
+        if (channelId != this.channelId) goneChannelId = null
         if (userInitiated || channelId != this.channelId) resetWalk()
         this.channelId = channelId
         channelName?.takeIf { it.isNotBlank() }?.let { this.channelName = it }
@@ -158,6 +172,7 @@ class LiveStreamFailover(
         scope.launch {
             if (firstByteSeen) return@launch
             firstByteSeen = true
+            goneChannelId = null
             deadlineJob?.cancel()
             deadlineJob = null
             // Learn only clean successes on this channel's own stream: a time
@@ -206,6 +221,11 @@ class LiveStreamFailover(
                 _statusText.value = "Channel unavailable. Retrying..."
                 return@launch
             }
+            if (goneChannelId == id) {
+                Log.i(TAG, "[FAILOVER] walker cancelled: channel session gone")
+                _statusText.value = "Channel unavailable. Retrying..."
+                return@launch
+            }
             Log.i(TAG, "[FAILOVER] 503 reason=\"$reason\" -> next stream")
             _statusText.value = "Server: $reason. Trying another stream..."
             if (stepJob?.isActive == true) return@launch
@@ -225,6 +245,21 @@ class LiveStreamFailover(
         deadlineJob?.cancel()
         deadlineJob = null
         firstByteSeen = false
+    }
+
+    /**
+     * The player stopped for this channel (unavailable, user left, tuned
+     * elsewhere, backgrounded): cancel the deadline AND any in-flight walk
+     * step, so no status read or change_stream outlives the playback. The
+     * tried set is kept; an internal re-prime of the same tune re-arms through
+     * [onLiveTune].
+     */
+    fun halt(reason: String) {
+        val walking = stepJob?.isActive == true || deadlineJob?.isActive == true
+        disarm()
+        stepJob?.cancel()
+        stepJob = null
+        if (walking) Log.i(TAG, "[FAILOVER] walker cancelled: $reason")
     }
 
     /** Channel change or full teardown: forget everything about the walk. */
@@ -302,6 +337,10 @@ class LiveStreamFailover(
             return
         }
         if (stepJob?.isActive == true) return
+        blockReason(id)?.let {
+            Log.i(TAG, "[FAILOVER] walker cancelled: $it")
+            return
+        }
         if (walkStartedAtMs == 0L) walkStartedAtMs = SystemClock.elapsedRealtime()
         Log.i(
             TAG,
@@ -327,6 +366,10 @@ class LiveStreamFailover(
             return
         }
         if (firstByteSeen || channelId != id) return
+        blockReason(id)?.let {
+            Log.i(TAG, "[FAILOVER] walker cancelled: $it")
+            return
+        }
         if (ids.size < 2) {
             _statusText.value = "Reconnecting..."
             Log.i(TAG, "[FAILOVER] channel=$channelName single stream; staying on the retry path")
@@ -352,6 +395,11 @@ class LiveStreamFailover(
             onExhausted?.invoke()
             return
         }
+        // The status read can take seconds: re-check before the POST.
+        blockReason(id)?.let {
+            Log.i(TAG, "[FAILOVER] walker cancelled: $it")
+            return
+        }
         steps += 1
         tried.add(target)
         val step = steps
@@ -359,6 +407,16 @@ class LiveStreamFailover(
             h.changeStream(uuid, target)
         } catch (t: Throwable) {
             Log.w(TAG, "[FAILOVER] channel=$channelName change_stream to id=$target failed: ${t.message}")
+            if (isChannelGone(t)) {
+                // The server has no session for this channel any more: nothing
+                // to switch. Dispatcharr starts fresh on the next tune.
+                goneChannelId = id
+                deadlineJob?.cancel()
+                deadlineJob = null
+                Log.w(TAG, "[FAILOVER] channel session gone (404); walker stopped")
+                _statusText.value = "Channel unavailable. Retrying..."
+                return
+            }
             _statusText.value = "Reconnecting..."
             return
         }
@@ -377,8 +435,32 @@ class LiveStreamFailover(
         armDeadline(firstAttempt = false)
     }
 
+    private fun blockReason(id: String): String? = walkBlockReason(
+        tuneActive = runCatching { isTuneActive?.invoke(id) }.getOrNull() ?: true,
+        channelMatches = channelId == id,
+        sessionGone = goneChannelId == id,
+    )
+
     companion object {
         private const val TAG = "AerioTrace"
+
+        /** Pure stop conditions for a walk step; null = the step may proceed. */
+        internal fun walkBlockReason(
+            tuneActive: Boolean,
+            channelMatches: Boolean,
+            sessionGone: Boolean,
+        ): String? = when {
+            !channelMatches -> "tuned elsewhere"
+            !tuneActive -> "player stopped"
+            sessionGone -> "channel session gone"
+            else -> null
+        }
+
+        /** change_stream 404 ("Channel not found"): the channel's proxy session
+         *  no longer exists on the server. */
+        internal fun isChannelGone(t: Throwable): Boolean =
+            (t as? com.aeriotv.android.core.network.DispatcharrHttpFailure)?.status == 404 ||
+                t.message?.startsWith("HTTP 404") == true
 
         /**
          * How long a live ingest may stay connected-and-SILENT on the FIRST
