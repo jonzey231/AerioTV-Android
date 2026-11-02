@@ -2000,7 +2000,9 @@ class DispatcharrSyncManager @Inject constructor(
             val mode = prefs.groupSortModeIn(s.token).lowercase().takeIf { it in DsyncPayloads.GROUP_MODES } ?: "default"
             DsyncPayloads.encodeGroupOrder(base, DsyncPayloads.GroupOrder(mode, prefs.groupOrderIn(s.token)))
         }
-        DsyncKey.Settings -> if (isForced(s, key)) {
+        // A manual push (Settings > Sync) sends this device's own lanes; only the
+        // setup-choice replace mirrors the Drive lanes it just applied.
+        DsyncKey.Settings -> if (isForced(s, key) && key !in s.manual) {
             // Rule 4 mirror: the forced push sends exactly the Drive copy just
             // applied (its v, tv, and mobile lanes), not local values over the
             // server's previous lanes (field run 2026-11-01: Drive 7, sent 11).
