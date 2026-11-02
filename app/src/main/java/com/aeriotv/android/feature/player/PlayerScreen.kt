@@ -2672,6 +2672,8 @@ private fun PlayerSheets(
                             // Registers the target at once, so the follow-poller's next
                             // poll adopts this status change instead of re-following it.
                             targetStreamUrl = targetUrl,
+                            // Known codec change: sequential rebuild, not in place.
+                            targetVideoCodec = state.streams.firstOrNull { it.id == id }?.videoCodec,
                         )
                     }
                 }

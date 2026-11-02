@@ -46,8 +46,40 @@ class TeeDataSource(
         private val upstreamFactory: DataSource.Factory,
         private val writerProvider: () -> TimeshiftWriter?,
     ) : DataSource.Factory {
+        /** The connection of this factory that is open now, if any. */
+        @Volatile var active: TeeDataSource? = null
+            internal set
+
         override fun createDataSource(): DataSource =
-            TeeDataSource(upstreamFactory.createDataSource(), writerProvider)
+            TeeDataSource(upstreamFactory.createDataSource(), writerProvider, this)
+    }
+
+    private var owner: Factory? = null
+
+    internal constructor(
+        upstream: DataSource,
+        writerProvider: () -> TimeshiftWriter?,
+        owner: Factory,
+    ) : this(upstream, writerProvider) {
+        this.owner = owner
+    }
+
+    /** Set by [requestHandoff]: [close] passes the open upstream here instead
+     *  of closing it, so the Live Rewind buffer keeps filling from the SAME
+     *  connection (no second GET to the live URL). */
+    @Volatile private var handoff: ((DataSource) -> Unit)? = null
+    @Volatile private var isOpen = false
+
+    /**
+     * Live Rewind entry: keep this connection alive past the player's
+     * source swap. Returns false when it is not open. The player's loader
+     * closes the source on the swap; that close hands the upstream to [sink]
+     * (on the loader thread) instead of closing the socket.
+     */
+    fun requestHandoff(sink: (DataSource) -> Unit): Boolean {
+        if (!isOpen) return false
+        handoff = sink
+        return true
     }
 
     override fun open(dataSpec: DataSpec): Long {
@@ -81,6 +113,8 @@ class TeeDataSource(
             ?.value?.joinToString(";")
         openContentType = h("Content-Type")
         Log.i(TAG, "live source response finalUrl=${redact(upstream.uri?.toString() ?: "")} type=$openContentType len=$len")
+        isOpen = true
+        owner?.active = this
         return len
     }
 
@@ -92,6 +126,11 @@ class TeeDataSource(
         u.replace(Regex("(?i)((?:api_?key|token|password|key)=)[^&]*"), "$1REDACTED")
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        // A pending handoff: the player's Loader interrupts this thread when
+        // it cancels the load, and an interrupted Okio read fails the
+        // response body. Clear the flag so the connection survives the swap
+        // (the load still ends on its own cancel flag after this read).
+        if (handoff != null) Thread.interrupted()
         val n = upstream.read(buffer, offset, length)
         if (n > 0) {
             if (!firstByteLogged) {
@@ -131,6 +170,17 @@ class TeeDataSource(
     override fun getUri(): Uri? = upstream.uri
     override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
     override fun close() {
+        if (owner?.active === this) owner?.active = null
+        val sink = handoff
+        if (sink != null && isOpen) {
+            handoff = null
+            isOpen = false
+            lastWriter = null
+            Log.i(TAG, "live source handed to the Live Rewind buffer (connection kept)")
+            sink(upstream)
+            return
+        }
+        isOpen = false
         if (openAtMs != 0L && totalRead in 1 until 1_048_576L) {
             val textual = (0 until headLen).all { val b = head[it].toInt() and 0xff; b == 9 || b == 10 || b == 13 || b in 32..126 }
             Log.w(TAG, "live source short body total=$totalRead bytes after " +

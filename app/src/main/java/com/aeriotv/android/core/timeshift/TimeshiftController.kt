@@ -1,6 +1,8 @@
 package com.aeriotv.android.core.timeshift
 
 import android.util.Log
+import androidx.media3.common.C
+import androidx.media3.datasource.DataSource
 import com.aeriotv.android.core.preferences.AppPreferences
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -42,6 +44,7 @@ class TimeshiftController @Inject constructor(
         private const val OPEN_BUSY_RETRY_MS = 2_000L
 
         private const val TAG = "TimeshiftController"
+        private const val TAKEOVER_WAIT_MS = 12_000L
 
         /** Retention as a USER concept died in the 2026-07-11 settings
          *  rework ("we don't really care how long the files are stored
@@ -710,6 +713,7 @@ class TimeshiftController @Inject constructor(
      * splice overlap), which matters for single-connection accounts.
      */
     private fun startIndependentFill() {
+        if (takeover?.let { !it.stopped } == true) return
         val playing = currentPlayUrlProvider?.invoke()
             ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
         val url = playing ?: liveUrl ?: return
@@ -760,6 +764,7 @@ class TimeshiftController @Inject constructor(
     @Volatile private var fillCall: okhttp3.Call? = null
 
     private fun stopIndependentFill() {
+        stopTakeover()
         adoptedSession?.let {
             adoptedSession = null
             stopRetainedFill(it)
@@ -816,15 +821,132 @@ class TimeshiftController @Inject constructor(
         }
     }
 
-    /** Playback switched onto the buffer at [atWallMs]. */
-    fun onEnterTimeshift(atWallMs: Long) {
+    /**
+     * Live Rewind entry taking over the player's OWN live connection
+     * (Streamer 2026-11-01 19:35:33: entering the buffer swapped the player's
+     * GET for a new filler GET, Dispatcharr logged a new client and a broken
+     * pipe within 100 ms, dropped its stream buffer and failed the channel
+     * over). The holder asks the live [TeeDataSource] to hand its open
+     * upstream over instead of closing it; [adopt] receives it on the loader
+     * thread and the controller keeps reading it into the writer.
+     */
+    class LiveTakeover(private val cancelCall: () -> Unit) {
+        @Volatile internal var stopped = false
+        @Volatile internal var adopted = false
+        private var onAdopt: ((DataSource) -> Unit)? = null
+        private var pending: DataSource? = null
+
+        /** Loader thread: the player released the connection to us. */
+        fun adopt(source: DataSource) {
+            val cb = synchronized(this) {
+                if (stopped) null
+                else onAdopt ?: run { pending = source; adopted = true; return }
+            }
+            if (cb == null) {
+                runCatching { source.close() }
+                return
+            }
+            adopted = true
+            cb(source)
+        }
+
+        /** Sets the consumer; a source that arrived first is delivered now. */
+        internal fun attach(cb: (DataSource) -> Unit) {
+            val early = synchronized(this) {
+                onAdopt = cb
+                pending.also { pending = null }
+            }
+            if (early != null) cb(early)
+        }
+
+        internal fun stop() {
+            val early = synchronized(this) {
+                stopped = true
+                pending.also { pending = null }
+            }
+            early?.let { runCatching { it.close() } }
+            runCatching { cancelCall() }
+        }
+    }
+
+    @Volatile private var takeover: LiveTakeover? = null
+    private var takeoverJob: kotlinx.coroutines.Job? = null
+
+    /** Thread-safe: cancels the taken-over call, which unblocks its read. */
+    private fun stopTakeover() {
+        val t = takeover ?: return
+        takeover = null
+        t.stop()
+        takeoverJob?.cancel()
+        takeoverJob = null
+    }
+
+    /** True while a filler (independent, pause, or takeover) feeds the buffer;
+     *  the holder then lets the player's connection close normally. */
+    fun isFilling(): Boolean =
+        fillJob?.isActive == true || pauseFillJob?.isActive == true || takeover?.let { !it.stopped } == true
+
+    private fun startTakeoverPump(t: LiveTakeover, source: DataSource) {
+        val writer = activeWriter
+        if (writer == null || t.stopped) {
+            runCatching { source.close() }
+            return
+        }
+        takeoverJob = fillScope.launch {
+            val buf = ByteArray(64 * 1024)
+            var total = 0L
+            try {
+                while (currentCoroutineContext().isActive && !writer.closed && !t.stopped) {
+                    val n = source.read(buf, 0, buf.size)
+                    if (n == C.RESULT_END_OF_INPUT) break
+                    if (n > 0) {
+                        writer.appendFill(buf, 0, n)
+                        total += n
+                    }
+                }
+            } catch (e: Throwable) {
+                if (!t.stopped) Log.w(TAG, "taken-over live connection error: ${e.javaClass.simpleName}")
+            } finally {
+                runCatching { source.close() }
+            }
+            Log.i(TAG, "taken-over live connection ended after $total bytes")
+            if (!t.stopped) {
+                // The server ended it: reconnect the old way while rewound.
+                scope.launch {
+                    if (takeover === t) takeover = null
+                    if (_state.value.timeshifting) startIndependentFill()
+                }
+            }
+        }
+    }
+
+    /** Playback switched onto the buffer at [atWallMs]. With [liveTakeover]
+     *  the buffer keeps filling from the player's own connection; no new
+     *  connection is opened unless that handoff never happens. */
+    fun onEnterTimeshift(atWallMs: Long, liveTakeover: LiveTakeover? = null) {
         val w = activeWriter ?: return
+        if (liveTakeover != null) {
+            stopTakeover()
+            takeover = liveTakeover
+            liveTakeover.attach { src -> startTakeoverPump(liveTakeover, src) }
+        }
         scope.launch {
             // Retire a pending pause-stall watcher (its job is starting
             // the SAME filler); a filler already running keeps running.
             pauseFillJob?.cancel()
             pauseFillJob = null
-            startIndependentFill()
+            if (liveTakeover == null) {
+                startIndependentFill()
+                return@launch
+            }
+            // The loader hands over at its next read, which can wait out one
+            // Dispatcharr delivery gap (8 to 9.5 s bursts).
+            kotlinx.coroutines.delay(TAKEOVER_WAIT_MS)
+            if (!liveTakeover.adopted && takeover === liveTakeover) {
+                Log.w(TAG, "live connection handoff not received in ${TAKEOVER_WAIT_MS}ms; independent fill")
+                stopTakeover()
+                if (_state.value.timeshifting) startIndependentFill()
+            }
         }
         _state.update {
             it.copy(
@@ -838,6 +960,8 @@ class TimeshiftController @Inject constructor(
 
     /** Playback returned to the direct live stream. */
     fun onGoLive() {
+        // Synchronous: the direct re-tune must not overlap the kept connection.
+        stopTakeover()
         scope.launch { stopIndependentFill() }
         _state.update { it.copy(timeshifting = false, baseWallMs = 0) }
     }

@@ -53,7 +53,19 @@ class SwitchSkipMediaSource(inner: MediaSource) : WrappingMediaSource(inner) {
         data class Abandoned(val reason: String) : Result()
     }
 
+    /** Outcome of a [requestRejoin]. */
+    sealed class RejoinResult {
+        /** Replayed samples dropped; [aheadAfterMs] left buffered past the landing keyframe. */
+        data class Skipped(val droppedMs: Long, val aheadAfterMs: Long) : RejoinResult()
+        /** The initial burst left no more than the keep-ahead; nothing dropped. */
+        data class NotNeeded(val aheadMs: Long) : RejoinResult()
+        data class Abandoned(val reason: String) : RejoinResult()
+    }
+
     @Volatile private var period: SwitchSkipMediaPeriod? = null
+
+    /** A rejoin requested before the period existed (a fresh re-prime). */
+    @Volatile private var pendingRejoin: Pair<Long, (RejoinResult) -> Unit>? = null
 
     override fun createPeriod(
         id: MediaSource.MediaPeriodId,
@@ -62,13 +74,35 @@ class SwitchSkipMediaSource(inner: MediaSource) : WrappingMediaSource(inner) {
     ): MediaPeriod {
         val p = SwitchSkipMediaPeriod(super.createPeriod(id, allocator, startPositionUs))
         period = p
+        pendingRejoin?.let { (keepUs, sink) ->
+            pendingRejoin = null
+            p.armRejoin(keepUs, sink)
+        }
         return p
+    }
+
+    /**
+     * Rejoin near live after a re-prime on the same URL. Dispatcharr serves
+     * its channel buffer from its start on every new connection, so a rebuild
+     * replays seconds the user already saw (Streamer 2026-11-01 19:35:49:
+     * buffered ahead 7.9 s at READY, 14.3 s one second later). Once that
+     * initial burst has landed, video skips to the newest keyframe that still
+     * leaves [keepAheadMs] buffered, and audio follows to the same time.
+     * Only call this on a source that has not been prepared yet.
+     */
+    fun requestRejoin(
+        resultHandler: Handler,
+        keepAheadMs: Long,
+        onResult: (RejoinResult) -> Unit,
+    ) {
+        pendingRejoin = (keepAheadMs * 1000L) to { r: RejoinResult -> resultHandler.post { onResult(r) } }
     }
 
     override fun releasePeriod(mediaPeriod: MediaPeriod) {
         val p = mediaPeriod as SwitchSkipMediaPeriod
         if (period === p) period = null
         p.abandon("period released")
+        p.abandonRejoin("period released")
         super.releasePeriod(p.inner)
     }
 
@@ -127,6 +161,101 @@ internal class SwitchSkipMediaPeriod(val inner: MediaPeriod) : MediaPeriod, Medi
     private var awaitVideoKeyframe = false
     private var keyframeLogged = false
     private var resultSink: ((SwitchSkipMediaSource.Result) -> Unit)? = null
+
+    // ---- rejoin-near-live state (playback thread) ----
+    private var rejoinSink: ((SwitchSkipMediaSource.RejoinResult) -> Unit)? = null
+    private var rejoinKeepUs = 0L
+    private var rejoinArmedAtMs = 0L
+    private var rejoinFirstDataAtMs = 0L
+    private var rejoinLastBufferedUs = C.TIME_UNSET
+    private var rejoinLastGrowAtMs = 0L
+    private var rejoinVideoTargetUs = C.TIME_UNSET
+    private var rejoinFirstUs = C.TIME_UNSET
+    private var rejoinVideoDone = false
+
+    fun armRejoin(keepUs: Long, sink: (SwitchSkipMediaSource.RejoinResult) -> Unit) {
+        rejoinSink = sink
+        rejoinKeepUs = keepUs
+        rejoinArmedAtMs = SystemClock.elapsedRealtime()
+        rejoinFirstDataAtMs = 0L
+        rejoinLastBufferedUs = C.TIME_UNSET
+        rejoinLastGrowAtMs = 0L
+        rejoinVideoTargetUs = C.TIME_UNSET
+        rejoinFirstUs = C.TIME_UNSET
+        rejoinVideoDone = false
+    }
+
+    fun abandonRejoin(reason: String) {
+        if (rejoinSink == null) return
+        finishRejoin(SwitchSkipMediaSource.RejoinResult.Abandoned(reason))
+    }
+
+    private fun finishRejoin(r: SwitchSkipMediaSource.RejoinResult) {
+        val sink = rejoinSink ?: return
+        rejoinSink = null
+        sink(r)
+    }
+
+    /**
+     * One rejoin step for [w]. Waits until the initial burst has landed (the
+     * buffered position stopped growing for [LiveRejoin.BURST_QUIET_MS], or
+     * [LiveRejoin.BURST_MAX_WAIT_MS] after the first sample), then uses the
+     * queue's own keyframe skip. Returns a format result the renderer must get
+     * now, or null to continue with a normal read.
+     */
+    private fun rejoinStep(w: SkipStream, formatHolder: FormatHolder): Int? {
+        val now = SystemClock.elapsedRealtime()
+        if (now - rejoinArmedAtMs > LiveRejoin.TIMEOUT_MS) {
+            finishRejoin(SwitchSkipMediaSource.RejoinResult.Abandoned("no burst in ${LiveRejoin.TIMEOUT_MS}ms"))
+            return null
+        }
+        val buffered = inner.bufferedPositionUs
+        if (buffered == C.TIME_UNSET || buffered == C.TIME_END_OF_SOURCE) return null
+        if (rejoinLastBufferedUs == C.TIME_UNSET || buffered > rejoinLastBufferedUs) {
+            if (rejoinFirstDataAtMs == 0L) rejoinFirstDataAtMs = now
+            rejoinLastBufferedUs = buffered
+            rejoinLastGrowAtMs = now
+        }
+        if (rejoinFirstDataAtMs == 0L) return null
+        val isVideo = w.trackType == C.TRACK_TYPE_VIDEO
+        val video = hasVideo()
+        val fmt = intArrayOf(C.RESULT_NOTHING_READ)
+        if (isVideo || !video) {
+            if (rejoinVideoDone) return null
+            if (!LiveRejoin.burstLanded(now, rejoinFirstDataAtMs, rejoinLastGrowAtMs)) return null
+            val first = peekTimeUs(w, formatHolder, fmt)
+            if (fmt[0] == C.RESULT_FORMAT_READ) return fmt[0]
+            if (first == C.TIME_UNSET) return null
+            val target = LiveRejoin.skipTargetUs(first, rejoinLastBufferedUs, rejoinKeepUs)
+            if (target == C.TIME_UNSET || w.inner.skipData(target) == 0) {
+                rejoinVideoDone = true
+                finishRejoin(SwitchSkipMediaSource.RejoinResult.NotNeeded((rejoinLastBufferedUs - first) / 1000L))
+                return null
+            }
+            val landed = peekTimeUs(w, formatHolder, fmt)
+            rejoinFirstUs = first
+            rejoinVideoTargetUs = if (landed == C.TIME_UNSET) target else landed
+            rejoinVideoDone = true
+            if (!video) finishRejoinSkipped()
+            return if (fmt[0] == C.RESULT_FORMAT_READ) fmt[0] else null
+        }
+        // Audio follows the video landing time.
+        if (rejoinVideoTargetUs == C.TIME_UNSET) return null
+        val first = peekTimeUs(w, formatHolder, fmt)
+        if (fmt[0] == C.RESULT_FORMAT_READ) return fmt[0]
+        if (first != C.TIME_UNSET && first < rejoinVideoTargetUs) w.inner.skipData(rejoinVideoTargetUs)
+        finishRejoinSkipped()
+        return null
+    }
+
+    private fun finishRejoinSkipped() {
+        finishRejoin(
+            SwitchSkipMediaSource.RejoinResult.Skipped(
+                droppedMs = (rejoinVideoTargetUs - rejoinFirstUs) / 1000L,
+                aheadAfterMs = (rejoinLastBufferedUs - rejoinVideoTargetUs) / 1000L,
+            ),
+        )
+    }
 
     fun arm(minNewDataUs: Long, timeoutMs: Long, sink: (SwitchSkipMediaSource.Result) -> Unit) {
         abandon("superseded by a new switch")
@@ -216,6 +345,13 @@ internal class SwitchSkipMediaPeriod(val inner: MediaPeriod) : MediaPeriod, Medi
         buffer: DecoderInputBuffer,
         readFlags: Int,
     ): Int {
+        if (rejoinSink != null &&
+            (w.trackType == C.TRACK_TYPE_VIDEO || w.trackType == C.TRACK_TYPE_AUDIO) &&
+            (readFlags and SampleStream.FLAG_PEEK) == 0
+        ) {
+            val formatResult = rejoinStep(w, formatHolder)
+            if (formatResult != null) return formatResult
+        }
         if (maybeActivate() && !w.done &&
             (w.trackType == C.TRACK_TYPE_VIDEO || w.trackType == C.TRACK_TYPE_AUDIO) &&
             (readFlags and SampleStream.FLAG_PEEK) == 0
@@ -461,5 +597,34 @@ internal class SwitchSkipMediaPeriod(val inner: MediaPeriod) : MediaPeriod, Medi
 
     override fun onContinueLoadingRequested(source: MediaPeriod) {
         callback?.onContinueLoadingRequested(this)
+    }
+}
+
+/**
+ * Rejoin-near-live arithmetic for [SwitchSkipMediaPeriod.armRejoin]. Pure, so
+ * the unit tests can drive it.
+ */
+object LiveRejoin {
+    /** Buffer kept ahead of the landing keyframe. */
+    const val KEEP_AHEAD_MS = 2_000L
+    /** Smaller skips are not worth a jump. */
+    const val MIN_SKIP_US = 500_000L
+    /** The burst has landed once the buffered position is still this long. */
+    const val BURST_QUIET_MS = 300L
+    /** ...or this long after the first sample, whichever is first. */
+    const val BURST_MAX_WAIT_MS = 2_500L
+    /** Give up when no sample arrives this long after the re-prime. */
+    const val TIMEOUT_MS = 15_000L
+
+    fun burstLanded(nowMs: Long, firstDataAtMs: Long, lastGrowAtMs: Long): Boolean =
+        firstDataAtMs != 0L &&
+            (nowMs - lastGrowAtMs >= BURST_QUIET_MS || nowMs - firstDataAtMs >= BURST_MAX_WAIT_MS)
+
+    /** Skip target for the video keyframe search (the queue lands on the
+     *  newest keyframe at or before it), or [C.TIME_UNSET] when the buffer
+     *  past [firstUs] is within [keepUs] + [MIN_SKIP_US]. */
+    fun skipTargetUs(firstUs: Long, bufferedUs: Long, keepUs: Long): Long {
+        val target = bufferedUs - keepUs
+        return if (target - firstUs < MIN_SKIP_US) C.TIME_UNSET else target
     }
 }

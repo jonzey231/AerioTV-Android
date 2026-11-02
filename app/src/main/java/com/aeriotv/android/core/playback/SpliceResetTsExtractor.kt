@@ -28,6 +28,18 @@ class SpliceControl(
     @Volatile internal var pendingReason: String? = null
     @Volatile internal var onReset: ((String) -> Unit)? = null
 
+    /**
+     * Loader thread. The PMT changed the video codec TYPE (H.264 to HEVC or
+     * the reverse; stream types). Never handled in place: the extractor stops
+     * delivering samples and the holder runs the sequential rebuild
+     * (see [CodecChangeRule]).
+     */
+    @Volatile var onCodecChange: ((oldType: Int, newType: Int) -> Unit)? = null
+
+    /** Set once a codec type change was seen: no more bytes reach the old
+     *  readers until the player replaces this source. */
+    @Volatile internal var frozen = false
+
     fun request(reason: String) {
         if (pendingReason == null) pendingReason = reason
     }
@@ -70,13 +82,30 @@ class SpliceResetTsExtractor(
         const val RESYNC_WINDOW_MS = 2_000L
         /** Never reset more often than this. */
         const val MIN_RESET_INTERVAL_MS = 5_000L
+        /** Bytes discarded per read while frozen. */
+        const val FROZEN_SKIP_BYTES = 188 * 64
     }
 
     private val resyncTimes = ArrayDeque<Long>()
     private var current: Extractor = factory(::onResync)
     private var output: RemapOutput? = null
     private var lastResetAtMs = 0L
-    private val sniffer = TsTableSniffer { why -> control.request("pmt") ; log("[SWITCH] TS tables changed on the kept connection ($why)") }
+    private val sniffer = TsTableSniffer(
+        onChange = { why -> control.request("pmt"); log("[SWITCH] TS tables changed on the kept connection ($why)") },
+        onCodecChange = { old, new -> onCodecTypeChange(old, new) },
+    )
+
+    private fun onCodecTypeChange(old: Int, new: Int) {
+        if (control.frozen) return
+        log(
+            "[SWITCH] TS video type changed on the kept connection " +
+                "(${CodecChangeRule.familyOfStreamType(old)} -> ${CodecChangeRule.familyOfStreamType(new)}); " +
+                "no in-place swap",
+        )
+        control.frozen = true
+        control.pendingReason = null
+        control.onCodecChange?.invoke(old, new)
+    }
 
     /** Test seam. */
     internal var resets = 0
@@ -101,6 +130,14 @@ class SpliceResetTsExtractor(
     }
 
     override fun read(input: ExtractorInput, seekPosition: PositionHolder): Int {
+        if (control.frozen) {
+            // A codec type change: the old readers must never see the new
+            // codec's bytes, and no fresh extractor is swapped in. Discard
+            // until the holder's sequential rebuild replaces the source.
+            val n = input.skip(FROZEN_SKIP_BYTES)
+            return if (n == androidx.media3.common.C.RESULT_END_OF_INPUT) Extractor.RESULT_END_OF_INPUT
+            else Extractor.RESULT_CONTINUE
+        }
         control.pendingReason?.let { reason ->
             control.pendingReason = null
             val n = nowMs()
@@ -208,16 +245,25 @@ class SpliceResetTsExtractor(
  * stream set changes. PMT version alone is ignored: identical tables with a new
  * version change nothing TsExtractor already uses.
  */
-internal class TsTableSniffer(private val onChange: (String) -> Unit) {
+internal class TsTableSniffer(
+    /** The program's video stream TYPE changed (old, new). Reported instead
+     *  of [onChange] for that PMT. */
+    private val onCodecChange: (Int, Int) -> Unit = { _, _ -> },
+    private val onChange: (String) -> Unit,
+) {
     private val pkt = ByteArray(188)
     private var have = 0
     private var pmtPid = -1
     private var esSig: String? = null
+    /** Survives a PMT PID change, so a new PMT on a new PID is still
+     *  compared with the last video type. */
+    private var videoType: Int? = null
 
     fun reset() {
         have = 0
         pmtPid = -1
         esSig = null
+        videoType = null
     }
 
     fun feed(b: ByteArray, off: Int, len: Int) {
@@ -273,16 +319,25 @@ internal class TsTableSniffer(private val onChange: (String) -> Unit) {
             val pil = ((u(s + 10) and 0x0f) shl 8) or u(s + 11)
             var j = s + 12 + pil
             val sb = StringBuilder()
+            val streams = ArrayList<Pair<Int, Int>>()
             while (j + 5 <= s + total - 4) {
                 val type = u(j)
                 val epid = ((u(j + 1) and 0x1f) shl 8) or u(j + 2)
                 val eil = ((u(j + 3) and 0x0f) shl 8) or u(j + 4)
                 sb.append(type).append(':').append(epid).append(',')
+                streams.add(type to epid)
                 j += 5 + eil
             }
             val sig = sb.toString()
             val old = esSig
-            if (old != null && old != sig) onChange("streams [$old] -> [$sig]")
+            val newVideo = CodecChangeRule.videoStreamType(streams)
+            val oldVideo = videoType
+            if (oldVideo != null && newVideo != null && CodecChangeRule.isTypeChange(oldVideo, newVideo)) {
+                onCodecChange(oldVideo, newVideo)
+            } else if (old != null && old != sig) {
+                onChange("streams [$old] -> [$sig]")
+            }
+            if (newVideo != null) videoType = newVideo
             esSig = sig
         }
     }
