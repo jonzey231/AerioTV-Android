@@ -2260,6 +2260,9 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncManual.keys(scopes).filter { enabled(it, s) }.forEach { key ->
             val rows = serverDataOf(s, DsyncBucket.of(key), key)?.let { DsyncCoexistence.rowCount(key, it) } ?: 0
             Log.i(TAG, "[DSYNC] manual pull ${key.suffix} rows=$rows")
+            // The forced apply skips the per-key follow (the setup choice
+            // replaces Drive itself), so a manual pull queues it here.
+            driveFollow(s, key, "manual pull")
         }
         flush(s)
         return true
