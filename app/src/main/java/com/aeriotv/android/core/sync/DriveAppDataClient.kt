@@ -108,12 +108,17 @@ class DriveAppDataClient(
     suspend fun upload(token: String, fileName: String, contentJson: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             authed(token) { t ->
-                val existing = findFileIdRaw(t, fileName)
-                if (existing == null) {
+                // Every copy of the name, not only the first: readers that list
+                // the folder (backup update offer, setup probe) may land on any
+                // duplicate (two devices creating the same file at once), and
+                // an untouched duplicate kept the old format forever.
+                val existing = findFileIdsRaw(t, fileName)
+                if (existing.isEmpty()) {
                     createMultipart(t, fileName, contentJson)
                 } else {
-                    updateContent(t, existing, contentJson)
-                    existing
+                    if (existing.size > 1) info("upload $fileName copies=${existing.size}")
+                    existing.forEach { updateContent(t, it, contentJson) }
+                    existing.first()
                 }
             }
         }.onFailure { warn("upload $fileName FAILED: ${it.javaClass.simpleName} ${it.message}") }
@@ -185,6 +190,8 @@ class DriveAppDataClient(
         val url = driveBase.newBuilder()
             .addQueryParameter("spaces", "appDataFolder")
             .addQueryParameter("fields", "files(id,name,modifiedTime)")
+            // Same filter as findFileId: a trashed copy is never read as the backup.
+            .addQueryParameter("q", "trashed = false")
             .build()
         val req = Request.Builder()
             .url(url)
@@ -210,7 +217,10 @@ class DriveAppDataClient(
     }
 
     /** [findFileId] without its own retry, for use inside an [authed] block. */
-    private fun findFileIdRaw(token: String, fileName: String): String? {
+    private fun findFileIdRaw(token: String, fileName: String): String? = findFileIdsRaw(token, fileName).firstOrNull()
+
+    /** Every non-trashed file id named [fileName], in Drive's order. */
+    private fun findFileIdsRaw(token: String, fileName: String): List<String> {
         val url = driveBase.newBuilder()
             .addQueryParameter("spaces", "appDataFolder")
             .addQueryParameter("fields", "files(id,name)")
@@ -223,7 +233,7 @@ class DriveAppDataClient(
                 throw httpError(resp.code, "findFileId $fileName")
             }
             val tree = json.parseToJsonElement(resp.body?.string().orEmpty()).jsonObject
-            tree["files"]?.jsonArray?.firstOrNull()?.jsonObject?.get("id")?.jsonPrimitive?.content
+            tree["files"]?.jsonArray.orEmpty().mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.content }
         }
     }
 

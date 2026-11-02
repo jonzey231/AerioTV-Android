@@ -12,6 +12,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
 
 /**
  * Canonical row identities shared by Google Drive snapshots and Dispatcharr
@@ -335,6 +337,11 @@ object DriveCanon {
         val o = Json.parseToJsonElement(body).jsonObject
         val env = o["envelope"]?.jsonObject ?: return null
         JsonObject(o + ("envelope" to JsonObject(env + ("format" to JsonPrimitive(FORMAT))))).toString()
+    }.getOrNull()
+
+    /** envelope.format of a Drive file body; null when absent or the body has no readable envelope. */
+    fun envelopeFormat(body: String): Int? = runCatching {
+        Json.parseToJsonElement(body).jsonObject["envelope"]?.jsonObject?.get("format")?.jsonPrimitive?.intOrNull
     }.getOrNull()
 
     /** Names of the files (category to envelope format) that are old format, for the counts-only offer log. */

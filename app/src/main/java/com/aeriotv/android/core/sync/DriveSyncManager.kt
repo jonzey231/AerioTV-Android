@@ -1103,7 +1103,10 @@ class DriveSyncManager @Inject constructor(
 
     /** Whether any shared Drive file is old format (DriveCanon.backupOutdated). Read only; false when Drive cannot be read. */
     suspend fun backupOutdated(token: String): Boolean = runCatching {
-        val files = driveClient.listAll(token).associate { (id, name) -> name to id }
+        val listing = driveClient.listAll(token)
+        listing.groupingBy { it.second }.eachCount().filterValues { it > 1 }.takeIf { it.isNotEmpty() }
+            ?.let { d -> Log.i(TAG, "[DRIVE] duplicate files: ${d.entries.joinToString(",") { "${it.key}=${it.value}" }}") }
+        val files = listing.associate { (id, name) -> name to id }
         val formats = LinkedHashMap<String, Int?>()
         updateFiles.forEach { c ->
             val id = files[c.fileName] ?: return@forEach
