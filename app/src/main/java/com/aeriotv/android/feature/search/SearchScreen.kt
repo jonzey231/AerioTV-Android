@@ -43,6 +43,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -326,16 +328,32 @@ private fun ResultRow(
             contentAlignment = Alignment.Center,
         ) {
             if (poster != null) {
-                // EPG rows carry a channel LOGO (any aspect, often wide): fit it
-                // inside the box with breathing room. VOD posters are 2:3 art:
-                // crop-fill the box edge to edge.
+                // EPG rows show the program's guide art when it has one (Logan
+                // 2026-11-02) and fall back to the channel LOGO, also when the
+                // art fails to load. Both fit inside the fixed box so nothing
+                // shifts when the image arrives; the logo keeps its breathing
+                // room. VOD posters are 2:3 art: crop-fill the box edge to edge.
                 if (result is SearchViewModel.Result.Epg) {
-                    AsyncImage(
-                        model = poster,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize().padding(5.dp),
-                        contentScale = ContentScale.Fit,
-                    )
+                    var artFailed by remember(poster) { mutableStateOf(false) }
+                    val showArt = display.programArt && !artFailed
+                    val model = if (showArt) poster else display.fallbackPoster
+                    if (model != null) {
+                        AsyncImage(
+                            model = model,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize()
+                                .then(if (showArt) Modifier else Modifier.padding(5.dp)),
+                            contentScale = ContentScale.Fit,
+                            onError = { if (showArt) artFailed = true },
+                        )
+                    } else {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
                 } else {
                     AsyncImage(
                         model = poster,
@@ -396,6 +414,10 @@ private data class ResultDisplay(
      *  VOD plot (Logan 2026-08-06: results show real content data, not just a
      *  bare title + time). Omitted when the source has none. */
     val detail: String? = null,
+    /** True when [poster] is the program's own guide art (EPG rows). */
+    val programArt: Boolean = false,
+    /** Channel logo shown when the program art is missing or fails to load. */
+    val fallbackPoster: String? = null,
 )
 
 private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when (result) {
@@ -424,6 +446,9 @@ private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when 
     is SearchViewModel.Result.Epg -> {
         val range = timeFmt().format(Date(result.programme.startMillis)) +
             " - " + timeFmt().format(Date(result.programme.endMillis))
+        // The XMLTV program icon the guide already stores (the program info
+        // card's feed art); no extra fetch.
+        val programArt = result.programme.iconUrl?.takeIf { it.isNotBlank() }
         ResultDisplay(
             title = result.programme.title,
             subtitle = listOfNotNull(
@@ -431,7 +456,9 @@ private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when 
                 result.channelName,
                 range,
             ).joinToString("  ·  "),
-            poster = result.channelLogo,
+            poster = programArt ?: result.channelLogo,
+            programArt = programArt != null,
+            fallbackPoster = result.channelLogo,
             icon = if (result.isLive) Icons.Filled.LiveTv else Icons.Filled.CalendarMonth,
             detail = result.programme.description.takeIf { it.isNotBlank() },
         )
