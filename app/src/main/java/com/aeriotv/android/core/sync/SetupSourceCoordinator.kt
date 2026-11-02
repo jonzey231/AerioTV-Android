@@ -143,6 +143,10 @@ class SetupSourceCoordinator @Inject constructor(
             return@withLock
         }
         drive.clearReplaceDeferred()
+        // The pulled progress rows become local first, so the replace
+        // snapshot counts them as local, not as placeholders (section 10a).
+        runCatching { dsync.get().awaitProgressLocal() }
+            .onFailure { Log.w("DriveSyncManager", "[DSYNC] progress before replace failed: ${it.javaClass.simpleName}") }
         drive.replaceBackupNow()
     }
 

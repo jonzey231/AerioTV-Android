@@ -63,19 +63,38 @@ class SetupSourceChoiceTest {
         assertTrue(SetupSourceChoice.decide(d, x) is Decision.Ask)
     }
 
-    @Test fun defaultSelectionIsMoreRecent() {
+    @Test fun defaultSelectionIsAlwaysDispatcharr() {
         val older = sum("favorites" to Category(1, 1_000))
         val newer = sum("favorites" to Category(1, 9_000))
-        assertEquals(Source.Drive, SetupSourceChoice.defaultSelection(drive = newer, dsync = older))
+        assertEquals(Source.Dispatcharr, SetupSourceChoice.defaultSelection(drive = newer, dsync = older))
         assertEquals(Source.Dispatcharr, SetupSourceChoice.defaultSelection(drive = older, dsync = newer))
         assertEquals(Source.Dispatcharr, SetupSourceChoice.defaultSelection(drive = older, dsync = older))
     }
 
     @Test fun recencyIgnoresEmptyCategories() {
         val d = sum("favorites" to Category(1, 1_000), "settings" to Category(0, 99_000))
-        val x = sum("favorites" to Category(1, 5_000))
         assertEquals(1_000L, d.updatedAt)
-        assertEquals(Source.Dispatcharr, SetupSourceChoice.defaultSelection(d, x))
+    }
+
+    @Test fun convergeEqualCountsOnlyLoggedSkips() {
+        // A skip reason on a category that is equal anyway gets no skip line, so it is not counted.
+        val fp = "fp"
+        val d = sum("progress" to Category(3, 1, fp), "recents" to Category(2, 1, "r"))
+        val x = sum("progress" to Category(3, 1, fp), "recents" to Category(2, 1, "r"))
+        val skips = SetupSourceChoice.convergeSkips(d, x, mapOf("progress" to "dirty"), emptyMap())
+        assertEquals(emptyList<Pair<String, String>>(), skips)
+        assertEquals("[SYNC] converge equal categories=2 skipped=0", SetupSourceChoice.convergeEqualLine(2, skips))
+        // An Off item is filtered out of both sides: not compared, not counted.
+        val off = SetupSourceChoice.forDevice(sum("favorites" to Category(1, 1, "a"), "progress" to Category(3, 1, fp))) { it == "favorites" }
+        assertTrue("favorites" !in off.categories)
+        assertTrue(SetupSourceChoice.convergeSkips(off, off, mapOf("favorites" to "unread"), emptyMap()).isEmpty())
+    }
+
+    @Test fun replaceSnapshotWaitsForLocalProgress() {
+        val h = com.aeriotv.android.core.sync.dsync.DsyncHeld
+        assertTrue(h.progressSettled(0, catalogReady = false))
+        assertTrue(!h.progressSettled(3, catalogReady = false))
+        assertTrue(h.progressSettled(3, catalogReady = true))
     }
 
     @Test fun countLineShowsNonZeroInOrder() {

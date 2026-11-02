@@ -835,8 +835,10 @@ write an old file; the offer then returns, which is the intended signal.
 The prompt: "Which setup should this device start from?", two cards
 ("Dispatcharr" and "Google Drive", each "Updated <relative time>" and up to
 four non-zero counts, then "and more"), the line "The other will be
-replaced with the setup you choose.", and Continue or Cancel. The more
-recently updated side is selected when it opens (ties: Dispatcharr).
+replaced with the setup you choose.", and Continue or Cancel. Dispatcharr
+is always preselected when it opens, whichever side is newer (2026-11-01):
+the prompt only appears with Dispatcharr Sync on for the active playlist,
+so there is no newer-side rule. The Apple app mirrors this.
 Cancel in onboarding returns to Welcome with the selections kept; in
 Settings it leaves the switch off.
 
@@ -986,7 +988,7 @@ found before the setup choice is settled is left to them.
    copy: Dispatcharr is the source of truth, Drive is never pulled over
    Dispatcharr-owned data. Log, counts only:
    `[SYNC] converge <category> drive=<fp>/<rows> dsync=<fp>/<rows> -> push drive`,
-   or `[SYNC] converge equal categories=<n> skipped=<n>`. Converge and the
+   or `[SYNC] converge equal categories=<n> skipped=<n>` (skipped counts only categories that logged a skip line; Off items are not compared or counted). Converge and the
    Rule 4 probe use the same summaries (`DriveSyncManager.readSharedSummary`
    and `DsyncCoexistence.summarize`), so "equal" is logged only when the
    probe would not ask. Every differing category it does not push is named:
@@ -1050,7 +1052,10 @@ Single snapshot builder, pull before replace, and atomic category commit
    `DsyncCoexistence.choiceApplies`), and only then replaces the Drive
    backup. The pull logs `[DSYNC] setup choice pull ok=<bool>` and each
    forced key `[DSYNC] pull <key> bytes=<n> applied (setup choice, stamp
-   not newer)`. If the list, the bucket, or a forced apply fails, Drive is
+   not newer)`. Progress rows the pull held (movie catalog not built yet)
+   are written locally before the replace push (bounded wait, 45 s;
+   `[DSYNC] progress before replace resolved=<n> held=<n>`), so the first
+   `[DRIVE] progress snapshot` already counts them as local. If the list, the bucket, or a forced apply fails, Drive is
    not replaced: `[DRIVE] replace deferred: Dispatcharr pull failed`, the
    shared Drive pushes are held (`[DRIVE] push <Category> held: replace
    deferred until the Dispatcharr pull applies`), and the next Dispatcharr

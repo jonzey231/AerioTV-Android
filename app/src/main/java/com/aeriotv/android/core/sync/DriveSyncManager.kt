@@ -928,7 +928,7 @@ class DriveSyncManager @Inject constructor(
         skipped.forEach { (n, why) -> Log.i(TAG, SetupSourceChoice.convergeSkipLine(n, why, d.categories[n], dsync.categories[n])) }
         if (plan.isEmpty()) {
             val n = SetupSourceChoice.SHARED.count { it in d.categories || it in dsync.categories }
-            if (skipped.isEmpty()) Log.i(TAG, "[SYNC] converge equal categories=$n skipped=${skip.size}")
+            if (skipped.isEmpty()) Log.i(TAG, SetupSourceChoice.convergeEqualLine(n, skipped))
             else Log.i(TAG, "[SYNC] converge nothing pushed categories=$n differing=${skipped.size}")
             return emptyList()
         }

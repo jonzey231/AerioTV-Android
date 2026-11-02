@@ -105,6 +105,15 @@ object DsyncHeld {
         return s.copy(entries = real + add)
     }
 
+    /**
+     * Setup-choice ordering (section 10a, field run 2026-11-01: the first
+     * replace snapshot read local=0 canonical=3 placeholders=3): the replace
+     * push builds the WatchProgress snapshot only once the pulled rows are
+     * local, so it waits while rows are held and the movie catalog that
+     * resolves them is not built yet. True: build the snapshot now.
+     */
+    fun progressSettled(heldRows: Int, catalogReady: Boolean): Boolean = heldRows == 0 || catalogReady
+
     /** Counts only, for the snapshot line. */
     fun snapshotLine(why: String, local: Int, canonical: Int, extra: Int, placeholders: Int) =
         "[DRIVE] progress snapshot local=$local canonical=$canonical dsync=$extra placeholders=$placeholders ($why)"

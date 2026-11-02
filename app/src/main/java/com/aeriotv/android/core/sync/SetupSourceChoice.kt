@@ -123,6 +123,16 @@ object SetupSourceChoice {
                     ?: if (lastPushed[n] == convergeMark(dsync.categories[n])) n to "untranslatable" else null
             }
 
+    /**
+     * The "equal" converge line. skipped counts only the categories that got
+     * a skip line ([skipped], from [convergeSkips]): a skip reason on a
+     * category that is equal anyway, or one whose Sync Categories item is
+     * Off (not compared at all), is not counted (field run 2026-11-01 logged
+     * skipped=1 with no skip line).
+     */
+    fun convergeEqualLine(categories: Int, skipped: List<Pair<String, String>>) =
+        "[SYNC] converge equal categories=$categories skipped=${skipped.size}"
+
     /** The counts-only skip line. */
     fun convergeSkipLine(name: String, reason: String, drive: Category?, dsync: Category?) =
         "[SYNC] converge skip $name reason=$reason drive=${drive?.rows ?: 0} dsync=${dsync?.rows ?: 0}"
@@ -196,9 +206,14 @@ object SetupSourceChoice {
         is Decision.Ask -> "Ask"
     }
 
-    /** The card selected when the prompt opens: the more recently updated side (ties: Dispatcharr). */
-    fun defaultSelection(drive: Summary, dsync: Summary): Source =
-        if (drive.updatedAt > dsync.updatedAt) Source.Drive else Source.Dispatcharr
+    /**
+     * The card selected when the prompt opens: always Dispatcharr (Logan,
+     * 2026-11-01). The prompt only appears when Dispatcharr Sync is on for
+     * the active playlist (both providers hold data), so there is no case
+     * without Dispatcharr and no newer-side rule.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun defaultSelection(drive: Summary, dsync: Summary): Source = Source.Dispatcharr
 
     // ---- copy ----
 

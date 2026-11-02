@@ -703,6 +703,8 @@ class DispatcharrSyncManager @Inject constructor(
      * Onboarding Turn On: wait (bounded) until the session the provider change
      * starts has finished its first complete pull. False on timeout.
      */
+    private val PROGRESS_LOCAL_WAIT_MS = 45_000L
+
     suspend fun awaitFirstPull(timeoutMs: Long = 20_000L): Boolean =
         kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
             while (session?.firstPullDone != true) delay(200)
@@ -2203,6 +2205,34 @@ class DispatcharrSyncManager @Inject constructor(
         val ok = s.listOk && s.pullComplete && !s.forceApplyFailed
         Log.i(TAG, "[DSYNC] setup choice pull ok=$ok")
         return ok
+    }
+
+    /**
+     * Setup-choice ordering (section 10a): after [pullForChoice], wait
+     * (bounded) until the held progress rows can be written locally (movie
+     * catalog built), write them, and only then return, so the replace
+     * push's first WatchProgress snapshot already counts them as local. On
+     * timeout the rows stay held (placeholders) and the "held resolved"
+     * follow push carries them later. Counts only.
+     */
+    suspend fun awaitProgressLocal(timeoutMs: Long = PROGRESS_LOCAL_WAIT_MS) {
+        val s = session?.takeIf { isBase(it) && !it.peek } ?: return
+        val c = conn(s) ?: return
+        if (held.progress(s.playlistId).isEmpty()) return
+        val settled = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            while (!DsyncHeld.progressSettled(held.progress(s.playlistId).size, vodIds.moviesReady(c.row))) delay(500)
+            true
+        } ?: false
+        if (!settled) {
+            Log.i(TAG, "[DSYNC] progress held=${held.progress(s.playlistId).size} catalog not ready; replace goes ahead with placeholders")
+            return
+        }
+        val before = held.progress(s.playlistId)
+        if (before.isEmpty()) return
+        val written = IntArray(1)
+        val left = applyProgressRows(s, c, before, written)
+        if (left.size != before.size) holdProgress(s, c, left, "retry")
+        Log.i(TAG, "[DSYNC] progress before replace resolved=${written[0]} held=${left.size}")
     }
 
     /** A Drive apply carried placeholder rows: hold them (replace when the user chose Google Drive). */
