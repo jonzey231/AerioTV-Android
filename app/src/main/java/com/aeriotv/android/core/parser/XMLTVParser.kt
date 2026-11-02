@@ -387,14 +387,22 @@ object XMLTVParser {
                         // so the caller falls back to SimpleDateFormat,
                         // which resolves them properly.
                         ?: return null
+                    // ZoneOffset only allows offsets within +/-18:00; anything
+                    // beyond (e.g. a corrupt +2500) falls back instead.
+                    if (offsetSeconds !in -18 * 3600..18 * 3600) return null
                     zoneOffset = java.time.ZoneOffset.ofTotalSeconds(offsetSeconds)
                 }
             }
         }
 
-        return java.time.LocalDateTime.of(year, month, day, hour, minute, second)
-            .toInstant(zoneOffset)
-            .toEpochMilli()
+        // LocalDateTime.of throws DateTimeException for impossible dates
+        // (day 31 in February, ...) — leave those to the SimpleDateFormat
+        // fallback, which reports null for them.
+        return runCatching {
+            java.time.LocalDateTime.of(year, month, day, hour, minute, second)
+                .toInstant(zoneOffset)
+                .toEpochMilli()
+        }.getOrNull()
     }
 
     /** Parse a `+hhmm` / `+hh:mm` / `-hhmm` style tail into total seconds.

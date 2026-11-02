@@ -117,6 +117,35 @@ class XMLTVParserTest {
     }
 
     @Test
+    fun invalidFastPathDatesReturnNullInsteadOfThrowing() {
+        // Impossible calendar date: day 31 in February. LocalDateTime.of
+        // would throw DateTimeException; the fast path must return null and
+        // let the SimpleDateFormat fallback handle it (which parses it
+        // leniently as March 3).
+        val expected = runCatching {
+            java.text.SimpleDateFormat("yyyyMMddHHmmss Z", java.util.Locale.US)
+                .parse("20260231120000 +0000")!!.time
+        }.getOrNull()
+        assertEquals(expected, XMLTVParser.parseXMLTVDate("20260231120000 +0000"))
+        // Out-of-range offset beyond +/-18:00: ZoneOffset.ofTotalSeconds
+        // would throw; must fall back rather than abort the feed. The Z
+        // formatter rejects the bogus offset, but the zone-less fallback
+        // still parses the leading digits as UTC (trailing text ignored),
+        // so the feed keeps going.
+        assertEquals(
+            java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.parse("20260912140000 +2500")!!.time,
+            XMLTVParser.parseXMLTVDate("20260912140000 +2500"),
+        )
+        // Sanity: the same date with a valid offset still parses on the
+        // fast path.
+        val validExpected = java.time.LocalDateTime.of(2026, 9, 12, 14, 0, 0)
+            .toInstant(java.time.ZoneOffset.ofHours(2)).toEpochMilli()
+        assertEquals(validExpected, XMLTVParser.parseXMLTVDate("20260912140000 +0200"))
+    }
+
+    @Test
     fun filterKnownChannelKeys() {
         val xml = """
             <?xml version="1.0" encoding="UTF-8"?>
