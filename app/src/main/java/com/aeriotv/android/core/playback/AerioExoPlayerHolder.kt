@@ -2428,6 +2428,19 @@ class AerioExoPlayerHolder @Inject constructor(
                 )
                 return
             }
+            LiveRedirect.findUpstreamHls(error)?.let { redirect ->
+                Log.i(LiveRedirect.TAG, "[LIVE] redirect answered HLS; re-tuning the redirect target through HLS")
+                tracer.recover("redirect HLS")
+                consecutiveReloads = 0
+                lastForcedReloadAtMs = 0L
+                errorPending = false
+                upstreamHlsUrl = redirect.landedUrl
+                playUrl(
+                    redirect.landedUrl, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri,
+                    lastPlayDrmType, lastPlayDrmKey, null,
+                )
+                return
+            }
             if (handleConnectionLimit(error)) return
             // Android companion to the frame-stall path: a terminal source/HTTP
             // error. Re-prime under the same cooldown + reload cap. If a LAN/WAN
@@ -2990,8 +3003,11 @@ class AerioExoPlayerHolder @Inject constructor(
             httpDataSourceFactory(rawTs)
         if (rawTs) {
             val tracker = liveCallTrackers.lastOrNull()
+            // GH #159: LiveRedirectSniff sits under the server-HLS guard so a
+            // Redirect-profile 302 to a provider HLS playlist is caught before
+            // the TS extractor sees it.
             val tee = com.aeriotv.android.core.timeshift.TeeDataSource.Factory(
-                ServerHlsGuard.Factory(dataSourceFactory),
+                ServerHlsGuard.Factory(LiveRedirectSniff.Factory(dataSourceFactory)),
             ) { timeshift.get().activeWriter }
             dataSourceFactory = tee
             liveTee = tee
@@ -3068,6 +3084,15 @@ class AerioExoPlayerHolder @Inject constructor(
         val mediaItem = mediaItemBuilder.build()
         _pipelineLabel.value = pipelineLabelFor(url, drm = drmUuid != null && drmLicenseKey != null)
         return when {
+            // GH #159: the provider URL a Redirect-profile channel landed on
+            // answered with an HLS playlist. Talk to it directly with HLS and
+            // without Dispatcharr's auth headers (a different host).
+            url == upstreamHlsUrl -> {
+                Log.i(LiveRedirect.TAG, "[LIVE] redirect target is HLS; HlsMediaSource without server auth")
+                HlsMediaSource.Factory(tracer.wrapDataSourceFactory(httpDataSourceFactory(stripAuth = true)))
+                    .setLoadErrorHandlingPolicy(Live503LoadErrorPolicy())
+                    .createMediaSource(mediaItem)
+            }
             isRawTsUrl(url) -> {
                 // SINGLE_PMT is what HlsMediaSource uses internally and
                 // what nearly every IPTV provider delivers: one program,
@@ -4070,7 +4095,7 @@ class AerioExoPlayerHolder @Inject constructor(
         }
     }
 
-    private fun httpDataSourceFactory(isLive: Boolean = false): DataSource.Factory {
+    private fun httpDataSourceFactory(isLive: Boolean = false, stripAuth: Boolean = false): DataSource.Factory {
         // GH #32: live (raw-TS Dispatcharr proxy) playback goes through OkHttp,
         // not Media3's DefaultHttpDataSource. On Android 16 the HttpURLConnection
         // that DefaultHttpDataSource wraps can open the connection to the chunked
@@ -4094,9 +4119,10 @@ class AerioExoPlayerHolder @Inject constructor(
         // Apply Dispatcharr API-key / custom User-Agent. Headers are
         // applied verbatim; the User-Agent header (if present) replaces
         // the default.
-        if (httpHeaders.isNotEmpty()) {
-            factory.setDefaultRequestProperties(httpHeaders)
-            httpHeaders.entries
+        val headers = if (stripAuth) LiveRedirect.withoutAuth(httpHeaders) else httpHeaders
+        if (headers.isNotEmpty()) {
+            factory.setDefaultRequestProperties(headers)
+            headers.entries
                 .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
                 ?.value
                 ?.let(factory::setUserAgent)
@@ -4318,10 +4344,18 @@ class AerioExoPlayerHolder @Inject constructor(
             .followRedirects(true)
             .followSslRedirects(true)
             .addNetworkInterceptor(ForceHls.redirectTokenInterceptor)
+            // GH #159: a Redirect-profile 302 points at the provider; never
+            // carry Dispatcharr's X-API-Key or Authorization there.
+            .addNetworkInterceptor(LiveRedirect.stripAuthOnCrossHost)
             .build()
     }
 
+    /** GH #159: the provider URL a redirected live open landed on when it
+     *  answered with HLS. buildMediaSource routes exactly this URL to HLS. */
+    @Volatile private var upstreamHlsUrl: String? = null
+
     private fun isRawTsUrl(url: String): Boolean {
+        if (url == upstreamHlsUrl) return false
         // Developer Force HLS: a Dispatcharr live URL asking for HLS is a
         // playlist, so every TS-only path (tee, switch skip, stall nets) skips it.
         if (ForceHls.isForcedHlsUrl(url)) return false
