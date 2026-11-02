@@ -1138,6 +1138,30 @@ class PlaylistRepository @Inject constructor(
             .onFailure { Log.w(TAG_CAPS, "account facts reset failed", it) }
     }
 
+    /**
+     * Add-flow DVR access probe for a scanned Dispatcharr key, before any row
+     * exists: reads the same /api/accounts/users/me/ snapshot the capability
+     * probe uses and derives CanManageDvr exactly as a saved row would.
+     * Unknown on any failure (Unknown never hides an affordance).
+     */
+    suspend fun probeDvrManage(baseUrl: String, apiKey: String): CapabilityState {
+        val snap = runCatching { dispatcharrClient.fetchAccountSnapshot(baseUrl.trimEnd('/'), apiKey) }
+            .getOrNull() ?: return CapabilityState.Unknown
+        val caps = com.aeriotv.android.core.data.capability.deriveCapabilities(
+            com.aeriotv.android.core.data.capability.CapabilitySnapshot(
+                userLevel = snap.userLevel,
+                isStaff = snap.isStaff,
+                isSuperuser = snap.isSuperuser,
+                customPropertiesJson = snap.customPropertiesJson,
+                fetchedAtMillis = System.currentTimeMillis(),
+                schema = CAPABILITIES_SCHEMA,
+                isStale = false,
+                systemCatchupEnabled = null,
+            ),
+        )
+        return caps[Capability.CanManageDvr]
+    }
+
     suspend fun probeCapabilities(
         playlistId: String,
         force: Boolean = false,

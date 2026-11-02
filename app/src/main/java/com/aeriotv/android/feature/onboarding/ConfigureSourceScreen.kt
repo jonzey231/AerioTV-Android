@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -151,6 +152,9 @@ fun ConfigureSourceScreen(
             viewModel.onNameChange(host ?: "Dispatcharr")
         }
         showScanDetails = true
+        // Probe DVR access now so the recording row knows the account's
+        // access; Connect reuses the result.
+        viewModel.probeScannedDvrAccess()
     }
 
     val cardIcon: ImageVector
@@ -250,6 +254,8 @@ fun ConfigureSourceScreen(
                         DvrDestinationRow(
                             server = state.dvrDestinationServer,
                             onSelect = viewModel::onDvrDestinationChange,
+                            access = state.dvrManageAccess,
+                            checking = state.isCheckingDvrAccess,
                         )
                     },
                     onConnect = { viewModel.loadPlaylist() },
@@ -307,6 +313,8 @@ fun ConfigureSourceScreen(
                 DvrDestinationRow(
                     server = state.dvrDestinationServer,
                     onSelect = viewModel::onDvrDestinationChange,
+                    access = state.dvrManageAccess,
+                    checking = state.isCheckingDvrAccess,
                 )
             }
 
@@ -975,10 +983,15 @@ private fun VodEnabledRow(
  * bodySmall help paragraph the other rows use. Each pill carries the D-pad
  * focus wash so the choice is navigable on TV.
  */
+internal const val DVR_DENIED_LINE =
+    "Recordings save to this device. Server recording needs DVR Manage access in Dispatcharr."
+
 @Composable
 internal fun DvrDestinationRow(
     server: Boolean,
     onSelect: (Boolean) -> Unit,
+    access: com.aeriotv.android.core.data.capability.CapabilityState? = null,
+    checking: Boolean = false,
 ) {
     Column(modifier = Modifier.padding(vertical = 4.dp)) {
         Text(
@@ -988,6 +1001,30 @@ internal fun DvrDestinationRow(
             fontWeight = FontWeight.Medium,
         )
         Spacer(Modifier.height(8.dp))
+        if (checking) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Checking access",
+                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            return@Column
+        }
+        if (access == com.aeriotv.android.core.data.capability.CapabilityState.Denied) {
+            // Denied: no choice; the add commits This Device.
+            Text(
+                text = DVR_DENIED_LINE,
+                style = MaterialTheme.typography.bodySmall.subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Column
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(true to "Server (Dispatcharr)", false to "This Device").forEach { (isServer, label) ->
                 val selected = isServer == server
@@ -1011,7 +1048,7 @@ internal fun DvrDestinationRow(
             }
         }
         Text(
-            text = "Where recordings are saved by default. Server recording requires a Dispatcharr admin account. You can change this later in Settings > DVR.",
+            text = "Where recordings are saved by default. Server recording needs DVR Manage access in Dispatcharr. You can change this later in Settings > DVR.",
             style = MaterialTheme.typography.bodySmall.subtext(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),

@@ -15,6 +15,9 @@ import com.aeriotv.android.core.app.AppLaunchTrace
 import com.aeriotv.android.core.data.bridgeChannelIds
 import com.aeriotv.android.core.data.buildChannelEpgKeyBridge
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
+import com.aeriotv.android.core.data.db.entity.canRecordToServer
+import com.aeriotv.android.core.data.db.entity.capabilities
+import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_AHEAD
 import com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL_MAX_BACK
 import com.aeriotv.android.core.data.db.entity.sanitizeGuideDays
@@ -105,6 +108,12 @@ class PlaylistViewModel @Inject constructor(
          *  when the add succeeds, so backing out never mutates the global
          *  setting. */
         val dvrDestinationServer: Boolean = true,
+        /** CanManageDvr for the account being added: null = not probed yet
+         *  (show the choice as before), set by the scan's background probe
+         *  or by a successful Test Connection. */
+        val dvrManageAccess: com.aeriotv.android.core.data.capability.CapabilityState? = null,
+        /** True while the scan's background DVR access probe runs. */
+        val isCheckingDvrAccess: Boolean = false,
         /** Catch-up guide-history retention draft for the add flow (task
          *  #135); threaded into SaveRequest.epgRetentionDays on submit. */
         val epgRetentionDays: Int = com.aeriotv.android.core.data.db.entity.GUIDE_DAYS_ALL,
@@ -414,6 +423,8 @@ class PlaylistViewModel @Inject constructor(
                 availableProfiles = emptyList(),
                 isLoading = false,
                 error = null,
+                dvrManageAccess = null,
+                isCheckingDvrAccess = false,
             )
         }
     }
@@ -956,6 +967,33 @@ class PlaylistViewModel @Inject constructor(
     fun onDvrDestinationChange(server: Boolean) {
         _state.update { it.copy(dvrDestinationServer = server) }
     }
+
+    private var dvrAccessJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * After a Dispatcharr user QR is applied: probe the account's DVR access
+     * in the background while the compact Playlist details step is shown, so
+     * the recording row can hide Server for a View-only account. Connect
+     * reuses this result (it does not probe access again).
+     */
+    fun probeScannedDvrAccess() {
+        val s = _state.value
+        val key = s.apiKey.trim()
+        if (s.url.isBlank() || key.isEmpty()) return
+        val base = normalizeSchemedUrl(s.url)
+        dvrAccessJob?.cancel()
+        _state.update { it.copy(isCheckingDvrAccess = true, dvrManageAccess = null, dvrDestinationServer = true) }
+        dvrAccessJob = viewModelScope.launch {
+            val access = repository.probeDvrManage(base, key)
+            _state.update {
+                it.copy(
+                    isCheckingDvrAccess = false,
+                    dvrManageAccess = access,
+                    dvrDestinationServer = access != com.aeriotv.android.core.data.capability.CapabilityState.Denied,
+                )
+            }
+        }
+    }
     /** Bound to the "Guide Days" picker in ConfigureSourceScreen (task
      *  #135). Threaded into SaveRequest.epgRetentionDays on submit. */
     fun onEpgRetentionDaysChange(value: Int) {
@@ -1127,6 +1165,10 @@ class PlaylistViewModel @Inject constructor(
                             channels = channels,
                             isLoading = false,
                             error = if (channels.isEmpty()) "No channels found." else null,
+                            // Test Connection's own probe drives the full form's gate.
+                            dvrManageAccess = if (entity.isDispatcharrDirectConnect())
+                                entity.capabilities()[com.aeriotv.android.core.data.capability.Capability.CanManageDvr]
+                            else it.dvrManageAccess,
                         )
                     }
                     loadEpgIfConfigured(entity)
@@ -1136,8 +1178,11 @@ class PlaylistViewModel @Inject constructor(
                     if (effectiveSourceType == SourceType.DispatcharrApiKey ||
                         effectiveSourceType == SourceType.DispatcharrUserPass
                     ) {
+                        // Denied (DVR View only): This Device regardless of the hidden choice.
+                        val canServer = entity.canRecordToServer() &&
+                            s.dvrManageAccess != com.aeriotv.android.core.data.capability.CapabilityState.Denied
                         appPreferences.setDvrDefaultDestination(
-                            if (s.dvrDestinationServer) "server" else "local",
+                            if (s.dvrDestinationServer && canServer) "server" else "local",
                         )
                     }
                     // One-shot: advance the add flow even when phase was already
