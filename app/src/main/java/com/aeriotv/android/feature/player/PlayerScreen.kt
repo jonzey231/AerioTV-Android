@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -3091,17 +3092,28 @@ private fun LiveRewindChromeSection(
             val chPk = ch.dispatcharrChannelId ?: return@PlayerChromeOverlay
             val uuid = ch.id.removePrefix("disp:")
             scope.launch {
-                // Re-read the user level before opening: an admin can promote
-                // or demote the account at any time, and the picker follows
-                // the live answer (fail closed), not the launch-time one.
-                if (!onRecheckSwitchStreamAllowed("Switch Stream open")) {
-                    Toast.makeText(
-                        context,
-                        SWITCH_DENIED_MESSAGE,
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@launch
+                // Re-read the user level on open: an admin can promote or
+                // demote the account at any time, and the picker follows the
+                // live answer (fail closed), not the launch-time one. The
+                // re-read runs ALONGSIDE the list loads instead of before them
+                // (Streamer 2026-11-02: the serial probe held the sheet ~6 s);
+                // a denied answer closes the sheet, and the server refuses a
+                // switch from a non-admin regardless.
+                val openedAt = android.os.SystemClock.elapsedRealtime()
+                val allowed = async { onRecheckSwitchStreamAllowed("Switch Stream open") }
+                launch {
+                    if (!allowed.await()) {
+                        switchStream = null
+                        Toast.makeText(
+                            context,
+                            SWITCH_DENIED_MESSAGE,
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        Log.i(TAG, "[SwitchStream] permission re-read +${android.os.SystemClock.elapsedRealtime() - openedAt}ms")
+                    }
                 }
+                val currentAsync = async { onLoadCurrentStreamId(uuid) }
                 val streams = onLoadChannelStreams(chPk)
                 // Prefer the in-session selection for the radio mark: after an
                 // event-apply switch the server leaves /proxy/ts/status's stream_id
@@ -3112,7 +3124,8 @@ private fun LiveRewindChromeSection(
                 // not pick and the follow loop has adopted an external switch,
                 // switchedStreamId already holds the server's id. Otherwise
                 // the app's own pick wins over a stale event-apply stream_id.
-                val current = onLoadCurrentStreamId(uuid)
+                val current = currentAsync.await()
+                if (allowed.isCompleted && !allowed.await()) return@launch
                 val marked = switchedStreamId ?: current
                 if (current != null && marked == current) {
                     Log.i(TAG, "[SwitchStream] radio follows server stream_id=$current")
@@ -3121,6 +3134,7 @@ private fun LiveRewindChromeSection(
                     streams = streams,
                     currentStreamId = marked,
                 )
+                Log.i(TAG, "[SwitchStream] sheet open +${android.os.SystemClock.elapsedRealtime() - openedAt}ms")
             }
         },
         onShowSubtitles = {

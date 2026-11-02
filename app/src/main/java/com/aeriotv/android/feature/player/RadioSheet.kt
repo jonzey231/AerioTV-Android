@@ -37,6 +37,7 @@ import com.aeriotv.android.feature.multiview.RADIO_SUBTITLE
 import com.aeriotv.android.feature.multiview.RADIO_BUFFERING
 import com.aeriotv.android.feature.multiview.RADIO_UNAVAILABLE
 import dagger.hilt.android.EntryPointAccessors
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 private const val TAG = "AerioTV"
@@ -272,12 +273,20 @@ fun RadioTransportCard(
                 val chPk = channel.dispatcharrChannelId
                 if (chPk != null) {
                     scope.launch {
-                        if (!recheckSwitchStreamAllowed("Switch Stream open (Radio)")) {
-                            android.widget.Toast.makeText(context, SWITCH_DENIED_MESSAGE, android.widget.Toast.LENGTH_LONG).show()
-                            return@launch
+                        // Same as the player: the permission re-read runs
+                        // alongside the list loads; a denial closes the sheet.
+                        val allowed = async { recheckSwitchStreamAllowed("Switch Stream open (Radio)") }
+                        launch {
+                            if (!allowed.await()) {
+                                switchStreams = null
+                                android.widget.Toast.makeText(context, SWITCH_DENIED_MESSAGE, android.widget.Toast.LENGTH_LONG).show()
+                            }
                         }
-                        switchCurrentId = loadCurrentStreamId(channel.id.removePrefix("disp:"))
-                        switchStreams = loadChannelStreams(chPk)
+                        val current = async { loadCurrentStreamId(channel.id.removePrefix("disp:")) }
+                        val streams = loadChannelStreams(chPk)
+                        switchCurrentId = current.await()
+                        if (allowed.isCompleted && !allowed.await()) return@launch
+                        switchStreams = streams
                     }
                 }
             },
