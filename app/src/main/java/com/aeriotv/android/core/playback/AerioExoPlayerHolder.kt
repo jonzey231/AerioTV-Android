@@ -3555,65 +3555,14 @@ class AerioExoPlayerHolder @Inject constructor(
         return takeover
     }
 
-    /** Wall time the open rewind source restarts at after an in-buffer seek;
-     *  null until the first seek on that source. Reset by every new source. */
-    @Volatile private var timeshiftSeekWallMs: Long? = null
-    /** True while the player holds a plain wall-time rewind source that an
-     *  in-buffer seek can reuse (not a gap-hop or adopted-live source). */
-    private var rewindSourceSeekable = false
-    private var seekOpenSerial = 0
-
-    /**
-     * Repeated rewind on the buffer (Streamer 2026-11-02: six presses re-entered
-     * timeshift six times, each a new source, a player reset and a pos=0
-     * stall). The rewind source is live-progressive, so a player seek reloads
-     * it from byte 0; [timeshiftSeekWallMs] makes that reload start at the new
-     * wall time. Same source, same fillers, no controller re-entry. Falls back
-     * to a full entry if the reload does not open within 1.5 s.
-     */
-    private fun seekWithinTimeshift(p: Player, fromWallMs: Long): Boolean {
-        // Adopted live reads a kept channel's buffer fed by that channel's own
-        // connection; a rewind there is a seek on the same source too, so no
-        // independent filler (a second connection) ever starts for it.
-        if (!isTimeshifting || !rewindSourceSeekable) return false
-        if (p.playbackState == Player.STATE_IDLE || p.playerError != null) return false
-        if (p.currentMediaItem?.mediaId != "live-rewind") return false
-        val fromAdopted = isAdoptedLive
-        val serial = ++seekOpenSerial
-        isAdoptedLive = false
-        timeshiftSeekWallMs = fromWallMs
-        p.seekTo(0)
-        p.playWhenReady = true
-        timeshift.get().onSeekWithinBuffer(fromWallMs)
-        Log.i(TAG, "[REWIND] seek within buffer to $fromWallMs" + if (fromAdopted) " (kept channel connection)" else "")
-        mainHandler.postDelayed({
-            if (serial == seekOpenSerial && timeshiftSeekWallMs == fromWallMs && !seekOpened) {
-                Log.w(TAG, "[REWIND] in-buffer seek did not reopen the source; re-entering")
-                rewindSourceSeekable = false
-                playTimeshift(fromWallMs)
-            }
-        }, 1_500)
-        seekOpened = false
-        return true
-    }
-    @Volatile private var seekOpened = false
-
     fun playTimeshift(fromWallMs: Long): Boolean {
         val p = player ?: return false
         val ts = timeshift.get()
         if (ts.activeWriter == null) return false
-        if (seekWithinTimeshift(p, fromWallMs)) return true
         val takeover = prepareLiveTakeover(ts)
         isTimeshifting = true
         isAdoptedLive = false
-        timeshiftSeekWallMs = null
-        seekOpenSerial++
-        rewindSourceSeekable = true
-        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory(
-            writerProvider = { ts.activeWriter },
-            seekWallProvider = { timeshiftSeekWallMs },
-            onSeekOpen = { wall -> seekOpened = true; Log.i(TAG, "[REWIND] buffer reopened at $wall") },
-        )
+        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory { ts.activeWriter }
         val item = MediaItem.Builder()
             .setUri(com.aeriotv.android.core.timeshift.TimeshiftDataSource.uri(fromWallMs))
             .setMediaId("live-rewind")
@@ -3647,10 +3596,7 @@ class AerioExoPlayerHolder @Inject constructor(
         if (ts.activeWriter == null) return false
         isTimeshifting = true
         isAdoptedLive = false
-        timeshiftSeekWallMs = null
-        seekOpenSerial++
-        rewindSourceSeekable = false
-        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory(writerProvider = { ts.activeWriter })
+        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory { ts.activeWriter }
         val item = MediaItem.Builder()
             .setUri(
                 com.aeriotv.android.core.timeshift.TimeshiftDataSource.uriAt(
@@ -3736,14 +3682,9 @@ class AerioExoPlayerHolder @Inject constructor(
                 }
             }
         }
-        timeshiftSeekWallMs = null
-        seekOpenSerial++
-        rewindSourceSeekable = true
-        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory(
-            writerProvider = { ts.activeWriter?.takeIf { it === writer } ?: writer },
-            seekWallProvider = { timeshiftSeekWallMs },
-            onSeekOpen = { wall -> seekOpened = true; Log.i(TAG, "[REWIND] buffer reopened at $wall") },
-        )
+        val factory = com.aeriotv.android.core.timeshift.TimeshiftDataSource.Factory {
+            ts.activeWriter?.takeIf { it === writer } ?: writer
+        }
         val item = MediaItem.Builder()
             .setUri(com.aeriotv.android.core.timeshift.TimeshiftDataSource.uri(from))
             .setMediaId("live-rewind")
@@ -3786,8 +3727,6 @@ class AerioExoPlayerHolder @Inject constructor(
     fun goLive() {
         if (!isTimeshifting) return
         isTimeshifting = false
-        rewindSourceSeekable = false
-        timeshiftSeekWallMs = null
         isAdoptedLive = false
         audioOnlyInRejoinWindow = false
         timeshift.get().onGoLive()

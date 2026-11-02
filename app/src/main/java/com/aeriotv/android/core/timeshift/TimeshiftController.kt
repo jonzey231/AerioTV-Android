@@ -958,15 +958,6 @@ class TimeshiftController @Inject constructor(
         }
     }
 
-    /** Rewind moved inside the buffer on the same source: only the wall
-     *  base changes; the fillers and any takeover keep running untouched. */
-    fun onSeekWithinBuffer(atWallMs: Long) {
-        val w = activeWriter ?: return
-        _state.update {
-            it.copy(timeshifting = true, baseWallMs = atWallMs, tailWallMs = w.tailWallMs, headWallMs = w.headWallMs)
-        }
-    }
-
     /** Playback returned to the direct live stream. */
     fun onGoLive() {
         // Synchronous: the direct re-tune must not overlap the kept connection.
