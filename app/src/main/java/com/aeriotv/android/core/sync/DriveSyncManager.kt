@@ -308,10 +308,15 @@ class DriveSyncManager @Inject constructor(
             }
         }.getOrNull()
         for (category in enabled) {
-            // Drive turned off (worker cancelled): stop before the next
-            // category starts; a category already uploading commits whole.
+            // Worker cancelled (Drive turned off, or a newer push replaced
+            // this one): stop before the next category starts; a category
+            // already uploading commits whole.
             if (!kotlinx.coroutines.currentCoroutineContext().isActive) {
-                Log.i(TAG, "[DRIVE] push stopped before ${category.name}: sync cancelled (Drive turned off)")
+                val driveOn = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    runCatching { appPreferences.syncMasterEnabled.first() }.getOrDefault(false)
+                }
+                val reason = if (driveOn) "superseded by a newer push" else "sync cancelled (Drive turned off)"
+                Log.i(TAG, "[DRIVE] push stopped before ${category.name}: $reason")
                 break
             }
             val ok = runCatching { pushCategory(token, category) }

@@ -797,8 +797,18 @@ fun MainScaffold(
     // defaultLiveTVView("guide") here, which both failed to switch when the view
     // was already resolving to Guide and clobbered the Drive-synced default across
     // devices; forcing the session view instead avoids both.
+    // Deduped by request key, same as LiveTVTabContent: guideJumpRequests is
+    // replay=1 and this collector restarts whenever MAIN re-enters composition
+    // (Back from a detail or player route pushed over it), so without the key
+    // the LAST jump replayed and bounced TV Search back to Live TV (Streamer
+    // 2026-11-02: [SEARCH] restore, then tab:LiveTV -> grid:r0 on one Back).
+    // rememberSaveable survives the push/pop via the entry's saved state.
+    var consumedTabJumpKey by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(Unit) {
-        viewModel.guideJumpRequests.collect {
+        viewModel.guideJumpRequests.collect { jump ->
+            val key = "${jump.channelId}@${jump.startMillis}"
+            if (key == consumedTabJumpKey) return@collect
+            consumedTabJumpKey = key
             selectedTab = AppTab.LiveTV
             initialTabApplied = true
         }

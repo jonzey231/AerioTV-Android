@@ -1573,14 +1573,22 @@ fun <T> TvMediaPage(
             if (railVisible) railShownState.value = true
             else { kotlinx.coroutines.delay(200); if (!railVisible) railShownState.value = false }
         }
+        // Fit the rail to the page's measured height. 27 fixed 16 dp cells
+        // (432 dp) centered 40 dp below the middle end at H / 2 + 256 dp, so
+        // any page shorter than 512 dp clipped the last letters. Cells shrink
+        // to fit and the downward offset gives way first.
+        androidx.compose.foundation.layout.BoxWithConstraints(modifier = Modifier.matchParentSize()) {
+        val railCell = minOf(16.dp, (maxHeight - 8.dp) / TV_RAIL_LETTER_COUNT).coerceAtLeast(8.dp)
+        val railOffset = minOf(40.dp, ((maxHeight - railCell * TV_RAIL_LETTER_COUNT) / 2 - 4.dp).coerceAtLeast(0.dp))
         TvRailSlot(
             visible = { railShownState.value },
             // tvOS parks the rail 80 pt (40 dp) BELOW vertical centre: the eye
             // reads it against the poster rows, which start below the top edge
             // (MoviesView.swift:2143-2151).
-            modifier = Modifier.align(Alignment.CenterStart).offset(y = 40.dp),
+            modifier = Modifier.align(Alignment.CenterStart).offset(y = railOffset),
         ) {
             TvAlphabetRail(
+                cell = railCell,
                 available = railLetters,
                 hashRequester = railHash,
                 onFocusChanged = { railHasFocusState.value = it },
@@ -1612,6 +1620,7 @@ fun <T> TvMediaPage(
                 onExitUp = { runCatching { entry.requestFocus() } },
                 modifier = Modifier.padding(start = 17.dp),
             )
+        }
         }
     }
     }
@@ -2327,8 +2336,12 @@ data class TvRecordingBadge(
  * letter on an accent-25% disc with a white ring; unavailable letters at
  * 35% of the tertiary text color. Entering seats on #, Right leaves.
  */
+private const val TV_RAIL_LETTER_COUNT = 27
+
 @Composable
 private fun TvAlphabetRail(
+    /** Cell size: 16 dp, smaller when the page is too short for 27 of them. */
+    cell: androidx.compose.ui.unit.Dp,
     available: Set<Char>,
     /** Hoisted so Left from a first-column grid cell can aim at it. */
     hashRequester: FocusRequester,
@@ -2357,7 +2370,7 @@ private fun TvAlphabetRail(
             val isAvailable = letter in available
             Box(
                 modifier = Modifier
-                    .size(16.dp)
+                    .size(cell)
                     .then(if (letter == '#') Modifier.focusRequester(hash) else Modifier)
                     .clip(CircleShape)
                     .background(if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color.Transparent)
@@ -2388,7 +2401,8 @@ private fun TvAlphabetRail(
                 // overflow its 16 dp cell and sit below the ring (Logan
                 // 2026-09-10).
                 Text(
-                    letter.toString(), fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold,
+                    letter.toString(),
+                    fontSize = (10f * cell.value / 16f).sp, lineHeight = (12f * cell.value / 16f).sp, fontWeight = FontWeight.SemiBold,
                     color = when {
                         focused -> Color.White
                         isAvailable -> MaterialTheme.colorScheme.onSurfaceVariant

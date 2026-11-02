@@ -148,12 +148,14 @@ class SearchViewModel @Inject constructor(
                 compareByDescending<EPGProgramme> { now in it.startMillis until it.endMillis }
                     .thenBy { it.startMillis },
             )
-            .take(30)
             .map { prog ->
-                // Cached programmes already carry the canonical guideMatchKey as
-                // channelId (bridgeChannelIds runs at fetch), so a plain map hit
-                // resolves the channel for name + logo.
+                // Cached rows may carry either the canonical key or the raw feed
+                // key (tvg-id or uuid), so a canonical miss falls back to the
+                // guide's own match maps (Streamer 2026-11-02: live results had
+                // no channel and opened the guide instead of playing).
                 val ch = channels[prog.channelId.trim().lowercase()]
+                    ?: matchMaps(playlistId).resolve(prog.channelId).firstOrNull()
+                        ?.let { channels[it.value.trim().lowercase()] }
                 Result.Epg(
                     programme = prog,
                     channelName = ch?.name?.takeIf { it.isNotBlank() },
@@ -161,6 +163,19 @@ class SearchViewModel @Inject constructor(
                     channelRowId = ch?.id,
                 )
             }
+            // The same airing can be cached under more than one raw key; show it once.
+            .distinctBy { Triple(it.channelRowId ?: it.programme.channelId, it.programme.startMillis, it.programme.title) }
+            .take(30)
+    }
+
+    private var matchMapsCache: Pair<String, com.aeriotv.android.core.guide.GuideMatchMaps>? = null
+    private suspend fun matchMaps(playlistId: String): com.aeriotv.android.core.guide.GuideMatchMaps {
+        matchMapsCache?.let { (cachedId, maps) -> if (cachedId == playlistId) return maps }
+        val channels = runCatching { playlistRepository.loadCachedChannels(playlistId) }
+            .getOrDefault(emptyList())
+        val maps = com.aeriotv.android.core.guide.GuideMatchMaps.build(channels)
+        matchMapsCache = playlistId to maps
+        return maps
     }
 
     /** Channel lookup by canonical [guideMatchKey], cached per playlist so

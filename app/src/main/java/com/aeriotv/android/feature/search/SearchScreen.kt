@@ -101,6 +101,7 @@ fun SearchScreen(
     BackHandler { onBack() }
 
     val fieldFocus = remember { FocusRequester() }
+    val chipFocus = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     // GH #162: restore the list position and the opened row's focus when the
     // screen comes back from a detail or player route.
@@ -151,7 +152,11 @@ fun SearchScreen(
                         if (event.type == KeyEventType.KeyDown &&
                             event.key == Key.DirectionDown
                         ) {
-                            focusManager.moveFocus(FocusDirection.Down)
+                            // Land on the selected scope chip: a plain moveFocus
+                            // skipped the chip row and dropped into the results
+                            // (Streamer 2026-11-02), leaving scope unreachable.
+                            runCatching { chipFocus.requestFocus() }.isSuccess ||
+                                focusManager.moveFocus(FocusDirection.Down)
                         } else {
                             false
                         }
@@ -171,6 +176,7 @@ fun SearchScreen(
                     label = scope.label,
                     selected = scope == state.scope,
                     onClick = { viewModel.onScopeChange(scope) },
+                    focusRequester = if (scope == state.scope) chipFocus else null,
                 )
             }
         }
@@ -227,7 +233,12 @@ fun SearchScreen(
 }
 
 @Composable
-private fun ScopeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun ScopeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
+) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     Text(
@@ -235,6 +246,7 @@ private fun ScopeChip(label: String, selected: Boolean, onClick: () -> Unit) {
         style = MaterialTheme.typography.labelLarge,
         color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clip(RoundedCornerShape(50))
             .background(
                 if (selected) MaterialTheme.colorScheme.primary
