@@ -804,14 +804,25 @@ fun MainScaffold(
     // 2026-11-02: [SEARCH] restore, then tab:LiveTV -> grid:r0 on one Back).
     // rememberSaveable survives the push/pop via the entry's saved state.
     var consumedTabJumpKey by rememberSaveable { mutableStateOf("") }
+    // GH #162 (Streamer 2026-11-02): a guide jump out of TV Search left Search
+    // off the back path, so Back on the guide raised Exit AerioTV?. Back after
+    // such a jump returns to Search instead; any other tab change drops it.
+    var backToSearch by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.guideJumpRequests.collect { jump ->
             val key = "${jump.channelId}@${jump.startMillis}"
             if (key == consumedTabJumpKey) return@collect
             consumedTabJumpKey = key
+            backToSearch = selectedTab == AppTab.Search
             selectedTab = AppTab.LiveTV
             initialTabApplied = true
         }
+    }
+    LaunchedEffect(selectedTab) { if (selectedTab != AppTab.LiveTV) backToSearch = false }
+    androidx.activity.compose.BackHandler(enabled = backToSearch && selectedTab == AppTab.LiveTV) {
+        android.util.Log.i("AerioSearch", "[SEARCH] back from guide jump -> Search")
+        backToSearch = false
+        selectedTab = AppTab.Search
     }
 
     // Companion remote X (GH #33). Popping the player back to MAIN is only
@@ -2421,7 +2432,9 @@ private fun MainTabContent(
                     // GH #162: a live result plays its channel (Shield report:
                     // every channel result landed on the guide instead).
                     onPlayChannel = { id ->
-                        viewModel.state.value.channels.firstOrNull { it.id == id }?.let(onChannelClick)
+                        val ch = viewModel.state.value.channels.firstOrNull { it.id == id }
+                        if (ch != null) onChannelClick(ch)
+                        else android.util.Log.w("AerioSearch", "[SEARCH] live result: channel not in the loaded list")
                     },
                     onMovieClick = onMovieClick,
                     onSeriesClick = onSeriesClick,

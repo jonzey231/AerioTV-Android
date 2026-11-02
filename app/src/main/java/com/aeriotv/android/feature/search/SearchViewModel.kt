@@ -163,8 +163,10 @@ class SearchViewModel @Inject constructor(
                     channelRowId = ch?.id,
                 )
             }
-            // The same airing can be cached under more than one raw key; show it once.
-            .distinctBy { Triple(it.channelRowId ?: it.programme.channelId, it.programme.startMillis, it.programme.title) }
+            // The same airing can be cached under more than one raw key (the
+            // canonical disp: id and a numeric feed key, measured on the
+            // Streamer 2026-11-02); show it once per channel and start time.
+            .distinctBy { (it.channelRowId ?: it.programme.channelId) to it.programme.startMillis }
             .take(30)
     }
 
@@ -174,7 +176,9 @@ class SearchViewModel @Inject constructor(
         val channels = runCatching { playlistRepository.loadCachedChannels(playlistId) }
             .getOrDefault(emptyList())
         val maps = com.aeriotv.android.core.guide.GuideMatchMaps.build(channels)
-        matchMapsCache = playlistId to maps
+        // Never pin an empty read: a search typed before the channel cache
+        // landed kept every result unnamed and unplayable for the VM's life.
+        if (channels.isNotEmpty()) matchMapsCache = playlistId to maps
         return maps
     }
 
@@ -187,8 +191,12 @@ class SearchViewModel @Inject constructor(
         val channels = runCatching { playlistRepository.loadCachedChannels(playlistId) }
             .getOrDefault(emptyList())
         val map = LinkedHashMap<String, M3UChannel>(channels.size * 2)
-        for (ch in channels) map.putIfAbsent(ch.guideMatchKey.trim().lowercase(), ch)
-        channelKeyCache = playlistId to map
+        for (ch in channels) {
+            map.putIfAbsent(ch.guideMatchKey.trim().lowercase(), ch)
+            // Row id too: a cached programme may carry it directly.
+            map.putIfAbsent(ch.id.trim().lowercase(), ch)
+        }
+        if (channels.isNotEmpty()) channelKeyCache = playlistId to map
         return map
     }
 
