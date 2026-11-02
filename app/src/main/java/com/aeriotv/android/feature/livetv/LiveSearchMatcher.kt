@@ -90,3 +90,7 @@ internal fun searchMatchWhen(p: EPGProgramme, nowMillis: Long): String {
     }
     return "$day $time"
 }
+
+/** Program-only search matches for the guide rail, keyed by channel url. */
+internal val LocalGuideSearchMatches =
+    androidx.compose.runtime.staticCompositionLocalOf<Map<String, EPGProgramme>> { emptyMap() }

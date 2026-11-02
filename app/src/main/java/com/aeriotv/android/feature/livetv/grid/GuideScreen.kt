@@ -356,8 +356,8 @@ fun GuideScreen(
     // Program search (Logan 2026-11-01): phones and tablets also match
     // program titles from the loaded guide map; TV keeps its Search tab.
     val searchEpg = if (isTv) null else state.epgByChannel
-    val groupedChannels by produceState(
-        initialValue = computeDisplayChannels(
+    val guideSearch by produceState(
+        initialValue = com.aeriotv.android.feature.livetv.computeLiveSearch(
             state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
             allGroupNames, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
         ),
@@ -371,9 +371,10 @@ fun GuideScreen(
                 state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
                 allGroupNames, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
                 searchEpg,
-            ).channels
+            )
         }
     }
+    val groupedChannels = guideSearch.channels
     // favoritesOnly: the starred channels in the user's favorites order,
     // joined against the loaded playlist so stale rows fall away.
     val favoriteChannels = remember(favoritesList, state.channels) {
@@ -1534,6 +1535,8 @@ fun GuideScreen(
             val gridContent: @Composable () -> Unit = {
             androidx.compose.runtime.CompositionLocalProvider(
                 com.aeriotv.android.core.category.LocalCategoryPalette provides categoryPalette,
+                com.aeriotv.android.feature.livetv.LocalGuideSearchMatches provides
+                    if (favoritesOnly) emptyMap() else guideSearch.programMatches,
             ) {
             GuideGrid(
                 state = grid,
