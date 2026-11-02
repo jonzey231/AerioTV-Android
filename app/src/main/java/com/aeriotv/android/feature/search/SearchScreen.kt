@@ -49,7 +49,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -258,7 +257,7 @@ private fun ScopeChip(
         color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
+            .then(if (upTarget != null) Modifier.upTo(upTarget) else Modifier)
             .clip(RoundedCornerShape(50))
             .background(
                 if (selected) MaterialTheme.colorScheme.primary
@@ -306,7 +305,7 @@ private fun ResultRow(
                 else Modifier,
             )
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .then(if (upTarget != null) Modifier.focusProperties { up = upTarget } else Modifier)
+            .then(if (upTarget != null) Modifier.upTo(upTarget) else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -461,3 +460,13 @@ private fun CenterMessage(icon: ImageVector, title: String, subtitle: String? = 
 }
 
 private fun timeFmt() = com.aeriotv.android.core.ui.ClockFormat.short()
+
+/**
+ * D-pad Up moves to [target]. Explicit key handling, not focusProperties: on
+ * the TV shell the content group's exit redirect won over a custom Up target
+ * and sent the first result row to the nav bar (Streamer 2026-11-02).
+ */
+private fun Modifier.upTo(target: FocusRequester): Modifier = onPreviewKeyEvent { e ->
+    e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp &&
+        runCatching { target.requestFocus() }.isSuccess
+}
