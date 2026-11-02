@@ -68,19 +68,17 @@ class GithubUpdateManager @Inject constructor(
     override val state: StateFlow<UpdateState> = _state.asStateFlow()
 
     /**
-     * GitHub-channel eligibility, decided by SIGNING CERT (authoritative):
-     * a build signed with the release/upload key is the sideload lineage and
-     * can install GitHub APKs. The installer package is only a denylist --
-     * Play-installed copies (re-signed by Play App Signing, so the cert check
-     * would fail anyway) must never see the updater for policy reasons, and
-     * file-manager sideloads report misleading installer names so an
-     * allowlist would self-disable.
+     * GitHub-channel eligibility, decided by the SIGNING CERT only (GH #152,
+     * see [UpdaterGate]). A Play delivery is re-signed by Play App Signing,
+     * so it never matches and never sees GitHub updates; a GitHub-signed APK
+     * provisioned with `adb install -i com.android.vending` still updates.
      */
     override val isEnabled: Boolean by lazy {
-        if (!BuildConfig.UPDATER_ENABLED) return@lazy false
         val installer = installingPackageName()
-        if (installer == "com.android.vending") return@lazy false
-        ownSignerSha256().contains(UPLOAD_KEY_SHA256)
+        val signers = ownSignerSha256()
+        UpdaterGate.isEligible(BuildConfig.UPDATER_ENABLED, installer, signers).also {
+            Log.i(TAG, "updater gate: enabled=$it installer=${installer ?: "none"} githubSigner=${UPLOAD_KEY_SHA256 in signers}")
+        }
     }
 
     /** First auto-check of this process bypasses the 12h throttle. */
@@ -360,12 +358,21 @@ class GithubUpdateManager @Inject constructor(
         if (expectedSize != null && file.length() != expectedSize) {
             return fail("The download is incomplete (size mismatch). Try again.")
         }
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            PackageManager.GET_SIGNING_CERTIFICATES
-        } else {
-            @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
+        // GH #142 (Fire HD 10, Android 9): the archive read came back without
+        // signingInfo. On API 28 the archive path of PackageParser does not
+        // fill signingInfo for GET_SIGNING_CERTIFICATES, while GET_SIGNATURES
+        // still runs the platform ApkSignatureVerifier and fills signatures.
+        // Ask for both there and let signerSha256 fall back. Pass the
+        // canonical path: some Fire OS builds reject the /data/user/0 alias.
+        val flags = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> PackageManager.GET_SIGNING_CERTIFICATES
+            Build.VERSION.SDK_INT == Build.VERSION_CODES.P ->
+                @Suppress("DEPRECATION")
+                (PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES)
+            else -> @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
         }
-        val archive = context.packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+        val path = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+        val archive = context.packageManager.getPackageArchiveInfo(path, flags)
             ?: return fail("The downloaded file is not a readable APK.")
         if (archive.packageName != context.packageName) {
             return fail("The downloaded APK is not AerioTV (${archive.packageName}).")
@@ -379,6 +386,7 @@ class GithubUpdateManager @Inject constructor(
             )
         }
         val archiveSigners = signerSha256(archive)
+        Log.i(TAG, "verify: api=${Build.VERSION.SDK_INT} signingInfo=${archive.signingInfoOrNull() != null} signers=${archiveSigners.size}")
         if (archiveSigners.isEmpty()) {
             return fail("Could not read the APK's signing certificate.")
         }
@@ -467,14 +475,17 @@ class GithubUpdateManager @Inject constructor(
         signerSha256(context.packageManager.getPackageInfo(context.packageName, flags))
     }.getOrDefault(emptySet())
 
+    private fun PackageInfo.signingInfoOrNull() =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) signingInfo else null
+
     private fun signerSha256(pkg: PackageInfo): Set<String> {
-        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val signingInfo = pkg.signingInfo ?: return emptySet()
-            if (signingInfo.hasMultipleSigners()) signingInfo.apkContentsSigners
-            else signingInfo.signingCertificateHistory
-        } else {
-            @Suppress("DEPRECATION") pkg.signatures
-        } ?: return emptySet()
+        // signingInfo first (API 28+); the legacy signatures array when it is
+        // null, which is the API 28 archive case (GH #142).
+        val fromInfo = pkg.signingInfoOrNull()?.let { info ->
+            if (info.hasMultipleSigners()) info.apkContentsSigners else info.signingCertificateHistory
+        }
+        @Suppress("DEPRECATION")
+        val signatures = fromInfo?.takeIf { it.isNotEmpty() } ?: pkg.signatures ?: return emptySet()
         val digest = MessageDigest.getInstance("SHA-256")
         return signatures.map { sig ->
             digest.digest(sig.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -490,7 +501,7 @@ class GithubUpdateManager @Inject constructor(
         /** SHA-256 of the release/upload signing certificate (the cert on
          *  every GitHub release APK). Builds signed with anything else --
          *  debug, or Play's re-signed deliveries -- are not this lineage. */
-        private const val UPLOAD_KEY_SHA256 =
+        internal const val UPLOAD_KEY_SHA256 =
             "ab94078f621e6b65b75d1bf1f49a1b2fd657cc6629eb4729cae5e74d280df005"
     }
 }
