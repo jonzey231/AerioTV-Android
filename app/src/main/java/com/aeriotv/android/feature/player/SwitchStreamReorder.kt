@@ -50,6 +50,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.util.Log
 import com.aeriotv.android.core.pip.isTelevision
+import com.aeriotv.android.ui.tv.pickUpKeys
+import com.aeriotv.android.ui.tv.pickUpLift
 
 /**
  * Switch Stream rows for Dispatcharr ADMINS: the same radio rows, plus a way
@@ -186,11 +188,7 @@ internal fun ReorderableStreamList(
                     .fillMaxWidth()
                     .height(androidx.compose.foundation.layout.IntrinsicSize.Min)
                     .padding(vertical = 3.dp)
-                    .graphicsLayer {
-                        val sc = if (lifted) 1.03f else 1f
-                        scaleX = sc; scaleY = sc
-                        alpha = if (dimmed) 0.5f else 1f
-                    },
+                    .pickUpLift(lifted, dimmed),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
@@ -208,29 +206,12 @@ internal fun ReorderableStreamList(
                         )
                         .dpadFocusRing(shape, washTint = MaterialTheme.colorScheme.primary)
                         .focusRequester(rowFocus)
-                        .onPreviewKeyEvent { event ->
-                            if (lifted) {
-                                // Lifted: Up/Down move (hold repeats via the
-                                // system key repeat), OK places, Back cancels;
-                                // everything else is swallowed so focus and
-                                // the sheet stay put.
-                                val down = event.type == KeyEventType.KeyDown
-                                when (event.key) {
-                                    Key.DirectionUp -> { if (down) movePickUp(-1) }
-                                    Key.DirectionDown -> { if (down) movePickUp(1) }
-                                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                                        if (event.type == KeyEventType.KeyUp) {
-                                            if (swallowOkUp) swallowOkUp = false else dropPickUp()
-                                        }
-                                    }
-                                    Key.Back, Key.Escape -> { if (!down) cancelPickUp() }
-                                    else -> Unit
-                                }
-                                true
-                            } else {
-                                false
-                            }
-                        }
+                        .pickUpKeys(
+                            lifted = lifted,
+                            onMove = { movePickUp(it) },
+                            onOkUp = { if (swallowOkUp) swallowOkUp = false else dropPickUp() },
+                            onCancel = { cancelPickUp() },
+                        )
                         .onFocusChanged {
                             rowFocused = it.isFocused
                             if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("switch:row$index")

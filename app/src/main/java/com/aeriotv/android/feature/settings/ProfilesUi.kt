@@ -3,6 +3,10 @@ package com.aeriotv.android.feature.settings
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import android.util.Log
+import com.aeriotv.android.ui.tv.pickUpKeys
+import com.aeriotv.android.ui.tv.pickUpLift
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import com.aeriotv.android.ui.tv.tvFocusScale
 import androidx.compose.foundation.clickable
@@ -195,6 +199,7 @@ class ProfilesViewModel @Inject constructor(
     fun rename(profileId: String, name: String) = manager.rename(profileId, name)
     fun move(playlistId: String, profileId: String, how: com.aeriotv.android.core.profiles.ProfileManager.Move) =
         manager.move(playlistId, profileId, how)
+    fun setOrder(playlistId: String, orderedIds: List<String>) = manager.setOrder(playlistId, orderedIds)
     fun setAvatar(playlistId: String, profileId: String, avatar: com.aeriotv.android.core.profiles.AvatarSpec) =
         manager.setAvatar(playlistId, profileId, avatar)
     fun canEditAvatar(playlistId: String, profileId: String) =
@@ -550,6 +555,51 @@ fun ProfilesSection(playlistId: String) {
     var removeAdminPinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     val scope = rememberCoroutineScope()
 
+    // TV pick-up reorder (Admin or Standard, the same gate the old Move Up /
+    // Move Down rows had): hold Select lifts a row, Up/Down move it, OK
+    // places and saves the full order once, Back restores. Rows flow
+    // vertically, so only Up/Down move.
+    val canReorderTv = isTv && profiles.size > 1 && vm.isRoleAdmin(playlistId)
+    val pick = remember { com.aeriotv.android.feature.player.PickUpReorder(profiles) }
+    var liftedId by remember { mutableStateOf<String?>(null) }
+    var liftOrder by remember { mutableStateOf(profiles) }
+    // The long press lifts while OK is still held; its KeyUp must not place.
+    var swallowOkUp by remember { mutableStateOf(false) }
+    LaunchedEffect(profiles, liftedId) {
+        if (liftedId == null) { pick.reset(profiles); liftOrder = profiles }
+    }
+    val shown = if (liftedId != null) liftOrder else profiles
+    fun startPickUp(p: DispatcharrProfile) {
+        if (busy || liftedId != null) return
+        pick.reset(profiles)
+        if (!pick.start(profiles.indexOfFirst { it.id == p.id })) return
+        swallowOkUp = true
+        liftOrder = pick.order
+        liftedId = p.id
+        Log.i("ProfilesUi", "[PROFILES] pick-up start from=${pick.fromIndex}")
+    }
+    fun movePickUp(delta: Int) { if (pick.move(delta)) liftOrder = pick.order }
+    fun dropPickUp() {
+        val d = pick.drop() ?: return
+        liftOrder = d.order
+        liftedId = null
+        Log.i("ProfilesUi", "[PROFILES] pick-up drop id=${d.from} from=${d.from} to=${d.to} save=${d.changed}")
+        if (d.changed) {
+            status = vm.setOrder(playlistId, d.order.map { it.id }).exceptionOrNull()?.message
+        } else {
+            // Placed where it started: nothing is saved, and the row's
+            // actions open (the TV long press used to open them).
+            actionsFor = d.item
+        }
+    }
+    fun cancelPickUp() {
+        if (liftedId == null) return
+        val from = pick.cancel()
+        liftOrder = pick.order
+        liftedId = null
+        Log.i("ProfilesUi", "[PROFILES] pick-up cancel from=$from")
+    }
+
     fun doSwitch(p: DispatcharrProfile) {
         busy = true; status = null
         com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Guide)
@@ -576,12 +626,44 @@ fun ProfilesSection(playlistId: String) {
 
     Column {
         SettingsSectionHeader("Profiles")
+        if (canReorderTv) {
+            // Same hint pattern as the TV Switch Stream sheet subtitle.
+            Text(
+                text = if (liftedId != null) "Up / Down to move, OK to place, Back to cancel" else "Long press to select and reorder",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+            )
+        }
         SettingsCard {
-            profiles.forEach { p ->
+            shown.forEachIndexed { index, p ->
+              androidx.compose.runtime.key(p.id) {
+                val fr = rowFocus.getOrPut(p.id) { androidx.compose.ui.focus.FocusRequester() }
+                val lifted = liftedId == p.id
+                val dimmed = liftedId != null && !lifted
+                val bring = remember(p.id) { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+                // Focus and scroll follow the lifted row after every move.
+                LaunchedEffect(lifted, index) {
+                    if (lifted) {
+                        runCatching { fr.requestFocus() }
+                        runCatching { bring.bringIntoView() }
+                    }
+                }
+                val liftShape = RoundedCornerShape(12.dp)
                 ProfileRow(
                     profile = p,
                     locked = vm.hasPin(p.id),
-                    modifier = Modifier.focusRequester(rowFocus.getOrPut(p.id) { androidx.compose.ui.focus.FocusRequester() }),
+                    modifier = Modifier
+                        .pickUpLift(lifted, dimmed)
+                        .bringIntoViewRequester(bring)
+                        .then(if (lifted) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, liftShape) else Modifier)
+                        .pickUpKeys(
+                            lifted = lifted,
+                            onMove = { movePickUp(it) },
+                            onOkUp = { if (swallowOkUp) swallowOkUp = false else dropPickUp() },
+                            onCancel = { cancelPickUp() },
+                        )
+                        .focusRequester(fr),
                     isActive = p.id == activeId,
                     onClick = {
                         if (busy) return@ProfileRow
@@ -593,8 +675,14 @@ fun ProfilesSection(playlistId: String) {
                         else if (vm.isPlaying()) confirmSwitch = p
                         else doSwitch(p)
                     },
-                    onLongClick = { if (!busy) actionsFor = p },
-                    trailing = if (isTv) null else {
+                    onLongClick = { if (busy) Unit else if (canReorderTv) startPickUp(p) else actionsFor = p },
+                    trailing = if (isTv) {
+                        if (lifted) {
+                            {
+                                Text("Moving", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        } else null
+                    } else {
                         {
                             Spacer(Modifier.size(4.dp))
                             Icon(
@@ -610,6 +698,7 @@ fun ProfilesSection(playlistId: String) {
                         }
                     },
                 )
+              }
             }
             if (isAdmin) {
                 var focused by remember { mutableStateOf(false) }
@@ -697,14 +786,16 @@ fun ProfilesSection(playlistId: String) {
                         if (!com.aeriotv.android.core.profiles.ProfileRole.isServerAdmin(p.userLevel)) {
                             ChoiceRow(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
                         }
-                        val at = profiles.indexOfFirst { it.id == p.id }
+                        // TV reorders by pick-up (long press on the row); phones
+                        // and tablets keep Move Up / Move Down here.
+                        val at = if (isTv) -1 else profiles.indexOfFirst { it.id == p.id }
                         fun moveRow(how: com.aeriotv.android.core.profiles.ProfileManager.Move) {
                             actionsFor = null
                             status = vm.move(playlistId, p.id, how).exceptionOrNull()?.message
                             scope.launch { rowFocus[p.id]?.let { restoreFocus(it, "profile row after move") } }
                         }
-                        if (at > 0) ChoiceRow(label = "Move Up", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
-                        if (at in 0 until profiles.lastIndex) ChoiceRow(label = "Move Down", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Later) })
+                        if (!isTv && at > 0) ChoiceRow(label = "Move Up", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
+                        if (!isTv && at in 0 until profiles.lastIndex) ChoiceRow(label = "Move Down", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Later) })
                     }
                     if (vm.canEditAvatar(playlistId, p.id)) {
                         ChoiceRow(label = "Avatar", onClick = { actionsFor = null; avatarFor = p })

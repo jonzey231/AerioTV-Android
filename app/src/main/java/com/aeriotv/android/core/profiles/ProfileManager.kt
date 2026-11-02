@@ -1146,11 +1146,33 @@ class ProfileManager @Inject constructor(
         if (to == from && list.all { it.order >= 0 }) return@runCatching from
         val p = list.removeAt(from)
         list.add(to, p)
+        commitOrder(playlistId, list)
+        Log.i(TAG, "[PROFILE] moved ${p.username} $from -> $to on ${playlistId.take(8)}")
+        to
+    }
+
+    /**
+     * Admin reorder with the FULL new order (TV pick-up place). Same role
+     * check, store write, and per-row "order" stamps as [move], so sync,
+     * tombstones, and roster rules see exactly what a run of single moves
+     * would produce. Returns true when anything was written.
+     */
+    fun setOrder(playlistId: String, orderedIds: List<String>): Result<Boolean> = runCatching {
+        check(RoleRules.isFullAccess(activeRole(playlistId))) { "Only an Admin or Standard profile can reorder profiles." }
+        val current = store.forPlaylist(playlistId)
+        val ids = ProfileOrder.resolve(current.map { it.id }, orderedIds)
+        if (ids == current.map { it.id } && current.all { it.order >= 0 }) return@runCatching false
+        val byId = current.associateBy { it.id }
+        commitOrder(playlistId, ids.mapNotNull { byId[it] })
+        Log.i(TAG, "[PROFILE] set order n=${ids.size} on ${playlistId.take(8)}")
+        true
+    }
+
+    /** Persist [list] as the playlist's order and stamp every row whose position changed. */
+    private fun commitOrder(playlistId: String, list: List<DispatcharrProfile>) {
         val before = list.associate { it.id to it.order }
         store.setOrder(playlistId, list.map { it.id })
         list.forEachIndexed { i, q -> if (before[q.id] != i) mutated(q.id, "order") }
-        Log.i(TAG, "[PROFILE] moved ${p.username} $from -> $to on ${playlistId.take(8)}")
-        to
     }
 
     fun rename(profileId: String, name: String) {
