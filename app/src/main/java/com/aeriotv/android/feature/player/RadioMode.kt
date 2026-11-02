@@ -89,8 +89,12 @@ object RadioMode {
         val holder = e.exoPlayerHolder()
         _state.value = Session(channel)
         startedAtMs = android.os.SystemClock.uptimeMillis()
-        holder.radioVideoOff = true
-        holder.setVideoTrackEnabled(false)
+        // Streamer 2026-11-01 19:05:03: disabling the video track in place
+        // destroyed the HEVC decoder while AC-3 kept running and the vendor
+        // codec HAL crashed. The holder stops, waits for the decoder release,
+        // and re-prepares audio-only instead (sequential teardown).
+        val wall = if (holder.isTimeshifting) runCatching { positionWallMs(context) }.getOrNull() else null
+        holder.enterRadioModeOnPlaying(wall)
         e.exoWindowState().hide()
         if (com.aeriotv.android.core.pip.PipState.nowPlayingTitle != channel.name) notifyNowPlaying(channel, "")
         Log.i(TAG, "[RADIO] start ${channel.name}")

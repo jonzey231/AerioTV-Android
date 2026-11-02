@@ -37,6 +37,7 @@ import java.util.concurrent.TimeUnit
 import com.aeriotv.android.BuildConfig
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Media3 ExoPlayer holder mirroring [MPVPlayerHolder]'s lifetime contract.
@@ -2038,6 +2040,129 @@ class AerioExoPlayerHolder @Inject constructor(
         return rebuildPlayerAndSurface(reason)
     }
 
+    // ---- Vendor codec HAL death (Streamer 2026-11-01) ----------------------
+
+    private val halRecovery = CodecHalRecovery { SystemClock.elapsedRealtime() }
+
+    /** True from a Radio Mode start on a playing channel until its audio-only
+     *  re-prepare is issued; a HAL death in that window completes as radio. */
+    @Volatile private var radioStartInFlight = false
+
+    /** elapsedRealtime the current HAL rebuild started, 0 when none. */
+    private var halRebuildStartedAtMs = 0L
+    private var halRebuildMode: CodecHalRecovery.Mode? = null
+    private var halRebuildJob: Job? = null
+
+    /** Completed by the analytics listener when a decoder is released. */
+    @Volatile private var decoderReleaseSignal: CompletableDeferred<Unit>? = null
+
+    /** stop() the player and wait for its decoders to be released (Media3
+     *  decoder-released callback, bounded by [DECODER_RELEASE_WAIT_MS]), so
+     *  the vendor HAL finishes one teardown before the next codec work. */
+    private suspend fun stopAndAwaitDecoderRelease(p: androidx.media3.exoplayer.ExoPlayer): Long {
+        val t0 = SystemClock.elapsedRealtime()
+        val signal = CompletableDeferred<Unit>()
+        decoderReleaseSignal = signal
+        // A deliberate stop: the stall watchdog must not read the gap as a wedge.
+        hasReachedPlaybackRestart = false
+        val staleCalls = takeLiveCallTrackers()
+        p.stop()
+        retireLiveCalls(p, staleCalls)
+        withTimeoutOrNull(DECODER_RELEASE_WAIT_MS) { signal.await() }
+        decoderReleaseSignal = null
+        return SystemClock.elapsedRealtime() - t0
+    }
+
+    private fun isCodecHalDeath(error: PlaybackException): Boolean =
+        error.errorCode == PlaybackException.ERROR_CODE_DECODING_RESOURCES_RECLAIMED ||
+            generateSequence(error as Throwable?) { it.cause }.any {
+                it is android.media.MediaCodec.CodecException &&
+                    (it.errorCode == CodecHalRecovery.DEAD_OBJECT ||
+                        it.message?.contains("0xffffffe0", ignoreCase = true) == true ||
+                        it.message?.contains("DEAD_OBJECT", ignoreCase = true) == true)
+            }
+
+    /**
+     * Radio Mode start on a channel that is already playing. Disabling the
+     * video track in place destroyed c2.mtk.hevc.decoder while the AC-3
+     * decoder kept running, and the MediaTek HAL died 8 ms later (Streamer
+     * 2026-11-01 19:05:03). Instead: stop (both decoders released), wait for
+     * the release, then re-prepare the same URL audio-only. A prime that was
+     * already built with the Radio policy (a menu start that just tuned) is
+     * left alone.
+     */
+    fun enterRadioModeOnPlaying(timeshiftWallMs: Long?) {
+        val p = player ?: return
+        radioVideoOff = true
+        if (radioPolicyGeneration == primeGeneration || p.playbackState == Player.STATE_IDLE ||
+            isCatchup || lastPlayUrl == null
+        ) {
+            setVideoTrackEnabled(false)
+            return
+        }
+        val wall = if (isTimeshifting) timeshiftWallMs else null
+        radioStartInFlight = true
+        watchdogScope.launch {
+            val ms = stopAndAwaitDecoderRelease(p)
+            Log.i(TAG, "[CODEC] Radio Mode start: decoders released +${ms}ms; re-preparing audio-only ch=$currentChannelId")
+            try {
+                if (player !== p || !radioVideoOff) return@launch
+                setVideoTrackEnabled(false)
+                if (isTimeshifting && wall != null) playTimeshift(wall) else reprimeSameUrl("Radio Mode start")
+            } finally {
+                radioStartInFlight = false
+            }
+        }
+    }
+
+    /** Generation of the last prime built with the Radio Mode policy. */
+    @Volatile private var radioPolicyGeneration = -1L
+
+    /**
+     * HAL death recovery: settle, then rebuild in the mode that was active
+     * (video stays video, radio stays radio, an in-flight Radio Mode start
+     * completes as radio). No surface or window rebuild: the surface is
+     * intact, only the HAL process was replaced. Returns false when the cap
+     * is spent (caller surfaces unavailable).
+     */
+    private fun rebuildAfterHalDeath(): Boolean {
+        if (lastPlayUrl == null) return false
+        val p = player ?: return false
+        val inFlight = radioStartInFlight
+        return when (val d = halRecovery.decide(radioVideoOff, inFlight)) {
+            is CodecHalRecovery.Decision.CapReached -> {
+                Log.w(TAG, "[CODEC] hal rebuild cap reached (${d.rebuildsInWindow} in ${CodecHalRecovery.WINDOW_MS / 1000}s); surfacing unavailable")
+                false
+            }
+            is CodecHalRecovery.Decision.Rebuild -> {
+                Log.w(TAG, "[CODEC] codec HAL died (pid change expected); rebuilding in ${d.mode.logName} mode after settle")
+                tracer.recover("codec HAL died; rebuilding in ${d.mode.logName} mode attempt=${d.attempt}")
+                halRebuildJob?.cancel()
+                halRebuildStartedAtMs = SystemClock.elapsedRealtime()
+                halRebuildMode = d.mode
+                halRebuildJob = watchdogScope.launch {
+                    stopAndAwaitDecoderRelease(p)
+                    Log.i(TAG, "[CODEC] hal settle ${d.settleMs}ms")
+                    delay(d.settleMs)
+                    if (player !== p || lastPlayUrl == null) return@launch
+                    if (d.mode == CodecHalRecovery.Mode.RADIO) radioVideoOff = true
+                    setVideoTrackEnabled(d.mode == CodecHalRecovery.Mode.VIDEO)
+                    radioStartInFlight = false
+                    reprimeSameUrl("codec HAL rebuild (${d.mode.logName})")
+                }
+                true
+            }
+        }
+    }
+
+    private fun noteHalRebuildReady() {
+        val t0 = halRebuildStartedAtMs
+        if (t0 == 0L) return
+        halRebuildStartedAtMs = 0L
+        Log.i(TAG, "[CODEC] rebuilt in ${halRebuildMode?.logName} +${SystemClock.elapsedRealtime() - t0}ms")
+        halRebuildMode = null
+    }
+
     /** Non-fatal codec reports. Media3 delivers these even when it does not
      *  raise a player error, which is the silent-death shape seen on the
      *  Streamer (DEAD_OBJECT on the new AC-3 decoder, player stuck BUFFERING). */
@@ -2056,6 +2181,11 @@ class AerioExoPlayerHolder @Inject constructor(
             eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
             audioSinkError: Exception,
         ) = noteCodecError("audio sink", audioSinkError)
+
+        override fun onVideoDecoderReleased(
+            eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+            decoderName: String,
+        ) { decoderReleaseSignal?.complete(Unit) }
     }
 
     private fun noteCodecError(track: String, e: Exception) {
@@ -2117,6 +2247,7 @@ class AerioExoPlayerHolder @Inject constructor(
             // Reaching READY means the failure (if any) is behind us, so a later
             // playWhenReady=false is a real user pause again.
             if (playbackState == Player.STATE_READY) {
+                noteHalRebuildReady()
                 errorPending = false
                 if (player?.playWhenReady == true) clearFailureOnRecovery("READY")
             }
@@ -2392,6 +2523,13 @@ class AerioExoPlayerHolder @Inject constructor(
             // corresponding native window for surface", reboot to recover). Go
             // straight to the deepest teardown: release the player AND the
             // surface, then tune the same channel.
+            // Streamer 2026-11-01: the vendor codec HAL process died. Rebuild
+            // once after a settle in the mode that was active, no surface
+            // rebuild, so a Radio Mode start or a video tune is not flipped.
+            if (!isTimeshifting && isCodecHalDeath(error)) {
+                if (!rebuildAfterHalDeath() && !_streamUnavailable.value) markStreamUnavailable()
+                return
+            }
             if (isDecoderDeath(error, causeChain) ||
                 (!isTimeshifting && isTransientDecoderError(error, causeChain) &&
                     causeChain.contains("DEAD_OBJECT", ignoreCase = true))
@@ -3025,6 +3163,7 @@ class AerioExoPlayerHolder @Inject constructor(
         val policy = audioOnlyPolicyFor(key)
         val gen = primeGeneration
         radioCutVideo = false
+        if (policy == AudioOnlyStartPolicy.REQUESTED) radioPolicyGeneration = gen
         if (policy != AudioOnlyStartPolicy.UNKNOWN) {
             Log.i(TAG, "[AUDIO-ONLY] start policy ${policy.logName} ch=$key")
         }
@@ -5484,6 +5623,7 @@ class AerioExoPlayerHolder @Inject constructor(
         /** GH #107: full player + surface rebuilds allowed per window. */
         private const val MAX_FULL_REBUILDS = 2
         private const val MAX_CODEC_REBUILDS_PER_TUNE = 2
+        private const val DECODER_RELEASE_WAIT_MS = 150L
         /** After a reported codec error, how long a flowing feed may go
          *  without decoded progress before the rebuild. */
         private const val CODEC_ERROR_REBUILD_MS = 3_000L
