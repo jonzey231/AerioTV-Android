@@ -55,7 +55,7 @@ import com.aeriotv.android.core.pip.isTelevision
  * Switch Stream rows for Dispatcharr ADMINS: the same radio rows, plus a way
  * to change the channel's stream order. Touch drags a handle (no menu, no
  * long press: the row itself only selects); TV lifts the row into pick-up
- * mode from its options button or a long press (Up/Down move it, OK places,
+ * mode from a long press of Select (Up/Down move it, Select places,
  * Back cancels; state in [PickUpReorder]). A TV place hands the FULL new id
  * order to [onReorder] once. On TV [saving] blocks a new pick-up while the
  * PATCH is in flight without disabling the focused control; touch drags stay
@@ -172,11 +172,9 @@ internal fun ReorderableStreamList(
                     runCatching { bring.bringIntoView() }
                 }
             }
-            // TV (Apple TV parity): the row (radio + title) is ONE focus stop
-            // whose ring hugs the row content, and the options button is a
-            // visibly separate rounded button to its right with its own ring.
-            // Right from the row reaches it, Left leaves it. Long press on the
-            // row (or the options button) lifts it into pick-up mode.
+            // TV: the row (radio + title) is ONE focus stop whose ring hugs
+            // the row content. Short Select picks the stream; Select held
+            // lifts the row into pick-up mode.
             val shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
             Row(
                 modifier = Modifier
