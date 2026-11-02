@@ -1082,6 +1082,31 @@ Apple copy must mirror the unknown-Drive rule (unknown iCloud: a failed
 read is never empty, nothing is decided) and the hold release rule (a
 completed pull releases the fresh-device hold regardless of counts).
 
+Manual push and pull (owner decision 2026-11-02). Settings > Sync, under
+the Dispatcharr Sync section and only while Dispatcharr Sync is on for the
+active Dispatcharr playlist, shows "Push to Dispatcharr" (with its "Last
+synced" line) and "Pull from Dispatcharr" after Sync Now, which is
+unchanged. With Google Drive also on (and signed in), "Push to both"
+follows. Each asks first (Push or Pull, and Cancel). The keys covered are
+the forced-replace keys (`DsyncCoexistence.FORCE_KEYS`) whose Sync
+Categories item is not Off (`DsyncManual.keys`); Profiles, remoteMap, and
+radioDefault are never forced, and an Off item neither pushes nor pulls.
+1. Push to Dispatcharr: the forced replace (Rule 4 semantics, empty keys
+   included, no server rows merged) for the base user, sent at once. Log
+   `[DSYNC] manual push <key> rows=<n>` then the put status line. A key
+   that cannot be sent stays armed and dirty for a later cycle; the row
+   reads "Could not reach your Dispatcharr server".
+2. Pull from Dispatcharr: the setup-choice pull (`pullForChoice` path,
+   stamp check forced) applies the server copy for every covered key, no
+   prompt; applied keys queue the Drive follow pushes (Rule 5). Log
+   `[DSYNC] manual pull <key> rows=<n>`.
+3. Push to both: step 1, then the Drive `replaceBackupNow`. Log
+   `[SYNC] manual push to both`.
+Results: "Pushed to Dispatcharr", "Pulled from Dispatcharr", "Pushed to
+both", or "Could not reach your Dispatcharr server" as the row's status
+line. Rows, order, and wording are identical on phone, tablet, and TV. The
+Apple app mirrors this with iCloud in place of Google Drive.
+
 ## 10b. Sync providers record (`syncProviders`)
 
 Every backup carries which sync providers the device owner runs, so a new device can offer the same ones.

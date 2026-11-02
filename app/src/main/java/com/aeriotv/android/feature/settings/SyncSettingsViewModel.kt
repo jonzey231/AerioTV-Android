@@ -118,6 +118,61 @@ class SyncSettingsViewModel @Inject constructor(
     val dispatcharrUi: StateFlow<com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager.Ui> = dsync.ui
     fun dispatcharrSyncNow() = dsync.syncNow()
 
+    // ---- Manual push and pull (section 10a, owner decision 2026-11-02) ----
+
+    private val _dsyncPushStatus = MutableStateFlow<ActionStatus>(ActionStatus.Idle)
+    val dsyncPushStatus: StateFlow<ActionStatus> = _dsyncPushStatus
+    private val _dsyncPullStatus = MutableStateFlow<ActionStatus>(ActionStatus.Idle)
+    val dsyncPullStatus: StateFlow<ActionStatus> = _dsyncPullStatus
+    private val _bothPushStatus = MutableStateFlow<ActionStatus>(ActionStatus.Idle)
+    val bothPushStatus: StateFlow<ActionStatus> = _bothPushStatus
+
+    private fun manualBusy(): Boolean = listOf(_dsyncPushStatus, _dsyncPullStatus, _bothPushStatus)
+        .any { it.value is ActionStatus.Running }
+
+    /** "Push to Dispatcharr": forced replace of every enabled shared key. */
+    fun runDispatcharrPush() {
+        if (manualBusy()) return
+        viewModelScope.launch {
+            _dsyncPushStatus.value = ActionStatus.Running
+            val ok = runCatching { dsync.manualPush() }.getOrDefault(false)
+            _dsyncPushStatus.value = if (ok) ActionStatus.Success(PUSHED_TO_DISPATCHARR) else ActionStatus.Failure(DISPATCHARR_UNREACHABLE)
+        }
+    }
+
+    /** "Pull from Dispatcharr": the server copy replaces this device's shared data; Drive follows. */
+    fun runDispatcharrPull() {
+        if (manualBusy()) return
+        viewModelScope.launch {
+            _dsyncPullStatus.value = ActionStatus.Running
+            val ok = runCatching { dsync.manualPull() }.getOrDefault(false)
+            _dsyncPullStatus.value = if (ok) ActionStatus.Success(PULLED_FROM_DISPATCHARR) else ActionStatus.Failure(DISPATCHARR_UNREACHABLE)
+        }
+    }
+
+    /** "Push to both": the Dispatcharr forced push, then the Drive backup replace. */
+    fun runPushToBoth() {
+        if (manualBusy()) return
+        viewModelScope.launch {
+            _bothPushStatus.value = ActionStatus.Running
+            android.util.Log.i("AerioDsync", "[SYNC] manual push to both")
+            val ok = runCatching { dsync.manualPush() }.getOrDefault(false)
+            if (!ok) {
+                _bothPushStatus.value = ActionStatus.Failure(DISPATCHARR_UNREACHABLE)
+                return@launch
+            }
+            runCatching { sync.replaceBackupNow() }
+                .onFailure { android.util.Log.w("AerioDsync", "[SYNC] manual push to both: Drive replace failed: ${it.javaClass.simpleName}") }
+            _bothPushStatus.value = ActionStatus.Success(PUSHED_TO_BOTH)
+        }
+    }
+
+    fun clearManualStatuses() {
+        _dsyncPushStatus.value = ActionStatus.Idle
+        _dsyncPullStatus.value = ActionStatus.Idle
+        _bothPushStatus.value = ActionStatus.Idle
+    }
+
     val masterEnabled: Flow<Boolean> = prefs.syncMasterEnabled
     fun setMasterEnabled(value: Boolean) {
         viewModelScope.launch {
@@ -176,6 +231,7 @@ class SyncSettingsViewModel @Inject constructor(
         _clearStatus.value = ActionStatus.Idle
         _pushStatus.value = ActionStatus.Idle
         _pullStatus.value = ActionStatus.Idle
+        clearManualStatuses()
     }
 
     /** Per-item sync choices (Sync Categories), by item id, as this device honors them. */
@@ -466,3 +522,8 @@ class SyncSettingsViewModel @Inject constructor(
         return sync.pullAllTracked(token, wanted)
     }
 }
+
+internal const val PUSHED_TO_DISPATCHARR = "Pushed to Dispatcharr"
+internal const val PULLED_FROM_DISPATCHARR = "Pulled from Dispatcharr"
+internal const val PUSHED_TO_BOTH = "Pushed to both"
+internal const val DISPATCHARR_UNREACHABLE = "Could not reach your Dispatcharr server"

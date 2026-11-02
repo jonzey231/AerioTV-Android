@@ -169,6 +169,8 @@ class DispatcharrSyncManager @Inject constructor(
         val pending = HashMap<DsyncKey, Job>()
         /** Keys already checked by [healIfLocalDiffers] this session. */
         val healed = java.util.Collections.synchronizedSet(HashSet<DsyncKey>())
+        /** Keys a Settings > Sync manual push is sending (log as manual push). */
+        val manual = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
         val retries = HashMap<DsyncKey, Int>()
         /** Keys converge skipped as dirty with no write queued: converge again once their write settles. */
         val convergeAfterWrite = java.util.concurrent.ConcurrentHashMap.newKeySet<DsyncKey>()
@@ -1524,7 +1526,9 @@ class DispatcharrSyncManager @Inject constructor(
         if (!s.live() || ProfileScope.token.value != s.token) return
         // Rule 4: a forced replace writes every category, an empty one included,
         // so the server mirrors the chosen Google Drive setup exactly.
-        if (DsyncCoexistence.forcedWritesEmpty(force, key) && DsyncCoexistence.isEmptyData(key, data)) {
+        if (force && key in s.manual) {
+            Log.i(TAG, "[DSYNC] manual push ${key.suffix} rows=${DsyncCoexistence.rowCount(key, data)}")
+        } else if (DsyncCoexistence.forcedWritesEmpty(force, key) && DsyncCoexistence.isEmptyData(key, data)) {
             Log.i(TAG, "[DSYNC] force push ${key.suffix} rows=0 (empty, mirrors Google Drive)")
         } else if (force && key == DsyncKey.Settings) {
             // Non-blank values across the v, tv, and mobile lanes this device
@@ -2193,18 +2197,70 @@ class DispatcharrSyncManager @Inject constructor(
      * and the bucket were read and every forced apply ran; false means Drive
      * must not be replaced yet.
      */
-    suspend fun pullForChoice(): Boolean {
+    suspend fun pullForChoice(): Boolean = forcedPull("setup choice")
+
+    private suspend fun forcedPull(reason: String): Boolean {
         val s = session?.takeIf { isBase(it) && !it.peek } ?: return false
+        s.paused = false
         s.forceApply = true
         s.forceApplyFailed = false
         try {
-            pullAll(s, "setup choice")
+            pullAll(s, reason)
         } finally {
             s.forceApply = false
         }
         val ok = s.listOk && s.pullComplete && !s.forceApplyFailed
-        Log.i(TAG, "[DSYNC] setup choice pull ok=$ok")
+        Log.i(TAG, "[DSYNC] $reason pull ok=$ok")
         return ok
+    }
+
+    /**
+     * Settings > Sync "Push to Dispatcharr" (section 10a, Manual push and
+     * pull): a forced replace of every enabled shared key from this device,
+     * empty keys included, sent now. Base user only. True when every key's
+     * PUT (or "unchanged") went through; a key that could not be sent stays
+     * armed and dirty and goes out on a later cycle.
+     */
+    suspend fun manualPush(): Boolean {
+        val s = session?.takeIf { isBase(it) && !it.peek } ?: return false
+        s.paused = false
+        if (!s.firstPullDone) pullAll(s, "manual push")
+        if (!s.firstPullDone) return false
+        val scopes = runCatching { prefs.syncScopesOnce() }.getOrDefault(emptyMap())
+        val keys = DsyncManual.keys(scopes).filter { enabled(it, s) }
+        if (keys.isEmpty()) return true
+        val e = state.edit()
+        keys.forEach { e.putBoolean(forceKey(s.playlistId, it), true) }
+        e.commit()
+        keys.forEach { setDirty(s, it, true) }
+        synchronized(s.pending) { keys.forEach { s.pending.remove(it)?.cancel() } }
+        s.manual.addAll(keys)
+        try {
+            keys.forEach { write(s, it) }
+        } finally {
+            s.manual.removeAll(keys.toSet())
+        }
+        val failed = keys.filter { isForced(s, it) }
+        Log.i(TAG, "[DSYNC] manual push done keys=${keys.size} failed=${failed.size}")
+        return failed.isEmpty()
+    }
+
+    /**
+     * Settings > Sync "Pull from Dispatcharr": the setup-choice pull (server
+     * copy applied as a replace for every enabled shared key, stamp check
+     * forced). Applied keys queue the usual Drive follow pushes.
+     */
+    suspend fun manualPull(): Boolean {
+        val s = session?.takeIf { isBase(it) && !it.peek } ?: return false
+        val ok = forcedPull("manual")
+        if (!ok) return false
+        val scopes = runCatching { prefs.syncScopesOnce() }.getOrDefault(emptyMap())
+        DsyncManual.keys(scopes).filter { enabled(it, s) }.forEach { key ->
+            val rows = serverDataOf(s, DsyncBucket.of(key), key)?.let { DsyncCoexistence.rowCount(key, it) } ?: 0
+            Log.i(TAG, "[DSYNC] manual pull ${key.suffix} rows=$rows")
+        }
+        flush(s)
+        return true
     }
 
     /**

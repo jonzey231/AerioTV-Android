@@ -140,6 +140,12 @@ fun SyncSettingsScreen(
     var pushConfirmOpen by remember { mutableStateOf(false) }
     var pullConfirmOpen by remember { mutableStateOf(false) }
     var clearConfirmOpen by remember { mutableStateOf(false) }
+    val dsyncPushStatus by viewModel.dsyncPushStatus.collectAsState()
+    val dsyncPullStatus by viewModel.dsyncPullStatus.collectAsState()
+    val bothPushStatus by viewModel.bothPushStatus.collectAsState()
+    var dsyncPushConfirmOpen by remember { mutableStateOf(false) }
+    var dsyncPullConfirmOpen by remember { mutableStateOf(false) }
+    var bothPushConfirmOpen by remember { mutableStateOf(false) }
     val configured = remember { SyncConfig.isConfigured() }
     val dsyncOn by viewModel.dispatcharrSyncEnabled.collectAsStateWithLifecycle(initialValue = false)
     val dsyncAvailable by viewModel.dispatcharrAvailable.collectAsStateWithLifecycle(initialValue = false)
@@ -482,6 +488,53 @@ fun SyncSettingsScreen(
                                 onClick = { if (dsyncAvailable && !dsyncUi.running) viewModel.dispatcharrSyncNow() },
                             )
                         }
+                        // Manual push and pull (section 10a, 2026-11-02): rows
+                        // mirror the Drive ones; Push to both needs Drive on too.
+                        val manualRows = com.aeriotv.android.core.sync.dsync.DsyncManual.rows(
+                            dispatcharrOn = dsyncOn, dispatcharrPlaylist = dsyncAvailable,
+                            driveOn = masterEnabled, driveSignedIn = signedIn,
+                        )
+                        val manualRunning = dsyncUi.running ||
+                            dsyncPushStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                            dsyncPullStatus is SyncSettingsViewModel.ActionStatus.Running ||
+                            bothPushStatus is SyncSettingsViewModel.ActionStatus.Running
+                        if (manualRows.pushPullDispatcharr) {
+                            val dLast = dsyncUi.lastSyncAt
+                            SyncTileActionRow(
+                                icon = Icons.Filled.CloudSync,
+                                title = if (tvRows && dLast > 0L) {
+                                    "Push to Dispatcharr  ·  Last synced ${lastSyncedAgo(dLast)}"
+                                } else {
+                                    "Push to Dispatcharr"
+                                },
+                                subtitle = if (tvRows) null else if (dLast > 0L) {
+                                    "Send this device's data up  ·  Last synced ${lastSyncedAgo(dLast)}"
+                                } else {
+                                    "Send this device's data up"
+                                },
+                                running = dsyncPushStatus is SyncSettingsViewModel.ActionStatus.Running,
+                                status = dsyncPushStatus,
+                                onClick = { if (!manualRunning) dsyncPushConfirmOpen = true },
+                            )
+                            SyncTileActionRow(
+                                icon = Icons.Filled.CloudDownload,
+                                title = "Pull from Dispatcharr",
+                                subtitle = if (tvRows) null else "Replace this device's data with the Dispatcharr copy",
+                                running = dsyncPullStatus is SyncSettingsViewModel.ActionStatus.Running,
+                                status = dsyncPullStatus,
+                                onClick = { if (!manualRunning) dsyncPullConfirmOpen = true },
+                            )
+                        }
+                        if (manualRows.pushToBoth) {
+                            SyncTileActionRow(
+                                icon = Icons.Filled.CloudSync,
+                                title = "Push to both",
+                                subtitle = if (tvRows) null else "Send this device's data to Dispatcharr and Google Drive",
+                                running = bothPushStatus is SyncSettingsViewModel.ActionStatus.Running,
+                                status = bothPushStatus,
+                                onClick = { if (!manualRunning && !actionRunning) bothPushConfirmOpen = true },
+                            )
+                        }
                     }
                 }
             }
@@ -525,6 +578,68 @@ fun SyncSettingsScreen(
             },
             dismissButton = {
                 SettingsDialogTextButton(label = "Cancel", onClick = { pushConfirmOpen = false })
+            },
+        )
+    }
+
+    if (dsyncPushConfirmOpen) {
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { dsyncPushConfirmOpen = false },
+            title = { Text("Push to Dispatcharr?") },
+            text = {
+                Text(
+                    "Replaces the shared data on your Dispatcharr server with this device's copy for the categories you sync. " +
+                        "Other devices receive it on their next sync.",
+                )
+            },
+            confirmButton = {
+                SettingsDialogTextButton(label = "Push", onClick = {
+                    dsyncPushConfirmOpen = false
+                    viewModel.runDispatcharrPush()
+                })
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { dsyncPushConfirmOpen = false })
+            },
+        )
+    }
+
+    if (dsyncPullConfirmOpen) {
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { dsyncPullConfirmOpen = false },
+            title = { Text("Pull from Dispatcharr?") },
+            text = {
+                Text("Replaces this device's shared data with the copy on your Dispatcharr server for the categories you sync.")
+            },
+            confirmButton = {
+                SettingsDialogTextButton(label = "Pull", onClick = {
+                    dsyncPullConfirmOpen = false
+                    viewModel.runDispatcharrPull()
+                })
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { dsyncPullConfirmOpen = false })
+            },
+        )
+    }
+
+    if (bothPushConfirmOpen) {
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { bothPushConfirmOpen = false },
+            title = { Text("Push to both?") },
+            text = {
+                Text(
+                    "Replaces the shared data on your Dispatcharr server and in your Google Drive backup with this device's copy for the categories you sync.",
+                )
+            },
+            confirmButton = {
+                SettingsDialogTextButton(label = "Push", onClick = {
+                    bothPushConfirmOpen = false
+                    viewModel.runPushToBoth()
+                })
+            },
+            dismissButton = {
+                SettingsDialogTextButton(label = "Cancel", onClick = { bothPushConfirmOpen = false })
             },
         )
     }

@@ -988,3 +988,31 @@ object DsyncCoexistence {
         else -> false
     }
 }
+
+/**
+ * Settings > Sync manual actions (section 10a, "Manual push and pull",
+ * owner decision 2026-11-02). Pure rules, shared by the screen and the
+ * manager so the unit test pins them.
+ */
+object DsyncManual {
+    /** Which manual rows Settings > Sync shows. */
+    data class Rows(val pushPullDispatcharr: Boolean, val pushToBoth: Boolean)
+
+    fun rows(dispatcharrOn: Boolean, dispatcharrPlaylist: Boolean, driveOn: Boolean, driveSignedIn: Boolean): Rows {
+        val d = dispatcharrOn && dispatcharrPlaylist
+        return Rows(pushPullDispatcharr = d, pushToBoth = d && driveOn && driveSignedIn)
+    }
+
+    /**
+     * The shared keys a manual push or pull covers: every forced-replace key
+     * whose Sync Categories item is not Off. `settings` is always included
+     * (its lanes are gated per name, so an all-Off device writes nothing).
+     * Profiles, remoteMap, and radioDefault are never forced.
+     */
+    fun keys(scopes: Map<String, com.aeriotv.android.core.sync.SyncScope>): List<DsyncKey> =
+        DsyncCoexistence.FORCE_KEYS.filter { key ->
+            if (key == DsyncKey.Settings) return@filter true
+            val item = com.aeriotv.android.core.sync.SyncItemCatalog.itemForDsync(key.suffix)
+            item == null || scopes[item.id] != com.aeriotv.android.core.sync.SyncScope.Off
+        }
+}
