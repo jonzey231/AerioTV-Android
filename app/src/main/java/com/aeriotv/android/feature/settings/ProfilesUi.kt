@@ -586,11 +586,8 @@ fun ProfilesSection(playlistId: String) {
         Log.i("ProfilesUi", "[PROFILES] pick-up drop id=${d.from} from=${d.from} to=${d.to} save=${d.changed}")
         if (d.changed) {
             status = vm.setOrder(playlistId, d.order.map { it.id }).exceptionOrNull()?.message
-        } else {
-            // Placed where it started: nothing is saved, and the row's
-            // actions open (the TV long press used to open them).
-            actionsFor = d.item
         }
+        // Placed where it started: nothing is saved and no sheet opens.
     }
     fun cancelPickUp() {
         if (liftedId == null) return
@@ -600,6 +597,10 @@ fun ProfilesSection(playlistId: String) {
         Log.i("ProfilesUi", "[PROFILES] pick-up cancel from=$from")
     }
 
+    fun openActions(p: DispatcharrProfile) {
+        Log.i("ProfilesUi", "[PROFILES] actions opened")
+        actionsFor = p
+    }
     fun doSwitch(p: DispatcharrProfile) {
         busy = true; status = null
         com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Guide)
@@ -667,15 +668,13 @@ fun ProfilesSection(playlistId: String) {
                     isActive = p.id == activeId,
                     onClick = {
                         if (busy) return@ProfileRow
-                        // Tap a profile to switch to it; tap the active one
-                        // for Rename / Remove.
-                        // Long press (TV too) opens the actions for any row.
-                        if (p.id == activeId) actionsFor = p
-                        else if (vm.hasPin(p.id)) pinFor = p
-                        else if (vm.isPlaying()) confirmSwitch = p
-                        else doSwitch(p)
+                        // Select / tap opens the row's actions on every
+                        // platform; switching lives in the sheet's first row.
+                        openActions(p)
                     },
-                    onLongClick = { if (busy) Unit else if (canReorderTv) startPickUp(p) else actionsFor = p },
+                    // TV: long press lifts for Admins; otherwise it does
+                    // nothing special. Phones keep long press = actions.
+                    onLongClick = { if (busy) Unit else if (canReorderTv) startPickUp(p) else if (!isTv) openActions(p) },
                     trailing = if (isTv) {
                         if (lifted) {
                             {
@@ -691,7 +690,7 @@ fun ProfilesSection(playlistId: String) {
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .clip(CircleShape)
-                                    .clickable { actionsFor = p }
+                                    .clickable { openActions(p) }
                                     .padding(6.dp)
                                     .size(18.dp),
                             )
@@ -774,12 +773,23 @@ fun ProfilesSection(playlistId: String) {
                 // (a focused row brings itself into view as D-pad focus moves).
                 Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
                     Text(
-                        listOfNotNull(p.effectiveRole().label, if (hasPin) "PIN" else null).joinToString("  "),
+                        listOfNotNull(if (p.id == activeId) "Active" else null, p.effectiveRole().label, if (hasPin) "PIN" else null).joinToString("  "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
                     Text(p.username, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.size(8.dp))
+                    if (p.id != activeId) {
+                        ChoiceRow(label = "Switch to this profile", onClick = {
+                            actionsFor = null
+                            Log.i("ProfilesUi", "[PROFILES] switch from actions")
+                            // The exact path the old short press used.
+                            if (busy) Unit
+                            else if (vm.hasPin(p.id)) pinFor = p
+                            else if (vm.isPlaying()) confirmSwitch = p
+                            else doSwitch(p)
+                        })
+                    }
                     ChoiceRow(label = "Rename", onClick = { actionsFor = null; renaming = p })
                     if (vm.isRoleAdmin(playlistId)) {
                         // Dispatcharr admins are always Admin: no Role picker.
