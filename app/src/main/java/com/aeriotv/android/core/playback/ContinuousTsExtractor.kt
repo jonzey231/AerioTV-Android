@@ -60,6 +60,10 @@ import kotlin.math.abs
 @UnstableApi
 class ContinuousTsExtractor(
     private val inner: Extractor,
+    /** Shared with the innermost [SpliceResetTsExtractor]; null in tests and
+     *  for sources without one. */
+    private val splice: SpliceControl? = null,
+    nowMs: () -> Long = { android.os.SystemClock.elapsedRealtime() },
     private val log: (String) -> Unit = { Log.i(TAG, it) },
 ) : Extractor by inner {
 
@@ -82,9 +86,21 @@ class ContinuousTsExtractor(
         private const val DEFAULT_OTHER_GAP_US = 40_000L
         private const val MIN_GAP_US = 1_000L
         private const val MAX_GAP_US = 200_000L
+
+        /** A second rebase this soon after the previous one is not a clean
+         *  switch (Streamer 2026-11-01: rebases every few seconds, +/-1536 s). */
+        const val REBASE_REPEAT_MS = 10_000L
+
+        /** Tracks whose last output sits further than this from the splice
+         *  anchor are treated as damaged and re-anchored. */
+        const val SPLICE_TRACK_SPREAD_US = 2_000_000L
     }
 
-    private val state = Rebaser(log)
+    private val state = Rebaser(log, if (splice == null) ({ 0L }) else nowMs) { reason -> splice?.request(reason) }
+
+    init {
+        splice?.onReset = { state.armSplice() }
+    }
 
     override fun init(output: ExtractorOutput) {
         inner.init(RebasingExtractorOutput(output, state))
@@ -123,7 +139,18 @@ class ContinuousTsExtractor(
         }
     }
 
-    internal class Rebaser(private val log: (String) -> Unit) {
+    internal class Rebaser(
+        private val log: (String) -> Unit,
+        private val nowMs: () -> Long = { 0L },
+        private val onSuspect: (String) -> Unit = {},
+    ) {
+        private var lastRebaseAtMs = Long.MIN_VALUE
+        private var spliceArmed = false
+        private var spliceAnchorUs: Long? = null
+        /** After a splice, the first VIDEO sample may still move the shared
+         *  base forward (never back), once, so the picture never overlaps its
+         *  own old output when audio crossed first. */
+        private var spliceVideoPending = false
         private val tracks = ArrayList<TrackState>()
         /** Cumulative offset per generation; generation 0 is the original timeline. */
         private val offsets = HashMap<Int, Long>().apply { put(0, 0L) }
@@ -151,11 +178,63 @@ class ContinuousTsExtractor(
             offsets.clear()
             offsets[0] = 0L
             generation = 0
+            spliceArmed = false
+            spliceAnchorUs = null
+            lastRebaseAtMs = Long.MIN_VALUE
+        }
+
+        /**
+         * The inner extractor was replaced after a server-side switch: every
+         * track restarts on ONE fresh TimestampAdjuster base. The first sample
+         * after this, from whichever track, sets a single offset for ALL
+         * tracks (never per track), anchored just after the newest output of
+         * the tracks that agree with video.
+         */
+        fun armSplice() {
+            val video = tracks.filter { it.trackType == C.TRACK_TYPE_VIDEO && it.maxOutUs != Long.MIN_VALUE }
+                .maxOfOrNull { it.maxOutUs }
+            val ref = video ?: tracks.filter { it.maxOutUs != Long.MIN_VALUE }.minOfOrNull { it.maxOutUs }
+            spliceAnchorUs = ref?.let { r ->
+                tracks.filter { it.maxOutUs != Long.MIN_VALUE && abs(it.maxOutUs - r) <= SPLICE_TRACK_SPREAD_US }
+                    .maxOfOrNull { it.maxOutUs } ?: r
+            }
+            spliceArmed = true
+            tracks.forEach { it.lastRawUs = C.TIME_UNSET }
+        }
+
+        private fun applySplice(rawUs: Long) {
+            spliceArmed = false
+            val anchor = spliceAnchorUs
+            val target = if (anchor != null) anchor + DEFAULT_VIDEO_GAP_US else rawUs
+            generation += 1
+            offsets[generation] = rawUs - target
+            tracks.forEach {
+                it.generation = generation
+                it.clampArmed = false
+                if (anchor != null && it.maxOutUs != Long.MIN_VALUE &&
+                    abs(it.maxOutUs - anchor) > SPLICE_TRACK_SPREAD_US
+                ) {
+                    it.maxOutUs = anchor
+                }
+            }
+            lastRebaseAtMs = Long.MIN_VALUE
+            spliceVideoPending = tracks.any { it.trackType == C.TRACK_TYPE_VIDEO && it.maxOutUs != Long.MIN_VALUE }
+            pruneOffsets()
+            log("[SWITCH] splice: one shared base for all tracks, rebased PTS by ${(target - rawUs) / 1000}ms")
         }
 
         /** Maps one raw sample time to the continuous timeline. */
         fun map(t: TrackState, rawUs: Long): Long {
             if (rawUs == C.TIME_UNSET) return rawUs
+            if (spliceArmed) applySplice(rawUs)
+            if (spliceVideoPending && t.trackType == C.TRACK_TYPE_VIDEO) {
+                spliceVideoPending = false
+                val off = offsets[generation] ?: 0L
+                if (t.maxOutUs != Long.MIN_VALUE && rawUs - off <= t.maxOutUs) {
+                    offsets[generation] = rawUs - (t.maxOutUs + t.gapUs)
+                    log("[SWITCH] splice: shared base moved ${(off - (offsets[generation] ?: 0L)) / 1000}ms forward for video continuity")
+                }
+            }
             if (t.lastRawUs != C.TIME_UNSET) {
                 val delta = rawUs - t.lastRawUs
                 if (delta > JUMP_FORWARD_US || delta < JUMP_BACKWARD_US) {
@@ -194,6 +273,9 @@ class ContinuousTsExtractor(
                     "[SWITCH] rebased PTS by ${-candidate / 1000}ms " +
                         "(${t.label} jump ${deltaUs / 1000}ms)",
                 )
+                val n = nowMs()
+                if (lastRebaseAtMs != Long.MIN_VALUE && n - lastRebaseAtMs < REBASE_REPEAT_MS) onSuspect("pts")
+                lastRebaseAtMs = n
             } else {
                 // A later track crossing the same boundary: agree with the
                 // latched offset unless it is plainly a different timeline.
@@ -206,7 +288,9 @@ class ContinuousTsExtractor(
                             "[SWITCH] rebased PTS by ${-candidate / 1000}ms " +
                                 "(${t.label} jump ${deltaUs / 1000}ms, re-latched from video)",
                         )
+                        onSuspect("pts")
                     } else {
+                        onSuspect("pts")
                         log(
                             "[SWITCH] ${t.label} jump ${deltaUs / 1000}ms disagrees with the " +
                                 "latched rebase by ${(candidate - current) / 1000}ms; keeping it",

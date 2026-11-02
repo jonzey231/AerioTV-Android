@@ -1260,7 +1260,7 @@ class AerioExoPlayerHolder @Inject constructor(
      *  dead while bytes are still arriving. */
     fun ingestAgeMs(): Long =
         if (lastBufferAdvanceAtMs == 0L) Long.MAX_VALUE
-        else SystemClock.elapsedRealtime() - lastBufferAdvanceAtMs
+        else minOf(SystemClock.elapsedRealtime() - lastBufferAdvanceAtMs, tracer.feedSinceTune().second)
 
     /** Media the player still has ahead of the playhead, in ms. */
     fun bufferAheadMs(): Long {
@@ -1553,6 +1553,7 @@ class AerioExoPlayerHolder @Inject constructor(
             var lastPos = startPos
             var lastMoveAt = startAt
             var lastWaitLogAt = 0L
+            var resetRequested = false
             while (isActive) {
                 delay(SWITCH_POLL_MS)
                 val now = SystemClock.elapsedRealtime()
@@ -1573,6 +1574,13 @@ class AerioExoPlayerHolder @Inject constructor(
                     // over (or ends the session) on its own; keep the window open
                     // so no silence heal reopens the channel meanwhile.
                     switchWindowUntilMs = now + SWITCH_WINDOW_MS
+                    // Bytes are arriving, so the new upstream IS flowing; the
+                    // extractor just cannot use them (changed PIDs, foreign
+                    // timeline). Re-prime the extractor chain once.
+                    if (!resetRequested && tracer.feedSinceTune().second < SERVER_SWITCH_BYTES_FLOWING_MS) {
+                        resetRequested = true
+                        currentSplice?.request("nosamples")
+                    }
                     if (lastWaitLogAt == 0L) {
                         Log.i(TAG, "[SWITCH] waiting for new upstream (no reload) ${(now - startAt) / 1000}s")
                         lastWaitLogAt = now
@@ -3056,6 +3064,59 @@ class AerioExoPlayerHolder @Inject constructor(
      *  Switch to Video Mode must re-prepare, a track toggle is not enough. */
     @Volatile private var radioCutVideo = false
 
+    /** The newest live source's splice control (loader-thread object). */
+    @Volatile private var currentSplice: SpliceControl? = null
+    private var serverSwitchWatchJob: Job? = null
+
+    /**
+     * Loader thread: the extractor chain re-primed itself after a server-side
+     * switch on the kept connection. Treat it as a fresh tune on the player
+     * side: drop the old "waiting for new upstream" watch, release a resume
+     * gate that was measuring the dead buffer, and watch for the picture to
+     * move again. If it does not within [SERVER_SWITCH_RESUME_DEADLINE_MS]
+     * while bytes keep arriving, re-prime the same url once (one connection,
+     * the old socket is retired first; see [reprimeSameUrl]).
+     */
+    private fun onServerSwitchDetected(reason: String, gen: Long) {
+        mainHandler.post {
+            if (gen != primeGeneration) return@post
+            val p = player ?: return@post
+            val startAt = SystemClock.elapsedRealtime()
+            switchWatchJob?.cancel()
+            switchWatchJob = null
+            releaseResumeGate("server-side switch (reason=$reason); re-priming from zero")
+            lastBufferAdvanceAtMs = startAt
+            switchWindowUntilMs = startAt + SWITCH_WINDOW_MS
+            val startPos = p.currentPosition
+            serverSwitchWatchJob?.cancel()
+            serverSwitchWatchJob = watchdogScope.launch {
+                while (isActive) {
+                    delay(SWITCH_POLL_MS)
+                    val pl = player
+                    if (pl == null || primeGeneration != gen || isTimeshifting) return@launch
+                    val now = SystemClock.elapsedRealtime()
+                    if (pl.currentPosition >= startPos + SERVER_SWITCH_RESUMED_ADVANCE_MS) {
+                        Log.i(TAG, "[SWITCH] resumed +${now - startAt}ms after server-side switch")
+                        return@launch
+                    }
+                    if (now - startAt >= SERVER_SWITCH_RESUME_DEADLINE_MS) {
+                        val byteGapMs = tracer.feedSinceTune().second
+                        if (byteGapMs < SERVER_SWITCH_BYTES_FLOWING_MS && pl.playWhenReady) {
+                            Log.i(
+                                TAG,
+                                "[SWITCH] no progress ${now - startAt}ms after server-side switch " +
+                                    "while bytes arrive (last byte ${byteGapMs}ms ago); re-priming same url",
+                            )
+                            switchWindowUntilMs = 0L
+                            reprimeSameUrl("server-side switch, no samples")
+                        }
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
     private fun onGuardDropped(policy: AudioOnlyStartPolicy, key: String?, gen: Long) {
         mainHandler.post {
             if (gen != primeGeneration) return@post
@@ -3146,8 +3207,15 @@ class AerioExoPlayerHolder @Inject constructor(
         // which never carries a picture must not hold preparation forever.
         // safeTsExtractor: same TsExtractor, but a corrupt AC-3 header resyncs
         // instead of failing the load (see SafeTsExtractor.kt).
+        // Server-side stream switch on the kept connection (Streamer
+        // 2026-11-01): SpliceResetTsExtractor swaps in a fresh TsExtractor when
+        // the TS tables change, the AC-3 reader resyncs in a burst, or the
+        // rebaser sees rebases it cannot reconcile; ContinuousTsExtractor then
+        // puts every track on one shared base.
+        val splice = SpliceControl(onDetected = { reason -> onServerSwitchDetected(reason, gen) })
+        currentSplice = splice
         val guard = AudioOnlyTrackGuard(
-            safeTsExtractor(),
+            SpliceResetTsExtractor({ onResync -> safeTsExtractor(onResync) }, splice),
             policy = policy,
             onDropped = { pol, _ -> onGuardDropped(pol, key, gen) },
             onVideoAfterDrop = { pol -> onGuardVideoAfterDrop(pol, key, gen) },
@@ -3157,7 +3225,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 }
             },
         )
-        val continuous: Extractor = ContinuousTsExtractor(guard)
+        val continuous: Extractor = ContinuousTsExtractor(guard, splice = splice)
         buildList {
             fmp4?.let { add(it) }
             add(object : Extractor by continuous {
@@ -4202,7 +4270,13 @@ class AerioExoPlayerHolder @Inject constructor(
                     lastKnownBufferedPositionMs = bufferedNow
                     lastBufferAdvanceAtMs = now
                 }
-                val ingestStaleNowMs = now - lastBufferAdvanceAtMs
+                // "Ingest" is BYTES, the same clock as the [FEED] lines
+                // (PlaybackTracer.onBytes). Streamer 2026-11-01: the old
+                // buffer-advance clock said "ingest quiet 23024ms" while [FEED]
+                // showed bytes every 3 to 4 s, because the extractor could not
+                // turn the switched stream's bytes into samples. Buffer growth
+                // still drives the stale-reload discriminator below.
+                val ingestStaleNowMs = minOf(now - lastBufferAdvanceAtMs, tracer.feedSinceTune().second)
                 // A frozen frame is never silent (field 2026-09-14: the stream
                 // was stopped server-side and the picture sat frozen ~30s with
                 // no message). Once bytes stop arriving on a live channel we
@@ -5281,6 +5355,14 @@ class AerioExoPlayerHolder @Inject constructor(
         /** Playhead frozen this long after a switch = the new upstream is not
          *  flowing yet; the watch starts logging and keeps the switch window open. */
         const val SWITCH_NO_PROGRESS_MS = 6_000L
+        /** Playhead advance that proves playback resumed after a server-side switch. */
+        private const val SERVER_SWITCH_RESUMED_ADVANCE_MS = 500L
+        /** No progress this long after an extractor re-prime while bytes flow:
+         *  re-prime the same url. */
+        private const val SERVER_SWITCH_RESUME_DEADLINE_MS = 8_000L
+        /** A last byte this recent means the feed is flowing (Dispatcharr
+         *  bursts every 3 to 10 s). */
+        private const val SERVER_SWITCH_BYTES_FLOWING_MS = 5_000L
         private const val SWITCH_POLL_MS = 250L
         /** Interval of the "[SWITCH] still waiting for new upstream" log. */
         private const val SWITCH_WAIT_LOG_MS = 10_000L
