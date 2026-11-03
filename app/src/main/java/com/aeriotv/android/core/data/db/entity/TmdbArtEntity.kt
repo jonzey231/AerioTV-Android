@@ -28,4 +28,8 @@ data class TmdbArtEntity(
     val overview: String?,
     /** Wall-clock millis the lookup answered (miss-expiry check). */
     val at: Long,
+    /** TMDB year, rating and genres (schema 39); "" when TMDB has none. */
+    @androidx.room.ColumnInfo(defaultValue = "") val year: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "") val rating: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "") val genres: String = "",
 )

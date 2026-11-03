@@ -53,6 +53,9 @@ internal fun TvMediaTab(
     /** Resolved poster per item: the cached TMDB art first, the provider's
      *  otherwise. Re-created by the tab on each art-cache version bump. */
     posterUrlFor: (MediaItem) -> String?,
+    /** TMDB-first year and rating per card (identity when TMDB is off). */
+    metaFor: (MediaItem) -> MediaItem = { it },
+    heroMetaFor: (MediaHeroPage) -> MediaHeroPage = { it },
     library: List<MediaItem>,
     gridItems: List<MediaItem>,
     available: Set<Char>,
@@ -116,7 +119,8 @@ internal fun TvMediaTab(
         onOpen(item)
     }
 
-    fun heroFor(page: MediaHeroPage, watchlist: Boolean): TvHeroPage {
+    fun heroFor(rawPage: MediaHeroPage, watchlist: Boolean): TvHeroPage {
+        val page = heroMetaFor(rawPage)
         val item = page.item
         val videoId = page.key.removePrefix("cw:")
         // A watchlisted SERIES has no movieUuid: play its target episode
@@ -194,9 +198,9 @@ internal fun TvMediaTab(
     ) { page, modifier ->
         val item = page.item
         TvPosterCard(
-            title = page.title, year = page.year,
+            title = page.title, year = item?.let { metaFor(it).year } ?: page.year,
             posterUrl = item?.let(posterUrlFor) ?: page.artUrl,
-            rating = formatRating(page.rating),
+            rating = formatRating(item?.let { metaFor(it).rating } ?: page.rating),
             onClick = { item?.let(open) }, modifier = modifier,
             longPressActions = listOfNotNull(
                 item?.let { TvMenuAction("Details") { open(it) } },
@@ -257,7 +261,7 @@ internal fun TvMediaTab(
         gridLabel = { it.title },
         cell = { item, scope ->
             TvPosterCard(
-                title = item.title, year = item.year, posterUrl = posterUrlFor(item), rating = formatRating(item.rating),
+                title = item.title, year = metaFor(item).year, posterUrl = posterUrlFor(item), rating = formatRating(metaFor(item).rating),
                 onClick = { open(item) }, modifier = scope.modifier,
                 longPressActions = listOf(
                     TvMenuAction("Details") { open(item) },

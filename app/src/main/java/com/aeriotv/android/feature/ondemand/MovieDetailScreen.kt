@@ -82,6 +82,7 @@ import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.movies.displayTitle
 import com.aeriotv.android.feature.movies.MediaItem
 import com.aeriotv.android.feature.movies.tmdbArtKey
+import com.aeriotv.android.feature.movies.tmdbSearchTitle
 import com.aeriotv.android.feature.movies.MediaPosterCard
 import com.aeriotv.android.feature.watchprogress.WatchProgressViewModel
 import com.aeriotv.android.ui.tv.tvFocusScale
@@ -172,6 +173,10 @@ fun MovieDetailScreen(
     }
     val cachedBackdropUrl = remember(artKey, artVersion) { artKey?.let { viewModel.artBackdropUrl(it) } }
     val cachedOverview = remember(artKey, artVersion) { artKey?.let { viewModel.artOverview(it) } }
+    var tmdbOn by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { tmdbOn = viewModel.isTmdbConfigured() }
+    // TMDB-first poster (matched record, then the art cache the grid uses).
+    val cachedPosterUrl = remember(artKey, artVersion, tmdbOn) { if (tmdbOn) artKey?.let { viewModel.artPosterUrl(it) } else null }
     var tmdbConfigured by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { tmdbConfigured = viewModel.isTmdbConfigured() }
     val hasServerArt = movie != null && (
@@ -205,14 +210,36 @@ fun MovieDetailScreen(
             (info?.effectiveGenre ?: m.genre).isNullOrBlank() ||
             info?.effectiveCast.isNullOrBlank() ||
             info?.effectiveDirector.isNullOrBlank()
-        if (missingMeta && tmdbDetails == null && infoSettled) {
+        // TMDB is the source of truth once matched (Logan 2026-11-03,
+        // Apple parity), so fetch whenever the opt-in is on, not only to
+        // fill blanks. Server tmdb_id first, then the year-qualified search.
+        @Suppress("UNUSED_VARIABLE") val unusedMissing = missingMeta
+        if (tmdbDetails == null && infoSettled) {
             tmdbDetails = viewModel.resolveTmdbDetails(
                 tmdbId = info?.tmdbId ?: m.tmdbId,
-                title = m.displayName,
+                title = tmdbSearchTitle(displayTitle(m.displayName, m.year), m.year),
                 isMovie = true,
             )
         }
     }
+
+    // The matched TMDB record merged with the art cache row the grid and
+    // hero read, so every surface shows the same TMDB values (Logan
+    // 2026-11-03). Null with TMDB off: server values everywhere.
+    val tmdb: TmdbDetails? = remember(tmdbDetails, artKey, artVersion, tmdbOn) {
+        if (!tmdbOn) return@remember null
+        val y = artKey?.let { viewModel.artYear(it) }?.toString()
+        val r = artKey?.let { viewModel.artRating(it) }
+        val g = artKey?.let { viewModel.artGenres(it) }
+        val d = tmdbDetails
+        if (d == null && y == null && r == null && g == null) null else TmdbDetails(
+            overview = d?.overview, genres = d?.genres ?: g, castTop = d?.castTop, director = d?.director,
+            year = d?.year ?: y, voteAverage = d?.voteAverage ?: r, posterPath = d?.posterPath,
+            backdropPath = d?.backdropPath, runtimeMinutes = d?.runtimeMinutes,
+        )
+    }
+    val tmdbHeroArt = viewModel.tmdbImageUrl(tmdb?.backdropPath, "w1280") ?: cachedBackdropUrl
+    val tmdbPosterArt = viewModel.tmdbImageUrl(tmdb?.posterPath, "w500") ?: cachedPosterUrl
 
     // Structured TMDB credits for the Cast & Crew strip. Independent of the
     // missingMeta gate above: servers only ever send comma-separated name
@@ -321,9 +348,10 @@ fun MovieDetailScreen(
                         val heroPlot = tmdbDetails?.overview?.takeIf { it.isNotBlank() } ?: cachedOverview
                             ?: info?.effectivePlot?.takeIf { it.isNotBlank() }
                             ?: movie.plot?.takeIf { it.isNotBlank() }
-                        val genreToken = (info?.effectiveGenre ?: movie.genre ?: tmdbDetails?.genres)
+                        val genreToken = (tmdb?.genres ?: info?.effectiveGenre ?: movie.genre)
                             ?.split(',', '/', '|')?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                        val runtimeSecs = info?.durationSeconds?.takeIf { it > 0 }
+                        val runtimeSecs = tmdb?.runtimeMinutes?.times(60)
+                            ?: info?.durationSeconds?.takeIf { it > 0 }
                             ?: movie.durationSeconds?.takeIf { it > 0 }
                         val playFocus = remember { FocusRequester() }
                         LaunchedEffect(Unit) {
@@ -333,21 +361,20 @@ fun MovieDetailScreen(
                             }
                         }
                         TvDetailHero(
-                            artUrl = cachedBackdropUrl ?: info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl,
+                            artUrl = tmdbHeroArt ?: info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterArt ?: tmdbPosterUrl,
                             // tvOS displayName drops every trailing
                             // "(YYYY)" group (VODModels.swift:1284).
                             title = displayTitle(movie.displayName, null),
                             // tvOS movie meta: year, runtime, first genre token
                             // (no MOVIE chip on TV), then the rating.
                             metaParts = listOfNotNull(
-                                info?.year?.toString() ?: movie.year?.toString() ?: tmdbDetails?.year,
+                                tmdb?.year ?: info?.year?.toString() ?: movie.year?.toString(),
                                 runtimeSecs?.let { formatDuration(it) },
                                 genreToken,
                             ),
-                            rating = (info?.rating?.takeIf { it.isNotBlank() } ?: movie.rating)
+                            rating = tmdb?.voteAverage ?: (info?.rating?.takeIf { it.isNotBlank() } ?: movie.rating)
                                 ?.let { runCatching { String.format("%.1f", it.toDouble()) }.getOrDefault(it) }
-                                ?.takeIf { it.isNotBlank() && it != "0.0" }
-                                ?: tmdbDetails?.voteAverage,
+                                ?.takeIf { it.isNotBlank() && it != "0.0" },
                             plot = heroPlot,
                         ) {
                             TvHeroActionButton(
@@ -415,8 +442,9 @@ fun MovieDetailScreen(
                             movie = movie,
                             info = info,
                             tmdbPosterUrl = tmdbPosterUrl,
-                            tmdbDetails = tmdbDetails,
-                            tmdbBackdropUrl = cachedBackdropUrl,
+                            tmdbDetails = tmdb,
+                            tmdbBackdropUrl = tmdbHeroArt,
+                            tmdbPosterArt = tmdbPosterArt,
                             hasResume = hasResume,
                             isTv = false,
                             onPlay = { onPlay(false) },
@@ -428,7 +456,7 @@ fun MovieDetailScreen(
                     InfoSection(
                         movie = movie,
                         info = info,
-                        tmdbDetails = tmdbDetails,
+                        tmdbDetails = tmdb,
                         cachedOverview = cachedOverview,
                         isTv = isTv,
                         castPhotosVisible = castCrewPeople.isNotEmpty(),
@@ -487,11 +515,12 @@ fun MovieDetailScreen(
                     // sits after Cast and Crew on tvOS, with the provenance
                     // note inside it.
                     item(key = "details-block") {
-                        val genre = info?.effectiveGenre?.takeIf { it.isNotBlank() }
-                            ?: movie.genre?.takeIf { it.isNotBlank() } ?: tmdbDetails?.genres
+                        val genre = tmdb?.genres ?: info?.effectiveGenre?.takeIf { it.isNotBlank() }
+                            ?: movie.genre?.takeIf { it.isNotBlank() }
                         val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
                         val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
-                        val runtimeSecs = info?.durationSeconds?.takeIf { it > 0 }
+                        val runtimeSecs = tmdb?.runtimeMinutes?.times(60)
+                            ?: info?.durationSeconds?.takeIf { it > 0 }
                             ?: movie.durationSeconds?.takeIf { it > 0 }
                         // tvOS tvFacts order (VODDetailView.swift:1124-1147)
                         // laid into a 2-column row-major grid: left column
@@ -643,21 +672,24 @@ private fun HeroSection(
     tmdbDetails: TmdbDetails?,
     /** Cached TMDB backdrop for this title; wins over the provider's art. */
     tmdbBackdropUrl: String? = null,
+    /** TMDB poster (matched record, then the art cache); wins over the server's. */
+    tmdbPosterArt: String? = null,
     hasResume: Boolean,
     isTv: Boolean,
     onPlay: () -> Unit,
     onPlayFocused: () -> Unit = {},
 ) {
     val heroUrl = tmdbBackdropUrl ?: info?.backdropUrl ?: movie.logo?.url ?: tmdbPosterUrl
-    val posterUrl = movie.logo?.url ?: info?.posterUrl ?: tmdbPosterUrl
-    // TMDB sits last in each chain: it only backfills fields the server
-    // (provider-info AND the list row) left empty.
-    val displayYear = info?.year?.toString() ?: movie.year?.toString() ?: tmdbDetails?.year
-    val displayRating = (info?.rating?.takeIf { it.isNotBlank() } ?: movie.rating)
+    val posterUrl = tmdbPosterArt ?: movie.logo?.url ?: info?.posterUrl ?: tmdbPosterUrl
+    // TMDB is the source of truth once matched (Logan 2026-11-03, Apple
+    // parity); the server fills what TMDB lacks. tmdbDetails is null with
+    // TMDB off, so the server values show.
+    val displayYear = tmdbDetails?.year ?: info?.year?.toString() ?: movie.year?.toString()
+    val displayRating = tmdbDetails?.voteAverage ?: (info?.rating?.takeIf { it.isNotBlank() } ?: movie.rating)
         ?.let { runCatching { String.format("%.1f", it.toDouble()) }.getOrDefault(it) }
         ?.takeIf { it.isNotBlank() && it != "0.0" }
-        ?: tmdbDetails?.voteAverage
-    val durationSecs = info?.durationSeconds?.takeIf { it > 0 } ?: movie.durationSeconds?.takeIf { it > 0 }
+    val durationSecs = tmdbDetails?.runtimeMinutes?.times(60)
+        ?: info?.durationSeconds?.takeIf { it > 0 } ?: movie.durationSeconds?.takeIf { it > 0 }
 
     // On TV land focus on Play the moment the screen opens; without this the
     // screen had no focused control at all and the D-pad appeared dead.
@@ -923,8 +955,8 @@ private fun InfoSection(
     // VODDetailView.mergedPlot).
     val plot = tmdbDetails?.overview?.takeIf { it.isNotBlank() } ?: cachedOverview
         ?: info?.effectivePlot?.takeIf { it.isNotBlank() } ?: movie.plot?.takeIf { it.isNotBlank() }
-    val genre = info?.effectiveGenre?.takeIf { it.isNotBlank() } ?: movie.genre?.takeIf { it.isNotBlank() }
-        ?: tmdbDetails?.genres
+    val genre = tmdbDetails?.genres ?: info?.effectiveGenre?.takeIf { it.isNotBlank() }
+        ?: movie.genre?.takeIf { it.isNotBlank() }
     val cast = info?.effectiveCast?.takeIf { it.isNotBlank() } ?: tmdbDetails?.castTop
     val director = info?.effectiveDirector?.takeIf { it.isNotBlank() } ?: tmdbDetails?.director
     val country = info?.effectiveCountry?.takeIf { it.isNotBlank() }

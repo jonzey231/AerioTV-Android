@@ -515,6 +515,15 @@ object DatabaseModule {
 
     /** Launch guide read: the window index also carries startMillis so the
      *  overlap test needs no table lookup (EpgProgrammeEntity indices). */
+    /** TMDB art rows carry TMDB year, rating and genres (TMDB-first metadata, 2026-11-03). */
+    internal val MIGRATION_38_39 = object : Migration(38, 39) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `tmdb_art` ADD COLUMN `year` TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE `tmdb_art` ADD COLUMN `rating` TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE `tmdb_art` ADD COLUMN `genres` TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
     internal val MIGRATION_37_38 = object : Migration(37, 38) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("DROP INDEX IF EXISTS `index_epg_programme_playlistId_endMillis`")
@@ -553,7 +562,7 @@ object DatabaseModule {
             // exists. Destructive fallback is scoped to ONLY pre-v10 dev builds
             // so an unmapped future migration can never silently wipe a real
             // user's saved servers and credentials in the field.
-            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38)
+            .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39)
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .build()

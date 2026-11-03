@@ -99,7 +99,7 @@ class TmdbArtCache @Inject constructor(
                 Log.w(TAG, "[TMDB-ART] load failed: ${it.message}")
                 emptyList()
             }
-            rows.forEach { entries[it.key] = TmdbArtEntry(it.tmdbId, it.poster, it.backdrop, null, it.at) }
+            rows.forEach { entries[it.key] = TmdbArtEntry(it.tmdbId, it.poster, it.backdrop, null, it.at, it.year, it.rating, it.genres) }
             loaded = true
             if (rows.isNotEmpty()) {
                 Log.i(TAG, "[TMDB-ART] loaded ${rows.size} cached titles")
@@ -123,6 +123,15 @@ class TmdbArtCache @Inject constructor(
      */
     fun overview(key: String): String? = synchronized(overviews) { overviews[key] }
 
+    /** Mirrors the Program Posters (TMDB) toggle: off, the metadata below is null everywhere. */
+    @Volatile private var tmdbOn = false
+    init { scope.launch { appPreferences.programPostersTmdbEnabled.collect { tmdbOn = it } } }
+
+    /** TMDB-first card metadata (Apple parity: TMDBArtCache.year/rating/genres). */
+    fun year(key: String): Int? = if (!tmdbOn) null else entries[key]?.year?.toIntOrNull()
+    fun rating(key: String): String? = if (!tmdbOn) null else entries[key]?.rating?.takeIf { it.isNotEmpty() }
+    fun genres(key: String): String? = if (!tmdbOn) null else entries[key]?.genres?.takeIf { it.isNotEmpty() }
+
     fun tmdbId(key: String): String? = entries[key]?.tmdbId?.takeIf { it.isNotEmpty() }
 
     /**
@@ -141,6 +150,9 @@ class TmdbArtCache @Inject constructor(
                 backdrop = backdrop.ifBlank { old?.backdrop ?: "" },
                 overview = overview?.takeIf { it.isNotBlank() },
                 at = System.currentTimeMillis(),
+                year = old?.year.orEmpty(),
+                rating = old?.rating.orEmpty(),
+                genres = old?.genres.orEmpty(),
             ),
         )
     }
@@ -192,7 +204,7 @@ class TmdbArtCache @Inject constructor(
         try {
             pruneMemory()
             val rows = dirty.entries.map { (k, e) ->
-                TmdbArtEntity(k, e.tmdbId, e.poster, e.backdrop, null, e.at)
+                TmdbArtEntity(k, e.tmdbId, e.poster, e.backdrop, null, e.at, e.year, e.rating, e.genres)
             }
             rows.forEach { dirty.remove(it.key) }
             lastWriteAt = System.currentTimeMillis()
@@ -339,7 +351,7 @@ class TmdbArtCache @Inject constructor(
         const val OVERVIEW_LRU = 500
         const val SAVE_THROTTLE_MS = 30_000L
         const val TAG = "TmdbArtCache"
-        const val SCHEMA = 3
+        const val SCHEMA = 4
         const val SAVE_DEBOUNCE_MS = 2_000L
         const val BACKOFF_MS = 2_000L
         const val PACE_MS = 80L

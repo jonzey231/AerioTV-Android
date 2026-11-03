@@ -16,7 +16,7 @@ interface TmdbArtDao {
      * The newest [limit] rows, overview left out (Apple parity 2026-10-27:
      * the persisted cache is capped and carries no synopsis text).
      */
-    @Query("SELECT `key`, tmdbId, poster, backdrop, NULL AS overview, at FROM tmdb_art ORDER BY at DESC LIMIT :limit")
+    @Query("SELECT `key`, tmdbId, poster, backdrop, NULL AS overview, at, year, rating, genres FROM tmdb_art ORDER BY at DESC LIMIT :limit")
     suspend fun newest(limit: Int): List<TmdbArtEntity>
 
     @Query("SELECT COUNT(*) FROM tmdb_art")

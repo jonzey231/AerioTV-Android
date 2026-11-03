@@ -33,6 +33,10 @@ data class TmdbArtEntry(
     val backdrop: String,
     val overview: String?,
     val at: Long,
+    /** TMDB year, rating ("7.2") and genres; "" when TMDB has none. */
+    val year: String = "",
+    val rating: String = "",
+    val genres: String = "",
 )
 
 /**
@@ -53,6 +57,8 @@ data class TmdbDetails(
     val posterPath: String?,
     /** Landscape art for hero cards (media-center redesign). */
     val backdropPath: String? = null,
+    /** Minutes (movie runtime, or the first episode_run_time for tv). */
+    val runtimeMinutes: Int? = null,
 )
 
 /**
@@ -301,6 +307,12 @@ class TMDBService @Inject constructor() {
             backdrop = hit?.let { field(it, "backdrop_path") } ?: "",
             overview = hit?.let { field(it, "overview") },
             at = System.currentTimeMillis(),
+            year = hit?.let { field(it, "release_date") ?: field(it, "first_air_date") }?.take(4).orEmpty(),
+            rating = hit?.let { field(it, "vote_average") }?.toDoubleOrNull()?.takeIf { it > 0.0 }
+                ?.let { String.format(java.util.Locale.US, "%.1f", it) }.orEmpty(),
+            genres = hit?.get("genre_ids")?.jsonArray
+                ?.mapNotNull { TMDB_GENRE_NAMES[it.jsonPrimitive.contentOrNull?.toIntOrNull()] }
+                ?.joinToString(", ").orEmpty(),
         )
     }.getOrNull()
 
@@ -708,6 +720,9 @@ class TMDBService @Inject constructor() {
                 ?.let { String.format("%.1f", it) },
             posterPath = field("poster_path"),
             backdropPath = field("backdrop_path"),
+            runtimeMinutes = (obj["runtime"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                ?: obj["episode_run_time"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.contentOrNull?.toIntOrNull())
+                ?.takeIf { it > 0 },
         )
     }.getOrNull()
 
@@ -855,3 +870,14 @@ class TMDBService @Inject constructor() {
         const val TAG = "TMDBService"
     }
 }
+
+/** TMDB's fixed genre ids (movie and tv lists combined); search rows carry ids only (Apple parity: TMDBService.genreNames). */
+internal val TMDB_GENRE_NAMES: Map<Int?, String> = mapOf(
+    28 to "Action", 12 to "Adventure", 16 to "Animation", 35 to "Comedy", 80 to "Crime",
+    99 to "Documentary", 18 to "Drama", 10751 to "Family", 14 to "Fantasy", 36 to "History",
+    27 to "Horror", 10402 to "Music", 9648 to "Mystery", 10749 to "Romance",
+    878 to "Science Fiction", 10770 to "TV Movie", 53 to "Thriller", 10752 to "War",
+    37 to "Western", 10759 to "Action & Adventure", 10762 to "Kids", 10763 to "News",
+    10764 to "Reality", 10765 to "Sci-Fi & Fantasy", 10766 to "Soap", 10767 to "Talk",
+    10768 to "War & Politics",
+)

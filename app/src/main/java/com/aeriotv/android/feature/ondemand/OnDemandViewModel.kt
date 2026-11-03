@@ -935,6 +935,37 @@ class OnDemandViewModel @Inject constructor(
     /** Cached TMDB poster for a library key, or null (caller falls back). */
     fun artPosterUrl(key: String): String? = tmdbArtCache.posterUrl(key)
 
+    /**
+     * TMDB is the source of truth once a title is matched (Logan
+     * 2026-11-03, Apple parity): the art cache's year and rating replace the
+     * playlist values; the playlist fills gaps, and with TMDB off nothing
+     * changes.
+     */
+    fun withTmdbMeta(item: com.aeriotv.android.feature.movies.MediaItem): com.aeriotv.android.feature.movies.MediaItem {
+        val k = item.artKey
+        val y = tmdbArtCache.year(k)
+        val r = tmdbArtCache.rating(k)
+        return if (y == null && r == null) item else item.copy(year = y ?: item.year, rating = r ?: item.rating)
+    }
+
+    fun withTmdbMeta(page: com.aeriotv.android.feature.movies.MediaHeroPage): com.aeriotv.android.feature.movies.MediaHeroPage {
+        val k = page.item?.artKey ?: com.aeriotv.android.feature.movies.tmdbArtKey(page.title, page.isMovie)
+        return page.copy(
+            year = tmdbArtCache.year(k) ?: page.year,
+            rating = tmdbArtCache.rating(k) ?: page.rating,
+            genre = tmdbArtCache.genres(k) ?: page.genre,
+        )
+    }
+
+    /** Full image URL for a TMDB path (details poster/backdrop). */
+    fun tmdbImageUrl(path: String?, size: String): String? =
+        path?.takeIf { it.isNotBlank() }?.let { tmdbService.imageUrlFor(it, size) }
+
+    /** TMDB-first metadata from the art cache; null with TMDB off. */
+    fun artYear(key: String): Int? = tmdbArtCache.year(key)
+    fun artRating(key: String): String? = tmdbArtCache.rating(key)
+    fun artGenres(key: String): String? = tmdbArtCache.genres(key)
+
     /** Cached TMDB backdrop for a library key, or null. */
     fun artBackdropUrl(key: String): String? = tmdbArtCache.backdropUrl(key)
 
