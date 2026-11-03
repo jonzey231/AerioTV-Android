@@ -58,6 +58,6 @@ sealed interface DeepLinkTarget {
      */
     data class Settings(val page: String) : DeepLinkTarget
 
-    /** A TV's "Set up from your phone" QR code, scanned with the system camera (`aeriotv://setup?...`). */
+    /** A receiver's "Set up from another device" QR code, scanned with the system camera (`aeriotv://setup?...`). */
     data class DeviceSetup(val link: String) : DeepLinkTarget
 }

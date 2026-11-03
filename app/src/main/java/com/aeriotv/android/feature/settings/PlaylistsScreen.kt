@@ -248,9 +248,9 @@ fun PlaylistsScreen(
                     ) {
                         Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text("Set up a TV", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text("Set up another device", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Send the active playlist to AerioTV on a TV. Nothing to type on the TV.",
+                                "Send the active playlist to AerioTV on another device. Nothing to type there.",
                                 style = MaterialTheme.typography.bodySmall.subtext(),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

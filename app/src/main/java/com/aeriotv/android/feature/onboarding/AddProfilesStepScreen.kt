@@ -420,7 +420,7 @@ fun AddProfilesStepScreen(
                             onClick = onSetUpTv,
                             enabled = !busy,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
+                        ) { Text("Set up another device with this playlist", style = MaterialTheme.typography.titleMedium) }
                     }
                 }
     }
@@ -777,7 +777,7 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
                 androidx.compose.material3.TextButton(
                     onClick = onSetUpTv,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50)),
-                ) { Text("Set up a TV with this playlist", style = MaterialTheme.typography.titleMedium) }
+                ) { Text("Set up another device with this playlist", style = MaterialTheme.typography.titleMedium) }
             }
             Spacer(Modifier.height(16.dp))
         }

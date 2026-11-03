@@ -90,7 +90,7 @@ object Routes {
     const val BOOTSTRAP = "bootstrap"
     const val WELCOME = "welcome"
     const val CHOOSE_TYPE = "choose_type"
-    /** TV: "Set up from your phone" receiver (docs/DeviceSetupHandoff.md). */
+    /** "Set up from another device" receiver (every device) (docs/DeviceSetupHandoff.md). */
     const val TV_SETUP = "tv_setup"
     const val CONFIGURE = "configure/{type}"
     const val MAIN = "main"
