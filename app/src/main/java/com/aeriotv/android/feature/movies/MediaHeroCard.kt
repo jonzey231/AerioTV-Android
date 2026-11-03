@@ -1,5 +1,7 @@
 package com.aeriotv.android.feature.movies
 
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.background
@@ -105,7 +107,12 @@ fun MediaHeroCard(
             .fillMaxWidth()
             .height(220.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface),
+            .background(MaterialTheme.colorScheme.surface)
+            // Tapping the artwork opens Details, same as the Info button
+            // (Logan 2026-11-03, Apple parity). A tap gesture, not
+            // clickable, so the card adds no D-pad focus stop on TV; the
+            // buttons below consume their own taps first.
+            .pointerInput(onDetails) { detectTapGestures(onTap = { onDetails() }) },
     ) {
         // A real landscape backdrop fills the wide slot with a center crop. A
         // portrait poster must NOT be cropped into it (Logan 2026-09-14): it
