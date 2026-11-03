@@ -2989,6 +2989,8 @@ private fun SettingsTabContent(
             is AddPlaylistWizardStep.Configure -> AddPlaylistStep.Configure(st.sourceType)
             // Past the connect: the id-flip watcher below must not pop it.
             is AddPlaylistWizardStep.AddProfiles -> AddPlaylistStep.None
+            // The receiver pops itself when the handed-over playlist is applied.
+            is AddPlaylistWizardStep.ReceiveSetup -> AddPlaylistStep.None
         }
         else -> AddPlaylistStep.None
     }
