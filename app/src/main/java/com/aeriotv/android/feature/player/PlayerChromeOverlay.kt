@@ -1688,12 +1688,22 @@ private fun RewindTransportBar(
             )
         }
         Spacer(Modifier.height(6.dp))
-        // Transport buttons centered; the Go Live pill (only while
-        // rewound) anchors to the right edge without disturbing the
-        // centering.
-        Box(modifier = Modifier.fillMaxWidth()) {
+        // Transport buttons centered with Pause on center; the Go Live pill
+        // (only while rewound) is an overlay whose leading edge sits 16 dp
+        // after Forward's trailing edge (Apple parity, f4b301a), so the
+        // transport never moves when the pill appears or disappears.
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        var transportBoxWidthPx by remember { mutableStateOf(0) }
+        var transportRowWidthPx by remember { mutableStateOf(0) }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { transportBoxWidthPx = it.width },
+        ) {
             Row(
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .onSizeChanged { transportRowWidthPx = it.width },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(18.dp),
             ) {
@@ -1731,7 +1741,14 @@ private fun RewindTransportBar(
                         null
                     },
                     modifier = Modifier
-                        .align(Alignment.CenterEnd)
+                        .align(Alignment.CenterStart)
+                        .offset {
+                            val gap = with(density) { 16.dp.roundToPx() }
+                            androidx.compose.ui.unit.IntOffset(
+                                (transportBoxWidthPx + transportRowWidthPx) / 2 + gap,
+                                0,
+                            )
+                        }
                         .onFocusChanged { goLiveFocused = it.isFocused },
                 ) {
                     Text(
