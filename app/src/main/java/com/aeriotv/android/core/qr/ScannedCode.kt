@@ -46,6 +46,22 @@ object ScannedCode {
         return parseUserKey(text) ?: Result.Invalid
     }
 
+    /**
+     * The same JSON the Dispatcharr web UI encodes in its user QR, so another
+     * AerioTV device (or anything that reads that QR) accepts it unchanged.
+     */
+    fun userKeyText(apiKey: String, baseUrl: String, username: String): String =
+        kotlinx.serialization.json.buildJsonObject {
+            put("v", JsonPrimitive(USER_KEY_VERSION))
+            put("type", JsonPrimitive(USER_KEY_TYPE))
+            put("api_key", JsonPrimitive(apiKey))
+            put("base_url", JsonPrimitive(baseUrl.trim().trimEnd('/')))
+            put("username", JsonPrimitive(username))
+            put("first_name", JsonPrimitive(""))
+            put("last_name", JsonPrimitive(""))
+            put("email", JsonPrimitive(""))
+        }.toString()
+
     fun parseUserKey(text: String): Result.UserKey? {
         val obj = runCatching { json.parseToJsonElement(text.trim()) }.getOrNull() as? JsonObject ?: return null
         fun str(key: String): String? = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()

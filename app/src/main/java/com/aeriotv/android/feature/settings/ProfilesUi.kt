@@ -120,6 +120,7 @@ class ProfilesViewModel @Inject constructor(
     /** App-local Admin role: add and remove profiles (server level not needed). */
     /** Set up a TV sender gate (docs/DeviceSetupHandoff.md). */
     fun canSetUpTv(playlistId: String): Boolean = manager.canSetUpTv(playlistId)
+    suspend fun hasUserQr(playlistId: String, profileId: String): Boolean = manager.userQrText(playlistId, profileId) != null
 
     suspend fun isAdmin(playlistId: String) =
         com.aeriotv.android.core.profiles.RoleRules.canManageProfiles(manager.activeRole(playlistId)) &&
@@ -547,6 +548,7 @@ fun ProfilesSection(playlistId: String) {
     var status by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var pinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
+    var userQrFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var settingPin by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var removingPin by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var channelProfilesFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
@@ -820,6 +822,11 @@ fun ProfilesSection(playlistId: String) {
                             ChoiceRow(label = "Reset PIN", onClick = { actionsFor = null; resettingPin = p })
                         }
                     }
+                    // Own profile, or an Admin for another; hidden without a saved API key.
+                    if (p.id == activeId || vm.isRoleAdmin(playlistId)) {
+                        val hasKey by androidx.compose.runtime.produceState(false, p.id) { value = vm.hasUserQr(playlistId, p.id) }
+                        if (hasKey) ChoiceRow(label = com.aeriotv.android.feature.qrscan.SHOW_USER_QR_LABEL, onClick = { actionsFor = null; userQrFor = p })
+                    }
                     if (canChannelProfiles) {
                         ChoiceRow(label = "Channel Profiles", onClick = { actionsFor = null; channelProfilesFor = p })
                     }
@@ -837,6 +844,9 @@ fun ProfilesSection(playlistId: String) {
             pinFor = null
             if (vm.isPlaying()) confirmSwitch = p else doSwitch(p)
         }
+    }
+    userQrFor?.let { p ->
+        com.aeriotv.android.feature.qrscan.UserQrFlow(playlistId, p.id, onClose = { userQrFor = null })
     }
     settingPin?.let { p -> SetPinFlow(playlistId, p, vm) { err -> settingPin = null; status = err } }
     removingPin?.let { p -> RemovePinFlow(playlistId, p, vm) { err -> removingPin = null; status = err } }

@@ -167,6 +167,9 @@ fun QrScanActions(
             ) { Text("Import file", style = MaterialTheme.typography.bodyMedium) }
             if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
         }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            ShowUserQrButton(linksOnly = true, enabled = enabled && !busy)
+        }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     } else Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -199,6 +202,7 @@ fun QrScanActions(
             Spacer(Modifier.size(8.dp))
             Text("Import file")
         }
+        ShowUserQrButton(linksOnly = false, enabled = enabled && !busy)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
     if (scanning) {

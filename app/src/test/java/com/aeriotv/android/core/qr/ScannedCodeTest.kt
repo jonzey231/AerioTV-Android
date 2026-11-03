@@ -16,6 +16,15 @@ class ScannedCodeTest {
     private val trimmed = """{"v":1,"type":"user_api_key","api_key":"k3y-ABC","base_url":"https://tv.example.com"}"""
     private val setupLink = SetupProtocol.buildLink("192.168.1.20", 41234, "123456", ByteArray(32) { it.toByte() }, "Living Room")
 
+    @Test fun generatedUserQrMatchesDispatcharrShapeAndParses() {
+        val text = ScannedCode.userKeyText("k3y-ABC", "https://tv.example.com/", "alice")
+        assertEquals(full.replace("https://tv.example.com/", "https://tv.example.com"), text)
+        val r = ScannedCode.parse(text) as ScannedCode.Result.UserKey
+        assertEquals("k3y-ABC", r.apiKey)
+        assertEquals("https://tv.example.com", r.baseUrl)
+        assertEquals("alice", r.username)
+    }
+
     @Test fun validFullPayload() {
         val r = ScannedCode.parse(full) as ScannedCode.Result.UserKey
         assertEquals("k3y-ABC", r.apiKey)
