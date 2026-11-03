@@ -295,7 +295,13 @@ internal fun RoleBadge(role: ProfileRole) {
 
 /** Password or API key for a roster user the admin list has no key for. */
 @Composable
-private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSubmit: suspend (String?, String?) -> String?) {
+internal fun RosterCredentialDialog(
+    username: String,
+    onCancel: () -> Unit,
+    onSubmit: suspend (String?, String?) -> String?,
+    title: String = "Add $username",
+    confirmLabel: String = "Add Profile",
+) {
     var password by remember(username) { mutableStateOf("") }
     var apiKey by remember(username) { mutableStateOf("") }
     var busy by remember(username) { mutableStateOf(false) }
@@ -304,7 +310,7 @@ private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSub
     val scope = rememberCoroutineScope()
     com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Add $username") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Sign in as $username once. Enter the password or an API key.")
@@ -339,7 +345,7 @@ private fun RosterCredentialDialog(username: String, onCancel: () -> Unit, onSub
         },
         confirmButton = {
             SettingsDialogTextButton(
-                label = "Add Profile",
+                label = confirmLabel,
                 enabled = !busy && (password.isNotBlank() || apiKey.isNotBlank()),
                 onClick = {
                     busy = true; error = null

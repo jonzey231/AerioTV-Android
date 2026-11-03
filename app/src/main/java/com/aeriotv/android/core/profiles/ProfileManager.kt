@@ -1058,6 +1058,22 @@ class ProfileManager @Inject constructor(
 
     // ---- Set up a TV from your phone (docs/DeviceSetupHandoff.md) ----
 
+    /** True when [profileId] has its own saved API key or password here (the default profile uses the playlist login). */
+    fun hasSavedCredential(profileId: String): Boolean =
+        store.byId(profileId)?.let { it.isDefault || !it.apiKey.isNullOrBlank() || !it.password.isNullOrBlank() } ?: false
+
+    /** Sign in once as [profileId]'s user and save the password or key on that profile. */
+    suspend fun saveProfileCredential(playlistId: String, profileId: String, password: String?, apiKey: String?): Result<Unit> = runCatching {
+        val p = store.byId(profileId) ?: error("Profile not found")
+        val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
+        val base = repository.effectiveBaseUrl(row)
+        val key = authenticate(playlistId, p.id, base, p.username, password, apiKey).key
+        val me = client.fetchMe(base, key) ?: error("Could not read ${p.username} from the server.")
+        if (!me.username.equals(p.username, ignoreCase = true)) error("This API key belongs to ${me.username}, not ${p.username}.")
+        store.update(profileId) { it.copy(password = password?.takeIf { s -> s.isNotBlank() } ?: it.password).applyMe(me, key) }
+        Log.i(TAG, "[PROFILE] credential saved for ${p.username}")
+    }
+
     // ---- Show Dispatcharr User QR Code (docs/DeviceSetupHandoff.md) ----
 
     /** The `user_api_key` QR text for [profileId], or null when no API key is saved here. Never log it. */

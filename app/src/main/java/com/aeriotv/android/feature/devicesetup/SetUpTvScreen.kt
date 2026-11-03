@@ -86,6 +86,8 @@ class SetUpTvViewModel @Inject constructor(
         data object Pick : Step
         /** First step for a target: "Copy entire setup from this device" or "Import this user only". */
         data class Scope(val target: SetupTarget) : Step
+        /** "Import this user only" for a profile with no saved sign-in: the roster credential prompt. */
+        data class Credential(val target: SetupTarget, val profileId: String, val username: String) : Step
         data class Code(val target: SetupTarget, val error: String? = null) : Step
         data class Choose(val target: SetupTarget, val code: String) : Step
         data object Sending : Step
@@ -106,15 +108,14 @@ class SetUpTvViewModel @Inject constructor(
 
     fun load(pid: String?, link: String?, target: SetupTarget? = null) {
         if (playlistId != null) return
-        // Opened from the dock card: that TV is preselected, the code is still required.
-        if (target != null) _step.value = Step.Scope(target)
         viewModelScope.launch {
             val id = pid ?: repository.activePlaylist()?.id
             playlistId = id
             _source.value = id?.let { sender.source(it) }
+            if (target != null) _step.value = afterTarget(target)
             link?.let(SetupProtocol::parseLink)?.let { l ->
                 val t = SetupTarget(l.name.ifBlank { "AerioTV" }, l.ip, l.port, l.pk, code = l.code)
-                _step.value = Step.Scope(t)
+                _step.value = afterTarget(t)
             }
         }
     }
@@ -123,20 +124,53 @@ class SetUpTvViewModel @Inject constructor(
     fun useLink(link: String) {
         val l = SetupProtocol.parseLink(link) ?: return
         val t = SetupTarget(l.name.ifBlank { "AerioTV" }, l.ip, l.port, l.pk, code = l.code)
-        _step.value = Step.Scope(t)
+        _step.value = afterTarget(t)
     }
 
-    fun pick(t: SetupTarget) { _step.value = Step.Scope(t) }
+    private val isDispatcharr: Boolean get() = _source.value?.isDispatcharr == true
+
+    /** Scope applies to Dispatcharr only; other playlists go straight to the code. */
+    private fun afterTarget(t: SetupTarget): Step = when {
+        isDispatcharr -> Step.Scope(t)
+        t.code != null -> Step.Choose(t, t.code)
+        else -> Step.Code(t)
+    }
+
+    fun pick(t: SetupTarget) { _userOnly.value = false; _step.value = afterTarget(t) }
 
     fun chooseScope(t: SetupTarget, userOnly: Boolean) {
         _userOnly.value = userOnly
-        _step.value = if (t.code != null) Step.Choose(t, t.code) else Step.Code(t)
+        val id = playlistId
+        val active = id?.let { profiles.activeProfile(it) }
+        _step.value = when {
+            userOnly && active != null && !profiles.hasSavedCredential(active.id) -> Step.Credential(t, active.id, active.username)
+            t.code != null -> Step.Choose(t, t.code)
+            else -> Step.Code(t)
+        }
     }
+
+    /** Roster prompt submit: null = saved, else the error to show. */
+    suspend fun saveCredential(s: Step.Credential, password: String?, apiKey: String?): String? {
+        val id = playlistId ?: return "This playlist could not be read."
+        return profiles.saveProfileCredential(id, s.profileId, password, apiKey).fold(
+            onSuccess = {
+                _source.value = sender.source(id)
+                _step.value = if (s.target.code != null) Step.Choose(s.target, s.target.code) else Step.Code(s.target)
+                null
+            },
+            onFailure = { it.message ?: "Could not sign in." },
+        )
+    }
+
+    fun cancelCredential(s: Step.Credential) { _step.value = Step.Scope(s.target) }
+
+    private fun afterTargetBack(t: SetupTarget): Step = if (isDispatcharr) Step.Scope(t) else Step.Pick
 
     fun back() {
         _step.value = when (val s = _step.value) {
-            is Step.Choose -> if (s.target.code != null) Step.Scope(s.target) else Step.Code(s.target)
-            is Step.Code -> Step.Scope(s.target)
+            is Step.Choose -> if (s.target.code != null) afterTargetBack(s.target) else Step.Code(s.target)
+            is Step.Code -> afterTargetBack(s.target)
+            is Step.Credential -> Step.Scope(s.target)
             is Step.Error -> s.back
             else -> Step.Pick
         }
@@ -195,6 +229,16 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
             when (val s = step) {
                 SetUpTvViewModel.Step.Pick -> PickStep(tvs, vm::pick, vm::useLink)
                 is SetUpTvViewModel.Step.Scope -> ScopeStep(s, vm.userOnly.collectAsStateWithLifecycle().value, vm::chooseScope)
+                is SetUpTvViewModel.Step.Credential -> {
+                    ScopeStep(SetUpTvViewModel.Step.Scope(s.target), true) { _, _ -> }
+                    com.aeriotv.android.feature.settings.RosterCredentialDialog(
+                        username = s.username,
+                        onCancel = { vm.cancelCredential(s) },
+                        onSubmit = { pw, key -> vm.saveCredential(s, pw, key) },
+                        title = "Sign in as ${s.username}",
+                        confirmLabel = "Continue",
+                    )
+                }
                 is SetUpTvViewModel.Step.Code -> CodeStep(s, vm::submitCode)
                 is SetUpTvViewModel.Step.Choose -> ChooseStep(s, source, vm.userOnly.collectAsStateWithLifecycle().value, vm::send)
                 SetUpTvViewModel.Step.Sending -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
