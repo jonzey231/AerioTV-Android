@@ -91,7 +91,8 @@ class TvSetupViewModel @Inject constructor(
         data object Expired : Phase
         data class Applying(val step: String) : Phase
         data class Failed(val message: String) : Phase
-        data object Done : Phase
+        /** [dispatcharrPlaylistId] set = continue into Add Profiles for that playlist. */
+        data class Done(val dispatcharrPlaylistId: String?) : Phase
     }
 
     private val _phase = MutableStateFlow<Phase>(Phase.Starting)
@@ -222,7 +223,7 @@ class TvSetupViewModel @Inject constructor(
         pending = null
         if (problems.isNotEmpty()) Log.w(TAG, "[SETUP] finished; not added: ${problems.size}")
         Log.i(TAG, "[SETUP] applied (${p.profiles.size - problems.size} profiles)")
-        _phase.value = Phase.Done
+        _phase.value = Phase.Done(entity.id.takeIf { isDispatcharr })
     }
 
     override fun onCleared() {
@@ -236,14 +237,15 @@ class TvSetupViewModel @Inject constructor(
 fun TvSetupScreen(
     addPlaylist: suspend (PlaylistRepository.SaveRequest) -> Result<PlaylistEntity>,
     onCancel: () -> Unit,
-    onDone: () -> Unit,
+    /** Gets the Dispatcharr playlist id (null otherwise) so the caller opens Add Profiles next. */
+    onDone: (String?) -> Unit,
     vm: TvSetupViewModel = hiltViewModel(),
 ) {
     val phase by vm.phase.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.bind(addPlaylist); vm.start() }
     // The view model can outlive the screen (Settings host scope): leave it fresh for the next visit.
     DisposableEffect(Unit) { onDispose { vm.stop(); vm.reset() } }
-    LaunchedEffect(phase) { if (phase is TvSetupViewModel.Phase.Done) onDone() }
+    LaunchedEffect(phase) { (phase as? TvSetupViewModel.Phase.Done)?.let { onDone(it.dispatcharrPlaylistId) } }
     val cancel = { vm.stop(); onCancel() }
     BackHandler(enabled = phase !is TvSetupViewModel.Phase.Applying) { cancel() }
 
@@ -280,7 +282,7 @@ fun TvSetupScreen(
                 primary = "Retry" to vm::retry,
                 onCancel = cancel,
             )
-            TvSetupViewModel.Phase.Done -> CircularProgressIndicator()
+            is TvSetupViewModel.Phase.Done -> CircularProgressIndicator()
         }
     }
 }

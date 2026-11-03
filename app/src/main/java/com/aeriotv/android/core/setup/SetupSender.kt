@@ -178,8 +178,14 @@ class SetupSender(
         return Source(row, isD, choices, syncOn)
     }
 
-    suspend fun buildPayload(playlistId: String, profileIds: Set<String>, turnOnSync: Boolean): SetupProtocol.Payload? {
+    /**
+     * [userOnly] = "Import this user only": the playlist signs in as the
+     * active profile, which arrives as the receiver's one (default) profile.
+     * Same wire format, one profile.
+     */
+    suspend fun buildPayload(playlistId: String, profileIds: Set<String>, turnOnSync: Boolean, userOnly: Boolean = false): SetupProtocol.Payload? {
         val row = profiles.defaultPlaylistRow(playlistId) ?: return null
+        if (userOnly) return buildUserOnly(playlistId, row, turnOnSync)
         val type = when {
             row.sourceType.startsWith("Dispatcharr") -> "dispatcharr"
             row.sourceType == "XtreamCodes" -> "xtream"
@@ -228,6 +234,39 @@ class SetupSender(
         return SetupProtocol.Payload(
             playlist = playlist,
             profiles = parts,
+            sync = if (turnOnSync) SetupProtocol.SyncPart() else null,
+        )
+    }
+
+    private suspend fun buildUserOnly(playlistId: String, row: PlaylistEntity, turnOnSync: Boolean): SetupProtocol.Payload? {
+        val full = buildPayload(playlistId, emptySet(), turnOnSync = false) ?: return null
+        if (full.playlist.type != "dispatcharr") return full
+        val activeId = profiles.activeProfile(playlistId)?.id
+        val src = profiles.setupSources(playlistId).firstOrNull { it.profile.id == activeId }
+            ?: profiles.setupSources(playlistId).firstOrNull { it.profile.isDefault } ?: return full
+        val p = src.profile
+        val cred = if (p.isDefault) full.playlist.credential else SetupProtocol.Credential(
+            apiKey = p.apiKey?.takeIf { it.isNotBlank() },
+            username = p.username.takeIf { it.isNotBlank() && !p.password.isNullOrBlank() },
+            password = p.password?.takeIf { it.isNotBlank() },
+        ).takeIf { it.apiKey != null || it.password != null } ?: return null
+        val pin = src.pin
+        return full.copy(
+            playlist = full.playlist.copy(credential = cred),
+            profiles = listOf(
+                SetupProtocol.ProfilePart(
+                    username = p.username,
+                    displayName = p.displayName,
+                    role = p.effectiveRole().wire,
+                    avatar = p.avatar?.let { SetupProtocol.Avatar(it.icon, it.color) },
+                    order = 0,
+                    isDefault = true,
+                    credential = null,
+                    pinType = if (pin != null) PinRules.wireType(pin.type) else "none",
+                    pinHash = pin?.hash.orEmpty(),
+                    pinSalt = pin?.salt.orEmpty(),
+                ),
+            ),
             sync = if (turnOnSync) SetupProtocol.SyncPart() else null,
         )
     }

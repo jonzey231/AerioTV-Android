@@ -3204,7 +3204,12 @@ private fun SettingsTabContent(
             is AddPlaylistWizardStep.ReceiveSetup -> com.aeriotv.android.feature.devicesetup.TvSetupScreen(
                 addPlaylist = { req -> playlistVm.addFromSetup(req) },
                 onCancel = { nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType)) },
-                onDone = { if (nav.current == r) nav.pop() },
+                onDone = { pid ->
+                    if (nav.current != r) Unit
+                    // Dispatcharr: continue into Add Profiles so more users can be added.
+                    else if (pid != null) nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.AddProfiles(pid)))
+                    else nav.pop()
+                },
             )
             is AddPlaylistWizardStep.ChooseType -> ChooseSourceTypeScreen(
                 onBack = { nav.pop() },

@@ -3,6 +3,9 @@ package com.aeriotv.android.feature.devicesetup
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -81,6 +84,8 @@ class SetUpTvViewModel @Inject constructor(
 
     sealed interface Step {
         data object Pick : Step
+        /** First step for a target: "Copy entire setup from this device" or "Import this user only". */
+        data class Scope(val target: SetupTarget) : Step
         data class Code(val target: SetupTarget, val error: String? = null) : Step
         data class Choose(val target: SetupTarget, val code: String) : Step
         data object Sending : Step
@@ -96,18 +101,20 @@ class SetUpTvViewModel @Inject constructor(
     private val _source = MutableStateFlow<SetupSender.Source?>(null)
     val source: StateFlow<SetupSender.Source?> = _source.asStateFlow()
     private var playlistId: String? = null
+    private val _userOnly = MutableStateFlow(false)
+    val userOnly: StateFlow<Boolean> = _userOnly.asStateFlow()
 
     fun load(pid: String?, link: String?, target: SetupTarget? = null) {
         if (playlistId != null) return
         // Opened from the dock card: that TV is preselected, the code is still required.
-        if (target != null) _step.value = Step.Code(target)
+        if (target != null) _step.value = Step.Scope(target)
         viewModelScope.launch {
             val id = pid ?: repository.activePlaylist()?.id
             playlistId = id
             _source.value = id?.let { sender.source(it) }
             link?.let(SetupProtocol::parseLink)?.let { l ->
                 val t = SetupTarget(l.name.ifBlank { "AerioTV" }, l.ip, l.port, l.pk, code = l.code)
-                _step.value = Step.Choose(t, l.code)
+                _step.value = Step.Scope(t)
             }
         }
     }
@@ -116,14 +123,20 @@ class SetUpTvViewModel @Inject constructor(
     fun useLink(link: String) {
         val l = SetupProtocol.parseLink(link) ?: return
         val t = SetupTarget(l.name.ifBlank { "AerioTV" }, l.ip, l.port, l.pk, code = l.code)
-        _step.value = Step.Choose(t, l.code)
+        _step.value = Step.Scope(t)
     }
 
-    fun pick(t: SetupTarget) { _step.value = if (t.code != null) Step.Choose(t, t.code) else Step.Code(t) }
+    fun pick(t: SetupTarget) { _step.value = Step.Scope(t) }
+
+    fun chooseScope(t: SetupTarget, userOnly: Boolean) {
+        _userOnly.value = userOnly
+        _step.value = if (t.code != null) Step.Choose(t, t.code) else Step.Code(t)
+    }
 
     fun back() {
         _step.value = when (val s = _step.value) {
-            is Step.Choose -> if (s.target.code != null) Step.Pick else Step.Code(s.target)
+            is Step.Choose -> if (s.target.code != null) Step.Scope(s.target) else Step.Code(s.target)
+            is Step.Code -> Step.Scope(s.target)
             is Step.Error -> s.back
             else -> Step.Pick
         }
@@ -140,7 +153,7 @@ class SetUpTvViewModel @Inject constructor(
         val back = Step.Choose(t, code)
         _step.value = Step.Sending
         viewModelScope.launch {
-            val payload = sender.buildPayload(id, profileIds, sync)
+            val payload = sender.buildPayload(id, profileIds, sync, userOnly = _userOnly.value)
                 ?: run { _step.value = Step.Error("This playlist could not be read.", back); return@launch }
             _step.value = when (val r = sender.send(t, code, payload)) {
                 SetupSender.SendResult.Ok -> Step.Sent
@@ -181,8 +194,9 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
             Text("Set up another device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
             when (val s = step) {
                 SetUpTvViewModel.Step.Pick -> PickStep(tvs, vm::pick, vm::useLink)
+                is SetUpTvViewModel.Step.Scope -> ScopeStep(s, vm.userOnly.collectAsStateWithLifecycle().value, vm::chooseScope)
                 is SetUpTvViewModel.Step.Code -> CodeStep(s, vm::submitCode)
-                is SetUpTvViewModel.Step.Choose -> ChooseStep(s, source, vm::send)
+                is SetUpTvViewModel.Step.Choose -> ChooseStep(s, source, vm.userOnly.collectAsStateWithLifecycle().value, vm::send)
                 SetUpTvViewModel.Step.Sending -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     CircularProgressIndicator(Modifier.size(24.dp)); Text("Sending to the device", color = MaterialTheme.colorScheme.onBackground)
                 }
@@ -248,6 +262,30 @@ private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit, onLi
 }
 
 @Composable
+private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoose: (SetupTarget, Boolean) -> Unit) {
+    var pickedUserOnly by remember(s.target.key) { mutableStateOf(userOnly) }
+    Text("Set up ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .selectableGroup(),
+    ) {
+        listOf(false to "Copy entire setup from this device", true to "Import this user only").forEach { (value, label) ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .selectable(selected = pickedUserOnly == value, onClick = { pickedUserOnly = value }, role = Role.RadioButton)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.RadioButton(selected = pickedUserOnly == value, onClick = null)
+                Text(label, modifier = Modifier.padding(start = 12.dp), color = MaterialTheme.colorScheme.onBackground)
+            }
+        }
+    }
+    Button(onClick = { onChoose(s.target, pickedUserOnly) }, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text("Continue") }
+}
+
+@Composable
 private fun CodeStep(s: SetUpTvViewModel.Step.Code, onSubmit: (SetupTarget, String) -> Unit) {
     var code by remember(s.target.key) { mutableStateOf("") }
     Text("Enter the code shown on ${s.target.name}.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
@@ -268,6 +306,7 @@ private fun CodeStep(s: SetUpTvViewModel.Step.Code, onSubmit: (SetupTarget, Stri
 private fun ChooseStep(
     s: SetUpTvViewModel.Step.Choose,
     source: SetupSender.Source?,
+    userOnly: Boolean,
     onSend: (SetupTarget, String, Set<String>, Boolean) -> Unit,
 ) {
     if (source == null) {
@@ -276,13 +315,14 @@ private fun ChooseStep(
     }
     val picked = remember(source) {
         androidx.compose.runtime.mutableStateListOf<String>().apply {
-            addAll(source.choices.filter { (it.isDefault || it.isCurrent) && it.credentialLabel != null }.map { it.profileId })
+            // Copy entire setup: every profile that can be sent.
+            addAll(source.choices.filter { it.isDefault || it.credentialLabel != null }.map { it.profileId })
         }
     }
-    var sync by remember(source) { mutableStateOf(source.isDispatcharr && source.syncOnHere) }
+    var sync by remember(source, userOnly) { mutableStateOf(source.isDispatcharr && !userOnly) }
     Text("Send to ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
     Text("Playlist: ${source.playlist.name}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-    if (source.isDispatcharr && source.choices.isNotEmpty()) {
+    if (source.isDispatcharr && source.choices.isNotEmpty() && !userOnly) {
         Text("Profiles", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
         source.choices.forEach { c ->
             val enabled = c.credentialLabel != null && !c.isDefault
@@ -307,6 +347,8 @@ private fun ChooseStep(
                 }
             }
         }
+    }
+    if (source.isDispatcharr) {
         Row(Modifier.fillMaxWidth().clickable { sync = !sync }, verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = sync, onCheckedChange = null)
             Text("Turn on Dispatcharr Sync on the other device", modifier = Modifier.padding(start = 8.dp), color = MaterialTheme.colorScheme.onBackground)
