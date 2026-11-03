@@ -275,7 +275,7 @@ rule for it; see the note below the table.
 | 1 | Pass to Auth | Path | `/api/swagger/*` | keeps the API docs behind SSO |
 | 2 | Pass to Auth | Path | `/api/redoc/*` | keeps the API docs behind SSO |
 | 3 | Pass to Auth | Path | `/api/schema/*` | keeps the API docs behind SSO |
-| 4 | Bypass Auth | Path | `/api/*` | channels, EPG, VOD, recordings, logos, native Catch-Up sessions, Mark as Radio Channel (admin only: `PATCH /api/channels/channels/<id>/`), Channel Profiles for a profile (admin only: `PATCH /api/accounts/users/<id>/`) |
+| 4 | Bypass Auth | Path | `/api/*` | channels, EPG (including the now-airing programs search, `/api/epg/programs/search/`), VOD, recordings, logos, native Catch-Up sessions, Mark as Radio Channel (admin only: `PATCH /api/channels/channels/<id>/`), Channel Profiles for a profile (admin only: `PATCH /api/accounts/users/<id>/`) |
 | 5 | Bypass Auth | Path | `/proxy/*` | live streams, VOD streams, Catch-Up playback, stream switching |
 | 6 | Bypass Auth | Path | `/player_api.php` | Xtream Codes only |
 | 7 | Bypass Auth | Path | `/xmltv.php` | Xtream Codes only |
