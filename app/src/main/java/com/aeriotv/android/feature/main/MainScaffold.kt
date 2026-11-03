@@ -3199,8 +3199,16 @@ private fun SettingsTabContent(
                         if (nav.current == r) nav.pop()
                     },
                 )
+            is AddPlaylistWizardStep.ReceiveSetup -> com.aeriotv.android.feature.devicesetup.TvSetupScreen(
+                addPlaylist = { req -> playlistVm.addFromSetup(req) },
+                onCancel = { nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType)) },
+                onDone = { if (nav.current == r) nav.pop() },
+            )
             is AddPlaylistWizardStep.ChooseType -> ChooseSourceTypeScreen(
                 onBack = { nav.pop() },
+                onSetUpFromPhone = {
+                    nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ReceiveSetup))
+                },
                 onChoose = { type ->
                     // Start a FRESH draft so the add creates a NEW row and can't
                     // carry over the active server's bootstrap-prefilled API key

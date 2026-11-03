@@ -22,7 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Icon
@@ -87,7 +87,7 @@ fun WelcomeScreen(
      * selection; this runs the chain for the selection (see WelcomeSyncChain).
      */
     onContinueSync: (drive: Boolean, dispatcharr: Boolean) -> Unit = { _, _ -> },
-    /** TV only: "Set up from your phone" (docs/DeviceSetupHandoff.md). Null hides it. */
+    /** "Set up from another device" on every device (docs/DeviceSetupHandoff.md). Null hides it. */
     onSetUpFromPhone: (() -> Unit)? = null,
 ) {
     val config = LocalConfiguration.current
@@ -102,7 +102,7 @@ fun WelcomeScreen(
         googleSignedInEmail = googleSignedInEmail,
         showDispatcharr = showDispatcharr,
         onContinueSync = onContinueSync,
-        onFastest = if (isTv) onSetUpFromPhone else null,
+        onFastest = onSetUpFromPhone,
     )
     // TV: Welcome is the top of onboarding, and Back never closes the app.
     BackHandler(enabled = isTv) { }
@@ -251,26 +251,16 @@ private fun StartHereSection(c: WelcomeContent) {
     OnboardingSectionLabel("Start here")
     val fastest = c.onFastest
     if (fastest != null) {
-        if (c.isTv) {
-            OnboardingCard(
-                icon = Icons.Filled.PhoneAndroid,
-                title = "Set up from your phone",
-                subtitle = "Fastest. On your phone, scan the code on the next screen, tap the banner on the " +
-                    "Live TV tab, or navigate to Settings. Your playlist, profiles, and preferences come over in one step.",
-                onClick = fastest,
-                highlighted = true,
-                compact = true,
-                modifier = Modifier.focusRequester(firstFocus),
-            )
-        } else {
-            OnboardingCard(
-                icon = Icons.Outlined.QrCodeScanner,
-                title = "Scan a QR code",
-                subtitle = "Fastest. Scan the QR code from the Users page in Dispatcharr, or import it from Photos.",
-                onClick = fastest,
-                highlighted = true,
-            )
-        }
+        OnboardingCard(
+            icon = Icons.Filled.Devices,
+            title = "Set up from another device",
+            subtitle = "Fastest. On your other device, scan the code on the next screen, tap the banner on the " +
+                "Live TV tab, or navigate to Settings. Your playlist, profiles, and preferences come over in one step.",
+            onClick = fastest,
+            highlighted = true,
+            compact = c.isTv,
+            modifier = Modifier.focusRequester(firstFocus),
+        )
     }
     OnboardingCard(
         icon = Icons.Outlined.Dns,

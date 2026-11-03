@@ -1007,7 +1007,7 @@ fun AerioTVNavHost(
                 val chooseIsTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
                 ChooseSourceTypeScreen(
                     onboarding = true,
-                    onSetUpFromPhone = if (chooseIsTv) ({ navController.navigate(Routes.TV_SETUP) }) else null,
+                    onSetUpFromPhone = { navController.navigate(Routes.TV_SETUP) },
                     onBack = { navController.popBackStack() },
                     onChoose = { type ->
                         // Welcome's Sync with Dispatcharr card arrives here with the flag

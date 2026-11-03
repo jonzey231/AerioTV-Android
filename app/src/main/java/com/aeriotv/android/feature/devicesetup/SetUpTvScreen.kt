@@ -225,7 +225,7 @@ private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit, onLi
                 .clickable { onPick(t) }.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Icon(setupKindIcon(t.kind), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(t.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
                 Text("Check that the TV shows ${t.fingerprint}", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)

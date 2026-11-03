@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Tablet
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +51,13 @@ object SetupDockDismissals {
 }
 
 /** Second line of the dock card and the Settings banner. */
+/** Device-type icon for a receiver's advertised `kind` (absent = TV). */
+fun setupKindIcon(kind: String): androidx.compose.ui.graphics.vector.ImageVector = when (kind) {
+    com.aeriotv.android.core.setup.SetupProtocol.KIND_PHONE -> Icons.Filled.PhoneAndroid
+    com.aeriotv.android.core.setup.SetupProtocol.KIND_TABLET -> Icons.Filled.Tablet
+    else -> Icons.Filled.Tv
+}
+
 fun setupWaitingLine(t: SetupTarget) = "Waiting for setup, key ${t.fingerprint}"
 
 /**
@@ -88,7 +97,7 @@ fun SetupTvSettingsBanner(offer: SetupTvOffer, modifier: Modifier = Modifier) {
                 .background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            Icon(setupKindIcon(offer.target.kind), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -147,7 +156,7 @@ fun SetupTvDockCard(
                 .background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            Icon(setupKindIcon(target.kind), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {

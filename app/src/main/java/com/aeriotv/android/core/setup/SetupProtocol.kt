@@ -19,6 +19,18 @@ object SetupProtocol {
     const val TXT_VERSION = "v"
     const val TXT_NAME = "name"
     const val TXT_PK = "pk"
+    /** Receiver form factor: [KIND_PHONE], [KIND_TABLET], or [KIND_TV]. Absent (older builds) = TV. */
+    const val TXT_KIND = "kind"
+    const val KIND_PHONE = "phone"
+    const val KIND_TABLET = "tablet"
+    const val KIND_TV = "tv"
+
+    /** Reads an advertised `kind`; unknown or absent means TV, the only receiver older builds had. */
+    fun normalizeKind(raw: String?): String = when (raw?.trim()?.lowercase()) {
+        KIND_PHONE -> KIND_PHONE
+        KIND_TABLET -> KIND_TABLET
+        else -> KIND_TV
+    }
     const val WINDOW_MS = 10L * 60L * 1000L
     const val MAX_FAILURES = 3
 

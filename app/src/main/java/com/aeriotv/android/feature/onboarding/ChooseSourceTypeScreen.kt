@@ -10,13 +10,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,7 +66,7 @@ fun ChooseSourceTypeScreen(
     onChoose: (SourceType) -> Unit,
     /** Onboarding: step caption and dots; TV footer with the Back hint. */
     onboarding: Boolean = false,
-    /** TV onboarding: "Already have AerioTV on your phone?" opens the phone-handoff receiver. */
+    /** "Set up from another device": opens the setup receiver (docs/DeviceSetupHandoff.md). Null hides it. */
     onSetUpFromPhone: (() -> Unit)? = null,
 ) {
     val isTv = rememberIsTvDevice()
@@ -155,6 +156,17 @@ fun ChooseSourceTypeScreen(
                     onChoose = onChoose,
                     firstCardFocus = otherFocus,
                 )
+                // Phones and tablets: the same receiver the TV footer opens.
+                if (onSetUpFromPhone != null && !(isTv && onboarding)) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = onSetUpFromPhone,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50)),
+                    ) {
+                        Icon(Icons.Filled.Devices, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text("Set up from another device")
+                    }
+                }
             }
         }
 
@@ -169,9 +181,9 @@ fun ChooseSourceTypeScreen(
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     if (onSetUpFromPhone != null) {
                         TextButton(onClick = onSetUpFromPhone, modifier = Modifier.dpadFocusRing(RoundedCornerShape(50))) {
-                            Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Filled.Devices, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.size(6.dp))
-                            Text("Already have AerioTV on your phone?")
+                            Text("Set up from another device")
                         }
                     }
                 }

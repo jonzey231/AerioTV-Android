@@ -24,7 +24,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 /**
- * TV side of "Set up from your phone" (docs/DeviceSetupHandoff.md). Runs an
+ * Receiver side of "Set up from another device" (phones, tablets, and TVs) (docs/DeviceSetupHandoff.md). Runs an
  * embedded Ktor CIO server (the same stack as the companion host, no new HTTP
  * library) on an ephemeral port, advertises `_aeriotv-setup._tcp`, and accepts
  * exactly one sealed payload per code. Lives only while the setup screen is
@@ -54,7 +54,7 @@ class SetupReceiver(
     private var regListener: NsdManager.RegistrationListener? = null
     private var multicastLock: WifiManager.MulticastLock? = null
 
-    /** Returns false when the TV has no LAN address or the bind failed. */
+    /** Returns false when the device has no LAN address or the bind failed. */
     suspend fun start(): Boolean {
         val lan = lanIpv4() ?: return false.also { Log.w(TAG, "[SETUP] no LAN IPv4; cannot offer setup") }
         ip = lan
@@ -150,6 +150,7 @@ class SetupReceiver(
             runCatching { setAttribute(SetupProtocol.TXT_VERSION, SetupProtocol.VERSION.toString()) }
             runCatching { setAttribute(SetupProtocol.TXT_NAME, name.take(60)) }
             runCatching { setAttribute(SetupProtocol.TXT_PK, SetupCrypto.b64(keys.publicKey)) }
+            runCatching { setAttribute(SetupProtocol.TXT_KIND, deviceKind()) }
         }
         val l = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(s: NsdServiceInfo) { Log.i(TAG, "[SETUP] NSD registered ${s.serviceName}") }
@@ -167,9 +168,22 @@ class SetupReceiver(
         regListener = null
     }
 
+    /** phone, tablet, or tv for the TXT `kind` key, so senders show the right icon. */
+    private fun deviceKind(): String {
+        val cfg = context.resources.configuration
+        val tv = (cfg.uiMode and android.content.res.Configuration.UI_MODE_TYPE_MASK) ==
+            android.content.res.Configuration.UI_MODE_TYPE_TELEVISION ||
+            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+        return when {
+            tv -> SetupProtocol.KIND_TV
+            cfg.smallestScreenWidthDp >= 600 -> SetupProtocol.KIND_TABLET
+            else -> SetupProtocol.KIND_PHONE
+        }
+    }
+
     private fun deviceName(): String =
         runCatching { Settings.Global.getString(context.contentResolver, "device_name") }
-            .getOrNull()?.takeIf { it.isNotBlank() } ?: Build.MODEL ?: "Android TV"
+            .getOrNull()?.takeIf { it.isNotBlank() } ?: Build.MODEL ?: "Android device"
 
     private fun lanIpv4(): String? = runCatching {
         NetworkInterface.getNetworkInterfaces().toList().asSequence()

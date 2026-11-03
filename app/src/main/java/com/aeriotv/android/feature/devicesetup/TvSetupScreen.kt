@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -68,7 +71,8 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * TV receiver for "Set up from your phone" (docs/DeviceSetupHandoff.md):
+ * Receiver for "Set up from another device" (docs/DeviceSetupHandoff.md), on
+ * TVs, phones, and tablets alike:
  * offers a one-time code and key over the LAN, then applies the sealed
  * payload without any typing on the remote.
  */
@@ -134,6 +138,10 @@ class TvSetupViewModel @Inject constructor(
         timeout?.cancel()
         receiver?.stop()
         receiver = null
+    }
+
+    fun reset() {
+        if (_phase.value !is Phase.Applying) { pending = null; _phase.value = Phase.Starting }
     }
 
     fun retry() {
@@ -233,21 +241,25 @@ fun TvSetupScreen(
 ) {
     val phase by vm.phase.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.bind(addPlaylist); vm.start() }
-    DisposableEffect(Unit) { onDispose { vm.stop() } }
+    // The view model can outlive the screen (Settings host scope): leave it fresh for the next visit.
+    DisposableEffect(Unit) { onDispose { vm.stop(); vm.reset() } }
     LaunchedEffect(phase) { if (phase is TvSetupViewModel.Phase.Done) onDone() }
     val cancel = { vm.stop(); onCancel() }
     BackHandler(enabled = phase !is TvSetupViewModel.Phase.Applying) { cancel() }
 
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
     Box(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(horizontal = 48.dp, vertical = 32.dp),
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+            .then(if (isTv) Modifier else Modifier.systemBarsPadding().verticalScroll(rememberScrollState()))
+            .padding(horizontal = if (isTv) 48.dp else 20.dp, vertical = 32.dp),
         contentAlignment = Alignment.Center,
     ) {
         when (val p = phase) {
             TvSetupViewModel.Phase.Starting -> CircularProgressIndicator()
-            is TvSetupViewModel.Phase.Offering -> Offering(p.offer, onCancel = cancel)
+            is TvSetupViewModel.Phase.Offering -> Offering(p.offer, isTv = isTv, onCancel = cancel)
             TvSetupViewModel.Phase.NoNetwork -> Message(
-                title = "This TV is not on a network",
-                body = "Connect this TV to the same network as your phone, then try again.",
+                title = "This device is not on a network",
+                body = "Connect this device to the same network as your other device, then try again.",
                 primary = "Try Again" to vm::restart,
                 onCancel = cancel,
             )
@@ -274,22 +286,35 @@ fun TvSetupScreen(
 }
 
 @Composable
-private fun Offering(offer: SetupReceiver.Offer, onCancel: () -> Unit) {
+private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> Unit) {
     val qr = remember(offer.link) { qrCodeBitmap(offer.link, 512)?.asImageBitmap() }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    Row(horizontalArrangement = Arrangement.spacedBy(48.dp), verticalAlignment = Alignment.CenterVertically) {
+    LaunchedEffect(Unit) { if (isTv) runCatching { focus.requestFocus() } }
+    val qrBox: @Composable () -> Unit = {
         Box(
-            Modifier.size(280.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).padding(12.dp),
+            Modifier.size(if (isTv) 280.dp else 240.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).padding(12.dp),
             contentAlignment = Alignment.Center,
         ) {
             if (qr != null) Image(bitmap = qr, contentDescription = "Setup QR code", modifier = Modifier.fillMaxSize())
         }
+    }
+    // Phones and tablets stack the QR above the text; TVs keep the side-by-side layout.
+    if (isTv) Row(horizontalArrangement = Arrangement.spacedBy(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        qrBox()
+        OfferingText(offer, focus, onCancel)
+    } else Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        qrBox()
+        OfferingText(offer, focus, onCancel)
+    }
+}
+
+@Composable
+private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCancel: () -> Unit) {
         Column(Modifier.widthIn(max = 460.dp)) {
-            Text("Set up from your phone", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+            Text("Set up from another device", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Open AerioTV on your phone, then Settings > Playlists > open your playlist > Set up a TV, or scan this code.",
+                "Open AerioTV on your other device, then Settings > Playlists > open your playlist > Set up another device, or scan this code.",
                 style = MaterialTheme.typography.bodyLarge.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -311,7 +336,6 @@ private fun Offering(offer: SetupReceiver.Offer, onCancel: () -> Unit) {
                 modifier = Modifier.focusRequester(focus).secondaryButtonFrame(),
             ) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
         }
-    }
 }
 
 @Composable
