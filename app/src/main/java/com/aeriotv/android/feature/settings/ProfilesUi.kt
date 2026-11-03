@@ -823,7 +823,7 @@ fun ProfilesSection(playlistId: String) {
                         }
                     }
                     // Own profile, or an Admin for another; hidden without a saved API key.
-                    if (p.id == activeId || vm.isRoleAdmin(playlistId)) {
+                    if (!isTv && (p.id == activeId || vm.isRoleAdmin(playlistId))) {
                         val hasKey by androidx.compose.runtime.produceState(false, p.id) { value = vm.hasUserQr(playlistId, p.id) }
                         if (hasKey) ChoiceRow(label = com.aeriotv.android.feature.qrscan.SHOW_USER_QR_LABEL, onClick = { actionsFor = null; userQrFor = p })
                     }
