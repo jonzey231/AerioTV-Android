@@ -99,6 +99,19 @@ fun tmdbArtKey(title: String, isMovie: Boolean): String =
 private val artTrailingYear = Regex("""\s*\((?:19|20)\d{2}\)\s*$""")
 
 /** Title for a TMDB search: display cleanup plus any remaining trailing year. */
+/**
+ * TMDB query title: the title keeps a trailing "(YYYY)" it already carries
+ * (displayTitle keeps one that disagrees with the year field), otherwise the
+ * year field is appended, so the lookups apply a year filter. Without it
+ * "#Unknown (2022)" matched the 2011 film (Apple parity:
+ * VODDisplayItem.tmdbSearchTitle, 2026-11-03).
+ */
+fun tmdbSearchTitle(title: String, year: Int?): String {
+    val t = title.trim()
+    if (trailingYear.containsMatchIn(t) || year == null) return t
+    return "$t ($year)"
+}
+
 fun searchTitle(raw: String): String = trailingYear.replace(displayTitle(raw, null), "").trim()
 
 fun DispatcharrVODMovie.toMediaItem() = MediaItem(

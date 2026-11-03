@@ -1,6 +1,8 @@
 package com.aeriotv.android.core.network
 
+import android.content.Context
 import android.util.Log
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.aeriotv.android.core.data.db.dao.TmdbArtDao
 import com.aeriotv.android.core.data.db.entity.TmdbArtEntity
 import com.aeriotv.android.core.preferences.AppPreferences
@@ -45,6 +47,7 @@ class TmdbArtCache @Inject constructor(
     private val dao: TmdbArtDao,
     private val tmdbService: TMDBService,
     private val appPreferences: AppPreferences,
+    @ApplicationContext private val context: Context,
 ) {
     private val entries = ConcurrentHashMap<String, TmdbArtEntry>()
     private val dirty = ConcurrentHashMap<String, TmdbArtEntry>()
@@ -73,6 +76,16 @@ class TmdbArtCache @Inject constructor(
         loadLock.withLock {
             if (loaded) return
             val rows = runCatching {
+                // Schema 3 (2026-11-03): rows are matched with the title's
+                // year (tmdbSearchTitle). Earlier rows were matched without
+                // it, so "#Unknown (2022)" cached the 2011 film's art; drop
+                // them once (Apple parity, TMDBArtCache.diskVersion).
+                val meta = context.getSharedPreferences("tmdb_art_meta", Context.MODE_PRIVATE)
+                if (meta.getInt("schema", 0) < SCHEMA) {
+                    dao.deleteAll()
+                    meta.edit().putInt("schema", SCHEMA).apply()
+                    Log.i(TAG, "[TMDB-ART] dropped pre-v$SCHEMA cache, rows were matched without the year")
+                }
                 // Cap and strip on load (Apple TestFlight OOM 2026-10-27: an
                 // unbounded art cache, 53778 titles on the Streamer).
                 val total = dao.count()
@@ -326,6 +339,7 @@ class TmdbArtCache @Inject constructor(
         const val OVERVIEW_LRU = 500
         const val SAVE_THROTTLE_MS = 30_000L
         const val TAG = "TmdbArtCache"
+        const val SCHEMA = 3
         const val SAVE_DEBOUNCE_MS = 2_000L
         const val BACKOFF_MS = 2_000L
         const val PACE_MS = 80L

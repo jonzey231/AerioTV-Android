@@ -362,7 +362,7 @@ fun MediaTabContent(
         for (page in heroPages + watchlistPages) {
             if (viewModel.heroBackdropResolved(page.key)) continue
             val artKey = page.item?.artKey ?: tmdbArtKey(page.title, page.isMovie)
-            viewModel.putHeroBackdrop(page.key, viewModel.heroBackdropUrl(artKey, page.tmdbId, searchTitle(page.title), page.isMovie))
+            viewModel.putHeroBackdrop(page.key, viewModel.heroBackdropUrl(artKey, page.tmdbId, tmdbSearchTitle(page.title, page.year), page.isMovie))
         }
     }
 
@@ -372,7 +372,7 @@ fun MediaTabContent(
         if (heroPages.isEmpty()) return@LaunchedEffect
         val priority = heroPages.mapNotNull { page ->
             val t = searchTitle(page.title)
-            if (t.isBlank()) null else (page.item?.artKey ?: tmdbArtKey(t, page.isMovie)) to t
+            if (t.isBlank()) null else (page.item?.artKey ?: tmdbArtKey(t, page.isMovie)) to tmdbSearchTitle(t, page.year)
         }
         if (priority.isNotEmpty()) viewModel.enrichArt(priority, kind == MediaKind.Movies)
     }

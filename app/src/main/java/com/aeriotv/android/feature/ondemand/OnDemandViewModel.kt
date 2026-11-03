@@ -925,7 +925,7 @@ class OnDemandViewModel @Inject constructor(
         tmdbArtCache.enrichPaged(isMovie, priorityKeys) { cursor ->
             if (key == null) return@enrichPaged null
             val rows = catalogStore.artPage(key, kind, cursor, ART_PAGE_SIZE)
-            if (rows.isEmpty()) null else rows.last().id to rows.map { it.artKey to it.title }
+            if (rows.isEmpty()) null else rows.last().id to rows.map { it.artKey to com.aeriotv.android.feature.movies.tmdbSearchTitle(it.title, it.year) }
         }
     }
 

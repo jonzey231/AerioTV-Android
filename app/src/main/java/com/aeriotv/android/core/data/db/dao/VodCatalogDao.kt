@@ -83,7 +83,7 @@ interface VodCatalogDao {
 
     /** Keyset page for the background TMDB art pass. */
     @Query(
-        "SELECT id, artKey, title FROM vod_title WHERE playlistKey = :playlistKey AND kind = :kind " +
+        "SELECT id, artKey, title, year FROM vod_title WHERE playlistKey = :playlistKey AND kind = :kind " +
             "AND id > :afterId ORDER BY id LIMIT :limit"
     )
     suspend fun artPage(playlistKey: String, kind: String, afterId: Long, limit: Int): List<VodArtRow>
@@ -149,7 +149,7 @@ interface VodCatalogDao {
 }
 
 /** Projection for [VodCatalogDao.artPage]. */
-data class VodArtRow(val id: Long, val artKey: String, val title: String)
+data class VodArtRow(val id: Long, val artKey: String, val title: String, val year: Int? = null)
 
 /** Item key and the first bytes of its payload (Dispatcharr Sync id lookup). */
 data class VodItemHead(val itemKey: String, val head: String)
