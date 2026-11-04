@@ -1975,16 +1975,35 @@ private fun Tile(
                 // carries its own pill (Logan 2026-11-04: tiles showed none).
                 val tileFormatBadge = com.aeriotv.android.feature.player
                     .rememberVideoFormatBadge(tilePlayer, tile.id)
+                // The pipeline pill ("ExoPlayer · TS") sits to its left, the
+                // same wording and capsule as the single player's readout
+                // (Logan 2026-11-04: tiles showed only the format pill).
+                val tilePipeline = rememberTilePipelineLabel(tilePlayer)
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = chromeVisible && !singleTile && tileFormatBadge != null,
+                    visible = chromeVisible && !singleTile &&
+                        (tileFormatBadge != null || tilePipeline != null),
                     enter = androidx.compose.animation.fadeIn(),
                     exit = androidx.compose.animation.fadeOut(),
                     modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
                 ) {
-                    com.aeriotv.android.feature.player.PlayerFormatBadge(
-                        text = tileFormatBadge.orEmpty(),
-                        fontSize = if (LocalConfiguration.current.smallestScreenWidthDp >= 600) 12.sp else 10.sp,
-                    )
+                    val pillSize = if (LocalConfiguration.current.smallestScreenWidthDp >= 600) 12.sp else 10.sp
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (tilePipeline != null) {
+                            com.aeriotv.android.feature.player.PlayerFormatBadge(
+                                text = tilePipeline,
+                                fontSize = pillSize,
+                            )
+                        }
+                        if (tileFormatBadge != null) {
+                            com.aeriotv.android.feature.player.PlayerFormatBadge(
+                                text = tileFormatBadge,
+                                fontSize = pillSize,
+                            )
+                        }
+                    }
                 }
                 // Audio-focus indicator. centerIcon mode shows the speaker icon over
                 // the active tile while the chrome is visible. grayPersistent and
@@ -2988,6 +3007,50 @@ private fun ExoTile(
             }
         }
     }
+}
+
+/**
+ * Pipeline label for a tile's player, the same wording the single player's
+ * readout uses ("ExoPlayer · TS", "ExoPlayer · HLS"), derived from the URI
+ * the tile actually loaded with the routing [buildTileMediaSource] applies.
+ * Updates on every media item change; null while nothing is loaded.
+ */
+@androidx.compose.runtime.Composable
+internal fun rememberTilePipelineLabel(player: ExoPlayer?): String? {
+    var label by remember(player) {
+        mutableStateOf(player?.currentMediaItem?.localConfiguration?.uri?.toString()?.let(::tilePipelineLabel))
+    }
+    androidx.compose.runtime.DisposableEffect(player) {
+        val p = player ?: return@DisposableEffect onDispose { }
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                label = mediaItem?.localConfiguration?.uri?.toString()?.let(::tilePipelineLabel)
+            }
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                label = p.currentMediaItem?.localConfiguration?.uri?.toString()?.let(::tilePipelineLabel)
+            }
+        }
+        p.addListener(listener)
+        onDispose { p.removeListener(listener) }
+    }
+    return label
+}
+
+internal fun tilePipelineLabel(url: String): String {
+    val forcedHls = com.aeriotv.android.core.playback.ForceHls.isForcedHlsUrl(url)
+    val path = url.substringBefore('?').substringBefore('#')
+    val ext = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
+    val kind = when {
+        ext == "m3u8" || forcedHls -> "HLS"
+        ext == "ts" || url.contains("/proxy/ts/", ignoreCase = true) -> "TS"
+        ext == "mpd" -> "DASH"
+        ext in setOf("mp4", "m4v", "mov") -> "MP4"
+        ext == "mkv" -> "MKV"
+        ext == "webm" -> "WebM"
+        ext.isNotEmpty() && ext.length <= 4 -> ext.uppercase()
+        else -> "Auto"
+    }
+    return "ExoPlayer \u00B7 $kind"
 }
 
 @OptIn(UnstableApi::class)
