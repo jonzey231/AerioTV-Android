@@ -1699,6 +1699,13 @@ class AerioExoPlayerHolder @Inject constructor(
     // on) -- if nothing arrived by then the whole channel is dead.
     private val liveNoDataStartupThresholdMs = 50_000L
     private val liveReadTimeoutMs = 55_000
+    /** Read timeout for the CURRENT live tune's ingest: [liveReadTimeoutMs], or
+     *  [LiveStreamFailover.WALK_INGEST_TIMEOUT_MS] when the tune can walk
+     *  member streams (Apple parity 5267c55). Read per call by the live
+     *  client's interceptor. */
+    @Volatile private var liveIngestReadTimeoutMs = liveReadTimeoutMs
+    /** True while the current live tune can walk member streams. */
+    @Volatile private var liveTuneCanWalk = false
     private var noDataHealAttempts = 0
     /** Same-url retries already spent on a "Channel is stopping" 503 this tune.
      *  Reset by [resetWatchdogStateForNewStream] like every other heal budget. */
@@ -4052,6 +4059,12 @@ class AerioExoPlayerHolder @Inject constructor(
             Log.i(TAG, "[CODEC] releasing previous decoders before tune ch=$effectiveChannelId")
             p.stop()
         }
+        liveTuneCanWalk = kind == "live" && liveFailover.canWalk(effectiveChannelId)
+        liveIngestReadTimeoutMs =
+            if (liveTuneCanWalk) LiveStreamFailover.WALK_INGEST_TIMEOUT_MS.toInt() else liveReadTimeoutMs
+        if (liveTuneCanWalk) {
+            Log.i(TAG, "[FAILOVER] ingest timeout ${liveIngestReadTimeoutMs}ms (walk-capable) ch=$effectiveChannelId")
+        }
         p.setMediaSource(source)
         retireLiveCalls(p, staleCalls)
         p.prepare()
@@ -4315,6 +4328,13 @@ class AerioExoPlayerHolder @Inject constructor(
             // A second open to a channel another player still holds waits up
             // to 3 s for that connection to go ([SINGLE-CONN]).
             .addInterceptor(LiveConnectionRegistry.interceptor)
+            // A tune that can walk member streams keeps its ingest open for
+            // the whole walk, not the 55 s floor.
+            .addInterceptor { chain ->
+                val ms = liveIngestReadTimeoutMs
+                if (ms == liveReadTimeoutMs) chain.proceed(chain.request())
+                else chain.withReadTimeout(ms, TimeUnit.MILLISECONDS).proceed(chain.request())
+            }
             .eventListener(LiveConnectionRegistry.eventListener)
             .followRedirects(true)
             .followSslRedirects(true)
@@ -4635,8 +4655,14 @@ class AerioExoPlayerHolder @Inject constructor(
                 // over to a working one server-side); VOD/other keep the tight net.
                 val coldStartUrl = lastPlayUrl
                 val coldStartIsLive = coldStartUrl != null && isRawTsUrl(coldStartUrl)
-                val coldStartCeilingMs =
-                    if (coldStartIsLive) liveNoDataStartupThresholdMs else noDataStartupThresholdMs
+                // A walk-capable tune: the failover walk owns the silence and
+                // ends in Channel Unavailable itself when every stream is
+                // tried, so the net only bounds a walk that never finished.
+                val coldStartCeilingMs = when {
+                    coldStartIsLive && liveTuneCanWalk -> LiveStreamFailover.WALK_INGEST_TIMEOUT_MS
+                    coldStartIsLive -> liveNoDataStartupThresholdMs
+                    else -> noDataStartupThresholdMs
+                }
                 // Bytes flowing but nothing decoded: a local decoder fault, not
                 // a dead stream (Streamer 2026-11-01 18:20, 47 MB delivered
                 // while the old net said "no bytes" and walked every stream).

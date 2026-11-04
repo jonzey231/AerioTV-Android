@@ -251,6 +251,14 @@ class LiveStreamFailover(
         scope.launch { _statusText.value = text }
     }
 
+    /** True when a tune of [channelId] can walk member streams (Dispatcharr
+     *  Direct Connect admin, integer channel pk). Such a tune keeps its ingest
+     *  open across the whole walk, see [WALK_INGEST_TIMEOUT_MS]. */
+    fun canWalk(channelId: String?): Boolean {
+        val id = channelId ?: return false
+        return runCatching { hooks?.canSwitch(id) }.getOrNull() == true
+    }
+
     /** Teardown / pipeline stop: cancel the deadline, KEEP the tried set. */
     fun disarm() {
         deadlineJob?.cancel()
@@ -515,6 +523,18 @@ class LiveStreamFailover(
          * is no tuner lock left to wait for and failover stays responsive.
          */
         const val STEP_FIRST_BYTE_MS = 12_000L
+
+        /**
+         * Ingest read timeout and no-data ceiling for a tune that can walk
+         * (Apple parity 5267c55): the first-attempt budget plus eight walk
+         * steps plus 10 s, 28 + 8 x 12 + 10 = 134 s. The walk keeps the same
+         * connection open while the server swaps the upstream behind it, so a
+         * shorter timeout ended that connection mid-step (Apple TV 2026-11-04:
+         * opened 11:15:02, timed out 11:15:32, 2 s after "stream 2/6") and the
+         * later streams were never tried. The silent-start deadline owns the
+         * silence; this only bounds a connection nobody is walking any more.
+         */
+        const val WALK_INGEST_TIMEOUT_MS = FIRST_TUNE_FIRST_BYTE_MS + 8 * STEP_FIRST_BYTE_MS + 10_000L
 
         /** Hard ceiling on a learned-stretched budget. */
         const val FIRST_BYTE_BUDGET_MAX_MS = 45_000L
