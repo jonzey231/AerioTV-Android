@@ -135,6 +135,12 @@ internal class TileLiveCalls {
             baseClient.newBuilder()
                 .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
                 .readTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+                // A tile opening a channel another tile or the player still
+                // holds waits up to 3 s for that connection to go
+                // ([SINGLE-CONN], a Multiview rebuild mounts fresh tiles while
+                // the old tiles' ingests are still open).
+                .addInterceptor(com.aeriotv.android.core.playback.LiveConnectionRegistry.interceptor)
+                .eventListener(com.aeriotv.android.core.playback.LiveConnectionRegistry.eventListener)
                 // Mirrors setAllowCrossProtocolRedirects(true).
                 .followRedirects(true)
                 .followSslRedirects(true)

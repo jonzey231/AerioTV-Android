@@ -4312,6 +4312,10 @@ class AerioExoPlayerHolder @Inject constructor(
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(liveReadTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            // A second open to a channel another player still holds waits up
+            // to 3 s for that connection to go ([SINGLE-CONN]).
+            .addInterceptor(LiveConnectionRegistry.interceptor)
+            .eventListener(LiveConnectionRegistry.eventListener)
             .followRedirects(true)
             .followSslRedirects(true)
             .addNetworkInterceptor(ForceHls.redirectTokenInterceptor)
