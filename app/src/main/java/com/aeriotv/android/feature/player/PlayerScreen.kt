@@ -2848,9 +2848,10 @@ private fun LiveRewindChromeSection(
     // Bottom-left pipeline readout ("ExoPlayer · TS"), from the holder's
     // actual media source (Apple "AVPlayer · Remux TS" parity).
     val pipelineLabel by exoHolder.pipelineLabel.collectAsStateWithLifecycle()
-    val badgeConfig = androidx.compose.ui.platform.LocalConfiguration.current
-    val showTouchFormatBadge = badgeConfig.smallestScreenWidthDp >= 600 ||
-        badgeConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    // Every touch form factor and orientation (Logan 2026-11-04: the pills
+    // were missing in phone portrait on both platforms). The band gives the
+    // readout its own row above the transport, so portrait has room.
+    val showTouchFormatBadge = true
     var catchupPositionMs by catchupPositionMsState
     var tsPositionWallMs by tsPositionWallMsState
     var tsPaused by tsPausedState
