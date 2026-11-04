@@ -67,7 +67,7 @@ import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 /**
- * "Show Dispatcharr User QR Code" (docs/DeviceSetupHandoff.md): shows a
+ * "Show User QR Code" (docs/DeviceSetupHandoff.md): shows a
  * profile's Dispatcharr user sign-in as the same `user_api_key` JSON QR the
  * Dispatcharr web UI draws, so another device's Scan QR code or Choose from
  * Photos accepts it unchanged.
@@ -104,7 +104,7 @@ class UserQrViewModel @Inject constructor(
     fun verify(t: Target, entries: List<String>) = manager.verifyUserQrPin(t.playlistId, t.profileId, entries)
 }
 
-const val SHOW_USER_QR_LABEL = "Show Dispatcharr User QR Code"
+const val SHOW_USER_QR_LABEL = "Show User QR Code"
 
 /**
  * The button beside Scan QR code and Choose from Photos. Hidden when the
@@ -184,7 +184,7 @@ private fun UserQrScreen(text: String?, username: String, onClose: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
-                "Dispatcharr User QR Code",
+                "User QR Code",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -197,7 +197,7 @@ private fun UserQrScreen(text: String?, username: String, onClose: () -> Unit) {
                 if (qr != null) {
                     Image(
                         bitmap = qr,
-                        contentDescription = "Dispatcharr user QR code",
+                        contentDescription = "User QR code",
                         modifier = Modifier.fillMaxSize().then(if (revealed) Modifier else Modifier.blur(24.dp)),
                     )
                 }

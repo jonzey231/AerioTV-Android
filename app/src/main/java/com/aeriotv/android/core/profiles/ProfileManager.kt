@@ -1074,7 +1074,7 @@ class ProfileManager @Inject constructor(
         Log.i(TAG, "[PROFILE] credential saved for ${p.username}")
     }
 
-    // ---- Show Dispatcharr User QR Code (docs/DeviceSetupHandoff.md) ----
+    // ---- Show User QR Code (docs/DeviceSetupHandoff.md) ----
 
     /** The `user_api_key` QR text for [profileId], or null when no API key is saved here. Never log it. */
     suspend fun userQrText(playlistId: String, profileId: String): String? {
