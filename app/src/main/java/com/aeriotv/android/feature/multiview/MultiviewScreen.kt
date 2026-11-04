@@ -2244,7 +2244,8 @@ private fun ExoTile(
     // last clean-end reconnect opened, [1] = the streak (1 = reconnect now,
     // then 5 s / 15 s / 30 s / 60 s), [2] = 1 while a reconnect is waiting.
     // Reset by Retry, by a swap, and by 60 s of healthy playback.
-    val tileCleanEnd = remember { longArrayOf(0L, 0L, 0L) }
+    // [3] = clean ends in a row whose session delivered under 256 KB.
+    val tileCleanEnd = remember { longArrayOf(0L, 0L, 0L, 0L) }
     val tileRetrySerial = remember { mutableIntStateOf(0) }
     // Always-on playback tracer (tag AerioTrace), one per tile. The "press"
     // is the tune that opened this tile, so press->firstFrame measures a
@@ -2495,15 +2496,41 @@ private fun ExoTile(
                         val verifier = com.aeriotv.android.core.playback.StreamEndVerifier
                         val now = android.os.SystemClock.elapsedRealtime()
                         val since = now - tileCleanEnd[0]
+                        // Only a session that delivered data counts as healthy
+                        // playback (Apple parity 890f521: 34 closes after 188 B
+                        // each restarted the ladder every 2 minutes).
+                        val sessionBytes = tracer.feedSinceTune().first
+                        val delivered = sessionBytes >= verifier.EMPTY_SESSION_BYTES
+                        tileCleanEnd[3] = if (delivered) 0L else tileCleanEnd[3] + 1
+                        if (tileCleanEnd[3] >= verifier.EMPTY_ENDS_LIMIT) {
+                            Log.w(
+                                TAG,
+                                "[RECONNECT] tile $channelName upstream closed the live stream after $sessionBytes B; " +
+                                    "${tileCleanEnd[3]} empty sessions in a row, stopping reconnects",
+                            )
+                            tracer.recover("tile ${tileCleanEnd[3]} consecutive empty sessions; stopping")
+                            tileCleanEnd[0] = 0L
+                            tileCleanEnd[1] = 0L
+                            tileCleanEnd[3] = 0L
+                            tileError.value = null
+                            tileLimit.value =
+                                com.aeriotv.android.core.playback.DispatcharrConnectionLimit.STREAM_ENDED
+                            liveCalls.stop(player)
+                            return
+                        }
                         tileCleanEnd[1] =
-                            if (tileCleanEnd[0] > 0L && since < verifier.HEALTHY_RESET_MS) {
+                            if (!delivered || (tileCleanEnd[0] > 0L && since < verifier.HEALTHY_RESET_MS)) {
                                 tileCleanEnd[1] + 1
                             } else {
                                 1L
                             }
                         val streak = tileCleanEnd[1].toInt()
                         val backoffMs = verifier.backoffMs(streak)
-                        Log.w(TAG, "[RECOVER] tile $channelName clean end #$streak; reconnecting in ${backoffMs}ms")
+                        Log.w(
+                            TAG,
+                            "[RECOVER] tile $channelName clean end #$streak; reconnecting in ${backoffMs}ms " +
+                                "(session $sessionBytes B, empty in a row ${tileCleanEnd[3]})",
+                        )
                         tracer.recover("tile clean end #$streak; reconnect in ${backoffMs}ms")
                         tileCleanEnd[2] = 1L
                         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate).launch {
@@ -2643,6 +2670,7 @@ private fun ExoTile(
                     tileLimit.value = null
                     tileCleanEnd[0] = 0L
                     tileCleanEnd[1] = 0L
+                    tileCleanEnd[3] = 0L
                     tileTuneWall[0] = System.currentTimeMillis() / 1000.0
                     liveCalls.setSource(p) { buildTileMediaSource(u, dataSourceFactory()) }
                     tracer.recover("tile error-overlay retry")
@@ -2730,6 +2758,7 @@ private fun ExoTile(
                 tileLimit.value = null
                 tileCleanEnd[0] = 0L
                 tileCleanEnd[1] = 0L
+                tileCleanEnd[3] = 0L
                 tileTuneWall[0] = System.currentTimeMillis() / 1000.0
                 // setSource closes the old channel's live connection once the
                 // player has dropped it; the swap factory is built inside so

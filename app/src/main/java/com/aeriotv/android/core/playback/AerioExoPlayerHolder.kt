@@ -5040,6 +5040,9 @@ class AerioExoPlayerHolder @Inject constructor(
     // newer session elsewhere. Never on a guess.
     /** Clean ends in the current run: 1 = the first (immediate reconnect). */
     private var cleanEndStreak = 0
+    /** Clean ends in a row whose session delivered under
+     *  [StreamEndVerifier.EMPTY_SESSION_BYTES]. */
+    private var cleanEndEmptyRun = 0
     /** When the reconnect after a clean end opened; 0 when none is pending. */
     private var cleanEndReconnectAtMs = 0L
     /** The scheduled reconnect (verification + backoff), if one is waiting. */
@@ -5051,6 +5054,7 @@ class AerioExoPlayerHolder @Inject constructor(
     /** Channel change, Retry, teardown: forget the streak and any wait. */
     private fun resetCleanEndBudget() {
         cleanEndStreak = 0
+        cleanEndEmptyRun = 0
         cleanEndReconnectAtMs = 0L
         cleanEndJob?.cancel()
         cleanEndJob = null
@@ -5078,8 +5082,24 @@ class AerioExoPlayerHolder @Inject constructor(
         if (source != "ENDED" && cleanEndStreak == 0) return false
         val now = SystemClock.elapsedRealtime()
         val sinceReconnect = now - cleanEndReconnectAtMs
+        // Only a session that delivered data counts as healthy playback: a
+        // server that answers and closes after a few hundred bytes must not
+        // restart the ladder every 60 s (Apple parity 890f521).
+        val sessionBytes = tracer.feedSinceTune().first
+        val delivered = sessionBytes >= StreamEndVerifier.EMPTY_SESSION_BYTES
+        if (delivered) cleanEndEmptyRun = 0 else cleanEndEmptyRun += 1
+        if (cleanEndEmptyRun >= StreamEndVerifier.EMPTY_ENDS_LIMIT) {
+            Log.w(
+                TAG,
+                "[RECONNECT] upstream closed the live stream after $sessionBytes B; " +
+                    "$cleanEndEmptyRun empty sessions in a row, stopping reconnects ch=$currentChannelId",
+            )
+            stopForVerifiedStreamEnd(url, "$cleanEndEmptyRun consecutive empty sessions")
+            return true
+        }
         cleanEndStreak = if (
-            cleanEndReconnectAtMs > 0L && sinceReconnect < StreamEndVerifier.HEALTHY_RESET_MS
+            !delivered ||
+            (cleanEndReconnectAtMs > 0L && sinceReconnect < StreamEndVerifier.HEALTHY_RESET_MS)
         ) {
             cleanEndStreak + 1
         } else {
@@ -5099,7 +5119,7 @@ class AerioExoPlayerHolder @Inject constructor(
         Log.w(
             TAG,
             "[RECOVER] clean end ($source) #$streak ch=$currentChannelId; " +
-                "reconnecting in ${backoffMs}ms",
+                "reconnecting in ${backoffMs}ms (session $sessionBytes B, empty in a row $cleanEndEmptyRun)",
         )
         tracer.recover("clean end ($source) #$streak; reconnect in ${backoffMs}ms")
         // The stream is gone and we are waiting; say so instead of freezing on
@@ -5144,10 +5164,10 @@ class AerioExoPlayerHolder @Inject constructor(
 
     /** Verified boot: this account is at its stream limit and a newer session
      *  elsewhere took the slot. Stop everything until the user presses Retry. */
-    private fun stopForVerifiedStreamEnd(url: String) {
+    private fun stopForVerifiedStreamEnd(url: String, reason: String = "verified at the stream limit") {
         if (_connectionLimit.value != null) return
-        Log.w(TAG, "[RECOVER] stream end VERIFIED at the stream limit ch=$currentChannelId; stopping, waiting for Retry")
-        tracer.recover("stream end verified at the stream limit; stopping")
+        Log.w(TAG, "[RECOVER] stream end ($reason) ch=$currentChannelId; stopping, waiting for Retry")
+        tracer.recover("stream end ($reason); stopping")
         cleanEndJob = null
         resetCleanEndBudget()
         stoppingRetryJob?.cancel()

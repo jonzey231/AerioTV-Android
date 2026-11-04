@@ -72,4 +72,14 @@ object StreamEndVerifier {
     /** A clean end this long after the last reconnect starts a fresh streak
      *  (the stream played healthily in between). */
     const val HEALTHY_RESET_MS = 60_000L
+
+    /** Consecutive clean ends whose session delivered (almost) nothing, past
+     *  which the reconnects stop with the Stream ended notice instead of
+     *  cycling the ladder forever (Apple 2026-11-03 17:42:44 to 17:53:38: 34
+     *  closes after 188 B each, the ladder restarting every 2 minutes). */
+    const val EMPTY_ENDS_LIMIT = 6
+
+    /** A session below this many bytes counts as empty: time alone is not
+     *  healthy playback, so an empty session never resets the streak. */
+    const val EMPTY_SESSION_BYTES = 256L * 1024L
 }
