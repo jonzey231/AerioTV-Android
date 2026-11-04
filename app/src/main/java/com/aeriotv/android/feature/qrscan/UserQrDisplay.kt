@@ -36,6 +36,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,10 +51,17 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aeriotv.android.core.data.db.dao.PlaylistDao
 import com.aeriotv.android.core.profiles.PinType
 import com.aeriotv.android.core.profiles.ProfileManager
+import com.aeriotv.android.R
 import com.aeriotv.android.core.tv.qrCodeBitmap
 import com.aeriotv.android.feature.settings.PinEntryDialog
 import com.aeriotv.android.feature.settings.pinCheckMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -164,7 +172,8 @@ private fun UserQrScreen(text: String?, username: String, onClose: () -> Unit) {
         owner.lifecycle.addObserver(obs)
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
-    val qr = remember(text) { text?.let { qrCodeBitmap(it, 512)?.asImageBitmap() } }
+    val context = LocalContext.current
+    val qr = remember(text) { text?.let { qrCodeBitmap(it, 512)?.let { b -> withLogo(context, b) }?.asImageBitmap() } }
     Box(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding().padding(20.dp),
         contentAlignment = Alignment.Center,
@@ -208,4 +217,25 @@ private fun UserQrScreen(text: String?, username: String, onClose: () -> Unit) {
             OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Done") }
         }
     }
+}
+
+/** Share of the QR image's width the white logo plate covers; level H restores up to 30 percent. Apple matches. */
+private const val LOGO_PLATE_FRACTION = 0.20f
+/** Logo inset inside the plate, as a share of the plate side. */
+private const val LOGO_MARGIN_FRACTION = 0.12f
+
+/**
+ * The AerioTV mark centered on a rounded white plate over the code. Same payload and level H;
+ * the plate masks the modules under it. Falls back to the plain code if the mark fails to load.
+ */
+private fun withLogo(context: Context, qr: Bitmap): Bitmap {
+    val logo = runCatching { BitmapFactory.decodeResource(context.resources, R.drawable.aerio_logo) }.getOrNull() ?: return qr
+    val out = qr.copy(Bitmap.Config.ARGB_8888, true)
+    val c = Canvas(out)
+    val side = Math.round(minOf(out.width, out.height) * LOGO_PLATE_FRACTION).toFloat()
+    val plate = RectF((out.width - side) / 2f, (out.height - side) / 2f, (out.width + side) / 2f, (out.height + side) / 2f)
+    c.drawRoundRect(plate, side * 0.22f, side * 0.22f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE })
+    val m = side * LOGO_MARGIN_FRACTION
+    c.drawBitmap(logo, null, RectF(plate.left + m, plate.top + m, plate.right - m, plate.bottom - m), Paint(Paint.FILTER_BITMAP_FLAG))
+    return out
 }
