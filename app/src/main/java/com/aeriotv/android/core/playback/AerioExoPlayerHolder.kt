@@ -340,6 +340,12 @@ class AerioExoPlayerHolder @Inject constructor(
             p != null && p.playbackState != Player.STATE_IDLE && !_streamUnavailable.value &&
                 (currentChannelId ?: currentChannelIdForRebuild) == id
         }
+        // A walk started by a 503: the 503 leaves the player IDLE on purpose,
+        // so only a channel change or Channel Unavailable ends it.
+        liveFailover.isTuneWanted = { id ->
+            player != null && !_streamUnavailable.value &&
+                (currentChannelId ?: currentChannelIdForRebuild) == id
+        }
     }
 
     /** Learned time-to-first-byte per channel, mirrored in memory so the
