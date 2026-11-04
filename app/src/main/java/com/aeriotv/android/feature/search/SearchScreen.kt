@@ -68,6 +68,12 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.aeriotv.android.core.data.guideMatchKey
+import com.aeriotv.android.core.data.toInfoTarget
+import com.aeriotv.android.feature.livetv.LiveChannelHitRow
+import com.aeriotv.android.feature.livetv.LiveSearchCopy
+import com.aeriotv.android.feature.livetv.liveProgramSearchSection
+import com.aeriotv.android.feature.livetv.liveSearchSectionHeader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -99,9 +105,32 @@ fun SearchScreen(
      */
     showBackButton: Boolean = true,
     autoFocusField: Boolean = true,
+    /**
+     * TV Live TV search (Logan 2026-11-04, Apple tvOS parity): the loaded
+     * channels and guide map. When set, the All and EPG scopes show the
+     * "Channels" and "Programs" sections (the phone Live TV search) in
+     * place of the capped EPG rows, then the VOD rows.
+     */
+    liveData: (() -> Pair<List<com.aeriotv.android.core.data.M3UChannel>,
+        Map<String, List<com.aeriotv.android.core.data.EPGProgramme>>>)? = null,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val liveMode = liveData != null &&
+        (state.scope == SearchViewModel.Scope.All || state.scope == SearchViewModel.Scope.Epg)
+    val live by androidx.compose.runtime.produceState<LiveSections?>(null, state.query, liveMode) {
+        val q = state.query.trim()
+        if (!liveMode || q.isEmpty() || liveData == null) { value = null; return@produceState }
+        kotlinx.coroutines.delay(com.aeriotv.android.feature.livetv.LIVE_SEARCH_DEBOUNCE_MS)
+        val (channels, epg) = liveData()
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            liveSections(q, channels, epg)
+        }
+    }
+    var liveInfo by remember { mutableStateOf<com.aeriotv.android.core.data.ProgramInfoTarget?>(null) }
+    liveInfo?.let { target ->
+        com.aeriotv.android.feature.livetv.ProgramInfoSheet(target = target, onDismiss = { liveInfo = null })
+    }
     BackHandler { onBack() }
 
     val fieldFocus = remember { FocusRequester() }
@@ -202,6 +231,38 @@ fun SearchScreen(
                 icon = Icons.Filled.Search,
                 title = "Search for movies, shows, or EPG programs",
             )
+            liveMode -> {
+                val sections = live
+                if (sections == null) Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
+                else LiveSectionsList(
+                    sections = sections,
+                    vodResults = state.results.filter { it !is SearchViewModel.Result.Epg },
+                    firstRowModifier = Modifier.upTo(chipFocus),
+                    onChannel = { ch ->
+                        android.util.Log.i("AerioSearch", "[SEARCH] channel hit: play channel")
+                        onPlayChannel?.invoke(ch.id)
+                    },
+                    onProgram = { hit ->
+                        if (hit.isAiring(System.currentTimeMillis()) && onPlayChannel != null) {
+                            android.util.Log.i("AerioSearch", "[SEARCH] program hit: play channel")
+                            onPlayChannel(hit.channel.id)
+                        } else {
+                            android.util.Log.i("AerioSearch", "[SEARCH] program hit: program info")
+                            liveInfo = hit.programme.toInfoTarget(hit.channel.name, hit.channel.dispatcharrChannelId)
+                        }
+                    },
+                    onVod = { result ->
+                        when (result) {
+                            is SearchViewModel.Result.Movie -> onMovieClick(result.movie.uuid)
+                            is SearchViewModel.Result.Series -> onSeriesClick(result.series.id)
+                            else -> Unit
+                        }
+                    },
+                )
+            }
             state.isSearching && state.results.isEmpty() -> Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -509,4 +570,86 @@ private fun timeFmt() = com.aeriotv.android.core.ui.ClockFormat.short()
 private fun Modifier.upTo(target: FocusRequester): Modifier = onPreviewKeyEvent { e ->
     e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp &&
         runCatching { target.requestFocus() }.isSuccess
+}
+
+/** Channels and Programs for the TV Live TV search sections. */
+private class LiveSections(
+    val channels: List<com.aeriotv.android.core.data.M3UChannel>,
+    val matchLines: Map<String, String>,
+    val hits: com.aeriotv.android.feature.livetv.LiveProgramHits,
+)
+
+/** Same rules as the phone Live TV search: name or number, then a program
+ *  title on that channel now or later (start order), then the whole-guide
+ *  Programs scan. */
+private fun liveSections(
+    q: String,
+    channels: List<com.aeriotv.android.core.data.M3UChannel>,
+    epg: Map<String, List<com.aeriotv.android.core.data.EPGProgramme>>,
+): LiveSections {
+    val now = System.currentTimeMillis()
+    val index = com.aeriotv.android.feature.livetv.LiveProgramIndex.of(epg)
+    val byName = ArrayList<com.aeriotv.android.core.data.M3UChannel>()
+    val byProgram = ArrayList<Pair<com.aeriotv.android.core.data.M3UChannel, com.aeriotv.android.core.data.EPGProgramme>>()
+    for (ch in channels) {
+        if (com.aeriotv.android.feature.livetv.LiveSearchMatcher.channelMatches(ch, q)) {
+            byName += ch
+        } else {
+            index.firstMatch(ch.guideMatchKey, q, now)?.let { byProgram += ch to it }
+        }
+    }
+    byProgram.sortBy { it.second.startMillis }
+    val lines = byProgram.associate { (ch, p) -> ch.url to com.aeriotv.android.feature.livetv.searchMatchLine(p, now) }
+    return LiveSections(
+        channels = byName + byProgram.map { it.first },
+        matchLines = lines,
+        hits = index.programHits(q, now, channels),
+    )
+}
+
+@Composable
+private fun LiveSectionsList(
+    sections: LiveSections,
+    vodResults: List<SearchViewModel.Result>,
+    firstRowModifier: Modifier,
+    onChannel: (com.aeriotv.android.core.data.M3UChannel) -> Unit,
+    onProgram: (com.aeriotv.android.feature.livetv.LiveProgramHit) -> Unit,
+    onVod: (SearchViewModel.Result) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 0.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (sections.channels.isNotEmpty()) {
+            liveSearchSectionHeader(LiveSearchCopy.CHANNELS_HEADER, "live.channels.header")
+            items(sections.channels.size, key = { "ch-" + sections.channels[it].url }) { i ->
+                val ch = sections.channels[i]
+                LiveChannelHitRow(
+                    channel = ch,
+                    matchLine = sections.matchLines[ch.url],
+                    isTv = true,
+                    modifier = if (i == 0) firstRowModifier else Modifier,
+                    onClick = { onChannel(ch) },
+                )
+            }
+        }
+        liveProgramSearchSection(
+            hits = sections.hits.hits,
+            truncated = sections.hits.truncated,
+            pending = false,
+            isTv = true,
+            firstRowModifier = if (sections.channels.isEmpty()) firstRowModifier else Modifier,
+            onTap = onProgram,
+        )
+        vodResults.forEachIndexed { index, result ->
+            item(key = result.key) {
+                ResultRow(
+                    result = result,
+                    traceName = "search:row$index",
+                    onClick = { onVod(result) },
+                )
+            }
+        }
+    }
 }

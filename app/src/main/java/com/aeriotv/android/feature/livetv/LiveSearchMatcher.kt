@@ -2,6 +2,7 @@ package com.aeriotv.android.feature.livetv
 
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
+import com.aeriotv.android.core.data.guideMatchKey
 
 /**
  * Live TV per-tab search rules (Logan 2026-11-01), phones and tablets:
@@ -25,7 +26,7 @@ internal object LiveSearchMatcher {
 internal class LiveProgramIndex private constructor(
     private val byKey: Map<String, List<Entry>>,
 ) {
-    private class Entry(val text: String, val programme: EPGProgramme)
+    private class Entry(val text: String, val title: String, val programme: EPGProgramme)
 
     /** The earliest program on [key] that has not ended by [nowMillis] and
      *  whose title or sub-title contains [query]; null when none. */
@@ -39,6 +40,40 @@ internal class LiveProgramIndex private constructor(
         return null
     }
 
+    /**
+     * Live TV search "Programs" section (Logan 2026-11-04, Apple
+     * LiveProgramIndex.programHits): every program on a channel in
+     * [channels] (playlist order) whose TITLE contains [query], from now
+     * forward (not ended by [nowMillis]), by start time then channel
+     * position, one row per channel and start, capped at [cap].
+     */
+    fun programHits(
+        query: String,
+        nowMillis: Long,
+        channels: List<M3UChannel>,
+        cap: Int = LiveProgramHit.CAP,
+    ): LiveProgramHits {
+        val q = query.trim().lowercase()
+        if (q.isEmpty() || cap <= 0) return LiveProgramHits(emptyList(), false)
+        // A guide key shared by several rows resolves to the first one.
+        val chByKey = HashMap<String, Pair<Int, M3UChannel>>(channels.size * 2)
+        channels.forEachIndexed { i, ch -> chByKey.putIfAbsent(ch.guideMatchKey, i to ch) }
+        val found = ArrayList<Pair<Int, LiveProgramHit>>()
+        for ((key, entries) in byKey) {
+            val (order, ch) = chByKey[key] ?: continue
+            var lastStart: Long? = null
+            for (e in entries) {
+                if (e.programme.endMillis <= nowMillis) continue
+                if (!e.title.contains(q)) continue
+                if (e.programme.startMillis == lastStart) continue
+                lastStart = e.programme.startMillis
+                found += order to LiveProgramHit(ch, e.programme)
+            }
+        }
+        found.sortWith(compareBy<Pair<Int, LiveProgramHit>> { it.second.programme.startMillis }.thenBy { it.first })
+        return LiveProgramHits(found.take(cap).map { it.second }, found.size > cap)
+    }
+
     companion object {
         fun build(epg: Map<String, List<EPGProgramme>>): LiveProgramIndex {
             val out = HashMap<String, List<Entry>>(epg.size * 2)
@@ -48,7 +83,7 @@ internal class LiveProgramIndex private constructor(
                     .sortedBy { it.startMillis }
                     .map { p ->
                         val sub = p.subTitle?.takeIf { it.isNotBlank() }
-                        Entry(if (sub == null) p.title.lowercase() else p.title.lowercase() + "\n" + sub.lowercase(), p)
+                        Entry(if (sub == null) p.title.lowercase() else p.title.lowercase() + "\n" + sub.lowercase(), p.title.lowercase(), p)
                     }
                     .toList()
                 if (entries.isNotEmpty()) out[key] = entries
@@ -60,6 +95,39 @@ internal class LiveProgramIndex private constructor(
         fun of(epg: Map<String, List<EPGProgramme>>): LiveProgramIndex =
             GuideMemo.get("liveProgramIndex", GuideMemo.Ref(epg)) { build(epg) }
     }
+}
+
+/** One row of the Live TV search "Programs" section. */
+internal class LiveProgramHit(val channel: M3UChannel, val programme: EPGProgramme) {
+    val key: String get() = "hit-${channel.url}|${programme.startMillis}"
+    fun isAiring(nowMillis: Long): Boolean =
+        programme.startMillis <= nowMillis && nowMillis < programme.endMillis
+
+    companion object {
+        /** Rows shown at most; the footer says so when more matched. */
+        const val CAP = 200
+    }
+}
+
+internal class LiveProgramHits(val hits: List<LiveProgramHit>, val truncated: Boolean)
+
+/** Fixed copy for the Live TV search sections (identical on Apple). */
+internal object LiveSearchCopy {
+    const val CHANNELS_HEADER = "Channels"
+    const val PROGRAMS_HEADER = "Programs"
+    const val NO_PROGRAMS = "No programs match"
+    const val CAP_FOOTER = "Showing the first 200 matches"
+}
+
+/** "8:20 PM" today (or already airing), "Sat 9:00 PM" on any later day. */
+internal fun programHitWhen(p: EPGProgramme, nowMillis: Long = System.currentTimeMillis()): String {
+    val zone = java.time.ZoneId.systemDefault()
+    val nowDay = java.time.Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+    val atDay = java.time.Instant.ofEpochMilli(p.startMillis).atZone(zone).toLocalDate()
+    val at = java.util.Date(p.startMillis)
+    val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(at)
+    if (p.startMillis <= nowMillis || atDay == nowDay) return time
+    return java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(at) + " " + time
 }
 
 /** Debounce before a Live TV search pass (spec: at most 150 ms). */

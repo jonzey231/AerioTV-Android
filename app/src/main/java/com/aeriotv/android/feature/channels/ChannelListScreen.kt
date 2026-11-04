@@ -145,6 +145,9 @@ import com.aeriotv.android.feature.livetv.EmptyGroupNotice
 import com.aeriotv.android.feature.livetv.LiveTVViewMode
 import com.aeriotv.android.feature.livetv.ManageGroupsSheet
 import com.aeriotv.android.feature.livetv.ProgramInfoSheet
+import com.aeriotv.android.feature.livetv.LiveSearchCopy
+import com.aeriotv.android.feature.livetv.liveProgramSearchSection
+import com.aeriotv.android.feature.livetv.liveSearchSectionHeader
 import com.aeriotv.android.feature.livetv.RecordProgramSheet
 import com.aeriotv.android.feature.multiview.rememberMultiviewStoreHandle
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
@@ -356,6 +359,23 @@ fun ChannelListScreen(
         }
     }
     val filtered = liveSearch.channels
+    // Live TV search "Programs" section (Logan 2026-11-04, Apple parity):
+    // title matches across the whole loaded guide for every channel in the
+    // playlist, now forward. Debounced and scanned off the main thread; the
+    // channel results above stay on their own pass.
+    val programHits by androidx.compose.runtime.produceState<com.aeriotv.android.feature.livetv.LiveProgramHits?>(
+        initialValue = null, state.channels, state.searchQuery, searchEpg,
+    ) {
+        val q = state.searchQuery.trim()
+        if (q.isEmpty() || searchEpg == null) { value = null; return@produceState }
+        value = null
+        kotlinx.coroutines.delay(com.aeriotv.android.feature.livetv.LIVE_SEARCH_DEBOUNCE_MS)
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            com.aeriotv.android.feature.livetv.LiveProgramIndex.of(searchEpg)
+                .programHits(q, System.currentTimeMillis(), state.channels)
+        }
+    }
+    val programSearchActive = searchEpg != null && state.searchQuery.isNotBlank()
 
     // #45: the Add-to-Collection picker + chained New Collection name dialog,
     // opened from a channel row's long-press menu. Dialogs render in their own
@@ -757,7 +777,8 @@ fun ChannelListScreen(
                 // gets a notice with a way out rather than a blank list. The
                 // pill row stays on screen here, so this is comfort rather
                 // than rescue; the guide is where it is load-bearing.
-                if (filtered.isEmpty()) {
+                val hitsShown = programHits?.hits?.isNotEmpty() == true
+                if (filtered.isEmpty() && !(programSearchActive && (hitsShown || programHits == null))) {
                     item(key = "list.emptyGroup") {
                         EmptyGroupNotice(
                             isSearching = state.searchQuery.isNotBlank(),
@@ -771,6 +792,9 @@ fun ChannelListScreen(
                 // the same tvg-id to multiple distinct channels, so id is not
                 // unique. Compose LazyColumn hard-crashes on a duplicate key. url
                 // is unique per stream (GH #31 follow-up crash fix).
+                if (programSearchActive && filtered.isNotEmpty()) {
+                    liveSearchSectionHeader(LiveSearchCopy.CHANNELS_HEADER, "live.channels.header")
+                }
                 items(items = filtered, key = { it.url }) { channel ->
                     val programmes = state.epgByChannel[channel.guideMatchKey].orEmpty()
                     val nowProgramme = programmes.nowPlaying()
@@ -804,6 +828,25 @@ fun ChannelListScreen(
                             { prog -> onCatchupResolve(channel, prog) }
                         } else {
                             null
+                        },
+                    )
+                }
+                if (programSearchActive && !(filtered.isEmpty() && programHits?.hits?.isEmpty() == true)) {
+                    liveProgramSearchSection(
+                        hits = programHits?.hits.orEmpty(),
+                        truncated = programHits?.truncated == true,
+                        pending = programHits == null,
+                        isTv = isTv,
+                        onTap = { hit ->
+                            if (hit.isAiring(System.currentTimeMillis())) {
+                                android.util.Log.i("AerioSearch", "[SEARCH] program hit: play channel")
+                                onChannelClick(hit.channel)
+                            } else {
+                                android.util.Log.i("AerioSearch", "[SEARCH] program hit: program info")
+                                programInfoTarget = hit.programme.toInfoTarget(
+                                    hit.channel.name, hit.channel.dispatcharrChannelId,
+                                )
+                            }
                         },
                     )
                 }

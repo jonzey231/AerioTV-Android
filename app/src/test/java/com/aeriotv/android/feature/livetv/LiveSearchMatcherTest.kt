@@ -87,4 +87,30 @@ class LiveSearchMatcherTest {
     @Test fun nullEpgIsChannelOnly() {
         assertTrue(run("roundup", map = null).channels.isEmpty())
     }
+
+    @Test
+    fun programHitsCoverTheWholeGuideByStartWithCap() {
+        val epg = mapOf(
+            alpha.guideMatchKey to listOf(
+                prog(alpha, "Late Match", now - 3 * hour, now - hour),
+                prog(alpha, "Match Night", now - hour / 2, now + hour),
+                prog(alpha, "Recap", now + 2 * hour, now + 3 * hour, sub = "Match"),
+                prog(alpha, "Match Night", now + 26 * hour, now + 27 * hour),
+            ),
+            bravo.guideMatchKey to listOf(
+                prog(bravo, "Big Match", now + hour, now + 2 * hour),
+                prog(bravo, "Big Match", now + hour, now + 2 * hour),
+            ),
+            charlie.guideMatchKey to listOf(prog(charlie, "Match Hidden", now + hour, now + 2 * hour)),
+        )
+        val r = LiveProgramIndex.build(epg).programHits(" MATCH ", now, listOf(alpha, bravo))
+        assertEquals(listOf(alpha, bravo, alpha), r.hits.map { it.channel })
+        assertEquals(false, r.truncated)
+        assertTrue(r.hits[0].isAiring(now))
+        val many = LiveProgramIndex.build(
+            mapOf(alpha.guideMatchKey to (0 until 250).map { prog(alpha, "Show", now + it * hour, now + it * hour + hour / 2) }),
+        ).programHits("show", now, listOf(alpha))
+        assertEquals(200, many.hits.size)
+        assertTrue(many.truncated)
+    }
 }

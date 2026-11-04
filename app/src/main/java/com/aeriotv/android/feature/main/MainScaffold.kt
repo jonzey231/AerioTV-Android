@@ -2440,6 +2440,9 @@ private fun MainTabContent(
                     onSeriesClick = onSeriesClick,
                     showBackButton = false,
                     autoFocusField = false,
+                    // Live TV search sections from the loaded guide (TV parity
+                    // with the phone Live TV search, Logan 2026-11-04).
+                    liveData = { viewModel.state.value.let { it.channels to it.epgByChannel } },
                 )
             }
             else -> Unit
