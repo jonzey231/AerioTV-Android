@@ -166,6 +166,11 @@ class SettingsViewModel @Inject constructor(
         )
     }
 
+    val customThemeHex: Flow<String> = prefs.customThemeHex
+    fun setCustomThemeHex(value: String) {
+        viewModelScope.launch { prefs.setCustomThemeHex(value) }
+    }
+
     val customAccentHex: Flow<String> = prefs.customAccentHex
     fun setCustomAccentHex(value: String) {
         viewModelScope.launch { prefs.setCustomAccentHex(value) }

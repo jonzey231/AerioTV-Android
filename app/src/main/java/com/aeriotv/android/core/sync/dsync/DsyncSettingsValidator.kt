@@ -13,7 +13,7 @@ import kotlinx.serialization.json.doubleOrNull
 object DsyncSettingsValidator {
 
     private val ENUMS: Map<String, Set<String>> = mapOf(
-        "selectedTheme" to setOf("Aerio", "Midnight", "Sunset", "Forest", "Lavender", "Monochrome", "Light"),
+        "selectedTheme" to setOf("Aerio", "Midnight", "Sunset", "Forest", "Lavender", "Monochrome", "Light", "Custom"),
         "appearanceMode" to setOf("dark", "light", "system"),
         "defaultTab" to setOf("", "LiveTV", "DVR", "Movies", "TVShows", "Settings"),
         "timeFormat" to setOf("system", "12", "24"),
@@ -79,7 +79,7 @@ object DsyncSettingsValidator {
     private val SUFFIX = Regex("^[A-Za-z0-9_]{1,40}$")
 
     /** Every schema name Android owns (prefix families excluded; see [isOwned]). */
-    val NAMES: Set<String> = ENUMS.keys + RANGES.keys + INTS.keys + BOOLEANS + STRINGS.keys + "customAccentHex"
+    val NAMES: Set<String> = ENUMS.keys + RANGES.keys + INTS.keys + BOOLEANS + STRINGS.keys + "customAccentHex" + "customThemeHex"
 
     fun isOwned(name: String): Boolean =
         name in NAMES ||
@@ -88,6 +88,7 @@ object DsyncSettingsValidator {
 
     /** True when [value] is acceptable for [name]. Unknown names are not accepted. */
     fun accepts(name: String, value: JsonPrimitive): Boolean {
+        if (name == "customThemeHex") return value.isString && HEX.matches(value.content)
         if (name == "customAccentHex") return value.isString && (value.content.isEmpty() || HEX.matches(value.content))
         if (name.startsWith(COLOR_PREFIX) && isOwned(name)) return value.isString && HEX.matches(value.content)
         if (name.startsWith(BUCKET_PREFIX) && isOwned(name)) return !value.isString && value.booleanOrNull != null

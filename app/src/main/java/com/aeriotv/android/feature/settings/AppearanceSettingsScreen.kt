@@ -146,10 +146,14 @@ fun AppearanceSettingsScreen(
     val textContrast by viewModel.textContrast.collectAsStateWithLifecycle(initialValue = 0f)
     val useCustomAccent by viewModel.useCustomAccent.collectAsStateWithLifecycle(initialValue = false)
     val customAccentHex by viewModel.customAccentHex.collectAsStateWithLifecycle(initialValue = "")
+    val customThemeHex by viewModel.customThemeHex.collectAsStateWithLifecycle(
+        initialValue = com.aeriotv.android.ui.theme.CustomThemePalette.DEFAULT_HEX,
+    )
     val timeFormat by viewModel.timeFormat.collectAsStateWithLifecycle(initialValue = "system")
     val trueBlack by viewModel.trueBlack.collectAsStateWithLifecycle()
 
     var accentPickerOpen by remember { mutableStateOf(false) }
+    var themeColorPickerOpen by remember { mutableStateOf(false) }
 
     SettingsSubPageHost {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -191,6 +195,11 @@ fun AppearanceSettingsScreen(
                             leadingIcon = Icons.Filled.Brush,
                             tvChoiceSheet = true,
                         )
+                        // Custom theme: on TV the hex field (in the dialog)
+                        // is the only input.
+                        if (currentTheme == AppTheme.Custom) {
+                            ThemeColorRow(hex = customThemeHex, onPick = { themeColorPickerOpen = true })
+                        }
                         CustomAccentRow(
                             enabled = useCustomAccent,
                             hex = customAccentHex,
@@ -200,7 +209,8 @@ fun AppearanceSettingsScreen(
                     }
                 } else settingsCard(
                     header = "Color Theme",
-                    footer = "Colors used throughout the app.",
+                    footer = if (currentTheme == AppTheme.Custom) CUSTOM_THEME_FOOTER
+                    else "Colors used throughout the app.",
                 ) {
                     // Plan B5: "theme swatch grid at doubled density" on
                     // tablet. A theme row is a 36dp swatch plus two short
@@ -242,6 +252,10 @@ fun AppearanceSettingsScreen(
                                         onClick = { viewModel.setSelectedTheme(theme) },
                                     )
                                 }
+                            }
+                            if (currentTheme == AppTheme.Custom) {
+                                DividerRow(ThemeRowDividerInset)
+                                ThemeColorRow(hex = customThemeHex, onPick = { themeColorPickerOpen = true })
                             }
                         }
                     }
@@ -405,6 +419,23 @@ fun AppearanceSettingsScreen(
     }
     }
 
+    if (themeColorPickerOpen) {
+        AccentPickerDialog(
+            current = customThemeHex,
+            preset = currentTheme.appBackground,
+            title = "Theme Color",
+            onDismiss = { themeColorPickerOpen = false },
+            onSave = { hex ->
+                viewModel.setCustomThemeHex(hex)
+                themeColorPickerOpen = false
+            },
+            onReset = {
+                viewModel.setCustomThemeHex(com.aeriotv.android.ui.theme.CustomThemePalette.DEFAULT_HEX)
+                themeColorPickerOpen = false
+            },
+        )
+    }
+
     if (accentPickerOpen) {
         AccentPickerDialog(
             current = customAccentHex,
@@ -527,6 +558,53 @@ private fun themeSubtitle(theme: AppTheme): String = when (theme) {
     AppTheme.Lavender -> "Purple on near-black"
     AppTheme.Monochrome -> "Grayscale on near-black"
     AppTheme.Light -> "Neutral teal-gray that reads on white"
+    AppTheme.Custom -> "Your own color, with a matching accent"
+}
+
+private const val CUSTOM_THEME_FOOTER =
+    "Build the whole theme from one color. The accent is matched automatically unless you set a custom accent."
+
+/**
+ * Custom theme "Theme Color" row: the base color swatch and its hex. Opens
+ * the hex dialog (the platform has no inline color picker here; on TV the
+ * hex field is the only input). Same look as the Custom Accent Color row.
+ */
+@Composable
+private fun ThemeColorRow(hex: String, onPick: () -> Unit) {
+    val isTv = rememberIsTvDevice()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .settingsRowFocusCard()
+            .clickable(onClick = onPick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(if (hex.length == 6) parseHex(hex) else MaterialTheme.colorScheme.background)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(4.dp),
+                ),
+        )
+        Spacer(Modifier.size(14.dp))
+        Text(
+            text = "Theme Color",
+            style = if (isTv) com.aeriotv.android.ui.settings.settingsRowTitleStyle() else MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "#" + hex.uppercase(),
+            style = MaterialTheme.typography.bodySmall.subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 /** Picker order for the Light and Dark Mode card, matching Apple. */
@@ -1112,6 +1190,7 @@ internal fun AddMoreCategoriesRow(
 private fun AccentPickerDialog(
     current: String,
     preset: Color,
+    title: String = "Custom Accent",
     onDismiss: () -> Unit,
     onSave: (String) -> Unit,
     onReset: () -> Unit,
@@ -1136,7 +1215,7 @@ private fun AccentPickerDialog(
                 SettingsDialogTextButton(label = "Cancel", onClick = onDismiss)
             }
         },
-        title = { Text("Custom Accent") },
+        title = { Text(title) },
         text = {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {

@@ -1392,6 +1392,15 @@ class MainActivity : ComponentActivity() {
             val trueBlack by appPreferences.trueBlack.collectAsState(initial = false)
             val useCustomAccent by appPreferences.useCustomAccent.collectAsState(initial = false)
             val customAccentHex by appPreferences.customAccentHex.collectAsState(initial = "")
+            // Custom theme base color: AppTheme.Custom reads the derived
+            // palette from CustomThemeState (snapshot state), so the whole
+            // tree recomposes when it changes.
+            val customThemeHex by appPreferences.customThemeHex.collectAsState(
+                initial = com.aeriotv.android.ui.theme.CustomThemePalette.DEFAULT_HEX,
+            )
+            androidx.compose.runtime.SideEffect {
+                com.aeriotv.android.ui.theme.CustomThemeState.setBaseHex(customThemeHex)
+            }
             val customAccent = if (useCustomAccent && customAccentHex.length == 6) {
                 runCatching {
                     val n = customAccentHex.toLong(16)

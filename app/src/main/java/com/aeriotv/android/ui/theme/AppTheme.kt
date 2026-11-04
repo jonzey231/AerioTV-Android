@@ -20,16 +20,19 @@ import androidx.compose.ui.graphics.Color
  */
 enum class AppTheme(
     val displayName: String,
-    val accentPrimary: Color,
-    val accentSecondary: Color,
-    val appBackground: Color,
-    val cardBackground: Color,
+    open val accentPrimary: Color,
+    open val accentSecondary: Color,
+    open val appBackground: Color,
+    open val cardBackground: Color,
     // Light rendition (used only when AppearanceMode resolves to Light).
-    val lightAppBackground: Color,
-    val lightCardBackground: Color,
-    val lightAccentPrimary: Color,
+    open val lightAppBackground: Color,
+    open val lightCardBackground: Color,
+    open val lightAccentPrimary: Color,
     // Apple ThemeManager.lightAccentSecondary.
-    val lightAccentSecondary: Color,
+    open val lightAccentSecondary: Color,
+    // Primary text per rendition. Presets keep the shared ink; Custom tints it.
+    open val darkTextPrimary: Color = TextPrimary,
+    open val lightTextPrimary: Color = TextPrimaryLight,
 ) {
     Aerio(
         displayName = "AerioTV",
@@ -118,6 +121,35 @@ enum class AppTheme(
         lightAccentPrimary = Color(0xFF2B7A86),
         lightAccentSecondary = Color(0xFF1F5A64),
     ),
+
+    /**
+     * Custom: the whole palette and its matching accent derive from one base
+     * color (Appearance > Theme Color). See CustomThemePalette.kt for the
+     * shared formula. The constructor values are placeholders; every color
+     * reads the live [CustomThemeState] palette.
+     */
+    Custom(
+        displayName = "Custom",
+        accentPrimary = Color(0xFF1AC4D8),
+        accentSecondary = Color(0xFF1A8FA8),
+        appBackground = Color(0xFF0A1628),
+        cardBackground = Color(0xFF0D1E35),
+        lightAppBackground = Color(0xFFF2F7FA),
+        lightCardBackground = Color(0xFFFFFFFF),
+        lightAccentPrimary = Color(0xFF0E8FA0),
+        lightAccentSecondary = Color(0xFF0B6E7C),
+    ) {
+        override val accentPrimary get() = rgbColor(CustomThemeState.palette.darkAccent)
+        override val accentSecondary get() = rgbColor(CustomThemeState.palette.darkAccentSecondary)
+        override val appBackground get() = rgbColor(CustomThemeState.palette.darkBackground)
+        override val cardBackground get() = rgbColor(CustomThemeState.palette.darkCard)
+        override val lightAppBackground get() = rgbColor(CustomThemeState.palette.lightBackground)
+        override val lightCardBackground get() = Color(0xFFFFFFFF)
+        override val lightAccentPrimary get() = rgbColor(CustomThemeState.palette.lightAccent)
+        override val lightAccentSecondary get() = rgbColor(CustomThemeState.palette.lightAccentSecondary)
+        override val darkTextPrimary get() = rgbColor(CustomThemeState.palette.darkText)
+        override val lightTextPrimary get() = rgbColor(CustomThemeState.palette.lightInk)
+    },
 }
 
 /**

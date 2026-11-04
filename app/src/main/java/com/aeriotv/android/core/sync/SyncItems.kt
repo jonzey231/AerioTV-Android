@@ -88,7 +88,7 @@ object SyncItemCatalog {
 
     val groups: List<SyncItemGroup> = listOf(
         SyncItemGroup("appearance", "Appearance", listOf(
-            SyncItem("selectedTheme", "Color Theme", listOf("selectedTheme")),
+            SyncItem("selectedTheme", "Color Theme", listOf("selectedTheme", "customThemeHex")),
             SyncItem("appearanceMode", "Light and Dark Mode", listOf("appearanceMode")),
             SyncItem("trueBlack", "True Black Background", listOf("trueBlack")),
             SyncItem("customAccent", "Custom Accent Color", listOf("useCustomAccent", "customAccentHex")),

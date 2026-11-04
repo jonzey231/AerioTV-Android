@@ -69,7 +69,7 @@ fun AerioTVTheme(
     // values verbatim; the light branch reads the theme's light rendition.
     val appBackground = if (isDark) darkAppBackground(appTheme, trueBlack) else appTheme.lightAppBackground
     val cardBackground = if (isDark) darkCardBackground(appTheme, trueBlack) else appTheme.lightCardBackground
-    val textPrimary = if (isDark) TextPrimary else TextPrimaryLight
+    val textPrimary = if (isDark) appTheme.darkTextPrimary else appTheme.lightTextPrimary
 
     // Android TV needs a 10-foot type scale + slightly brighter dim text. iOS
     // keeps a separate ~1.5x tvOS Typography and pushes secondary text opacity

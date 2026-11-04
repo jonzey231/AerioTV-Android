@@ -408,6 +408,16 @@ class AppPreferences @Inject constructor(
         store.edit { it[KEY_VIDEO_SCALE_MODE] = value }
     }
 
+    /** Custom theme base color ("RRGGBB"); Apple customThemeHex. */
+    val customThemeHex: Flow<String> = scopedData.map {
+        com.aeriotv.android.ui.theme.CustomThemePalette.clean(it[KEY_CUSTOM_THEME_HEX.s()])
+            ?: com.aeriotv.android.ui.theme.CustomThemePalette.DEFAULT_HEX
+    }
+    suspend fun setCustomThemeHex(value: String) {
+        val clean = com.aeriotv.android.ui.theme.CustomThemePalette.clean(value) ?: return
+        store.edit { it[KEY_CUSTOM_THEME_HEX.s()] = clean }
+    }
+
     val customAccentHex: Flow<String> = scopedData.map { it[KEY_CUSTOM_ACCENT_HEX.s()] ?: "" }
     suspend fun setCustomAccentHex(value: String) {
         store.edit { prefs ->
@@ -1820,6 +1830,7 @@ class AppPreferences @Inject constructor(
         val b = SKind.B; val i = SKind.I; val d = SKind.D; val s = SKind.S
         listOf(
             r("selectedTheme", KEY_SELECTED_THEME, s),
+            r("customThemeHex", KEY_CUSTOM_THEME_HEX, s),
             r("appearanceMode", KEY_APPEARANCE_MODE, s),
             r("trueBlack", KEY_APPEARANCE_TRUE_BLACK, b, drive = "appearanceTrueBlack"),
             r("useCustomAccent", KEY_USE_CUSTOM_ACCENT, b),
@@ -1935,7 +1946,7 @@ class AppPreferences @Inject constructor(
         SKind.S -> v.content.let { c ->
             when {
                 name == "hiddenEpgBadges" -> c.split(',').map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n").ifEmpty { null }
-                name == "customAccentHex" || name.startsWith(DsyncSettingsValidator.COLOR_PREFIX) ->
+                name == "customAccentHex" || name == "customThemeHex" || name.startsWith(DsyncSettingsValidator.COLOR_PREFIX) ->
                     c.removePrefix("#").uppercase().ifEmpty { null }
                 else -> c
             }
@@ -2917,6 +2928,7 @@ class AppPreferences @Inject constructor(
         val KEY_SHOW_EPG_BADGES_MOBILE = booleanPreferencesKey("ui_show_epg_badges_mobile")
         val KEY_VIDEO_SCALE_MODE = stringPreferencesKey("video_scale_mode")
         val KEY_CUSTOM_ACCENT_HEX = stringPreferencesKey("custom_accent_hex")
+        val KEY_CUSTOM_THEME_HEX = stringPreferencesKey("custom_theme_hex")
         val KEY_DEFAULT_LIVE_TV_VIEW = stringPreferencesKey("default_live_tv_view")
         val KEY_LIVE_TV_LAYOUT = stringPreferencesKey("live_tv_layout")
         val KEY_SKIP_LOADING_SCREEN = booleanPreferencesKey("app_behaviors_skip_loading_screen")
@@ -3077,6 +3089,7 @@ class AppPreferences @Inject constructor(
         /** Settings that are profile scoped (".s()") and carried by Dispatcharr Sync and Drive. */
         val PROFILE_SETTING_KEYS: List<Preferences.Key<*>> by lazy { listOf(
             KEY_SELECTED_THEME,
+            KEY_CUSTOM_THEME_HEX,
             KEY_APPEARANCE_MODE,
             KEY_APPEARANCE_TRUE_BLACK,
             KEY_USE_CUSTOM_ACCENT,
