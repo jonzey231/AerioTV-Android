@@ -112,6 +112,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -1967,6 +1968,23 @@ private fun Tile(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                }
+                // Resolution / frame rate pill (bottom-right), the same
+                // readout the single player shows, fading with the tile
+                // chrome. A single tile runs the full player chrome, which
+                // carries its own pill (Logan 2026-11-04: tiles showed none).
+                val tileFormatBadge = com.aeriotv.android.feature.player
+                    .rememberVideoFormatBadge(tilePlayer, tile.id)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = chromeVisible && !singleTile && tileFormatBadge != null,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                ) {
+                    com.aeriotv.android.feature.player.PlayerFormatBadge(
+                        text = tileFormatBadge.orEmpty(),
+                        fontSize = if (LocalConfiguration.current.smallestScreenWidthDp >= 600) 12.sp else 10.sp,
+                    )
                 }
                 // Audio-focus indicator. centerIcon mode shows the speaker icon over
                 // the active tile while the chrome is visible. grayPersistent and

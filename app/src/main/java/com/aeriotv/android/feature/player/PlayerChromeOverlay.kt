@@ -1081,7 +1081,7 @@ internal fun StableFormatBadge(text: String, modifier: Modifier = Modifier) {
  *  [fontSize] defaults to the TV size; the touch chrome passes its own
  *  (tablet larger than phone landscape, as Apple scales iPad and iPhone). */
 @Composable
-private fun PlayerFormatBadge(
+internal fun PlayerFormatBadge(
     text: String,
     modifier: Modifier = Modifier,
     fontSize: androidx.compose.ui.unit.TextUnit = 9.sp,
