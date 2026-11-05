@@ -573,7 +573,7 @@ fun RecordProgramSheet(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Remove Commercials (Comskip)",
+                                text = "Remove Commercials",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onBackground,
                                 fontWeight = FontWeight.Medium,
@@ -795,7 +795,7 @@ private fun TvRecordForm(
 
                 if (!isLive && !usingRule) {
                     TvSectionTitle("Start Early")
-                    TvMinutePills(options = listOf(0, 5, 10, 15, 30), selected = preRoll, onSelect = onPreRoll, onCustom = onCustomPreRoll)
+                    TvMinutePills(options = ROLL_OPTIONS, selected = preRoll, onSelect = onPreRoll, onCustom = onCustomPreRoll)
                 }
                 if (!usingRule) {
                     TvSectionTitle("End Late")
@@ -832,15 +832,15 @@ private fun TvRecordForm(
                 if (isDispatcharr && canRecordToServer && !usingRule) {
                     val disabled = !destinationServer
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TvSectionTitle("Remove Commercials (Comskip)", dim = disabled)
+                        TvSectionTitle("Remove Commercials", dim = disabled)
                         Spacer(Modifier.height(3.dp))
                         TvPillRow(alpha = if (disabled) 0.45f else 1f) {
                             SheetPill("Off", selected = !removeCommercials, onClick = { if (!disabled) onRemoveCommercials(false) })
                             SheetPill("On", selected = removeCommercials, onClick = { if (!disabled) onRemoveCommercials(true) })
                         }
                         Text(
-                            if (disabled) "Comskip runs server-side. Switch the destination to Dispatcharr server to enable."
-                            else "Server-side: detects and removes commercial breaks after the recording completes, when Comskip is configured on the Dispatcharr server.",
+                            if (disabled) "Removing commercials runs server-side. Switch the destination to Dispatcharr server to enable."
+                            else "Server-side: detects and removes commercial breaks after the recording completes, when commercial detection is configured on the Dispatcharr server.",
                             fontSize = 9.sp.subtext(), lineHeight = 12.sp.subtext(), color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, top = 1.dp),
                         )
                     }

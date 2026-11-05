@@ -362,7 +362,7 @@ fun DvrMediaTabContent(
                     // Save to Device is a read (GET the file), never gated.
                     add(com.aeriotv.android.core.tv.TvMenuAction("Save to Device") { scope.launch { viewModel.saveToDevice(rec).onFailure { toast("Save failed: ${it.message}") }.onSuccess { toast("Saving to device") } } })
                     if (canManageDvr) {
-                        add(com.aeriotv.android.core.tv.TvMenuAction("Remove Commercials") { scope.launch { viewModel.applyComskip(rec).onFailure { toast("Comskip failed: ${it.message}") }.onSuccess { toast("Comskip started") } } })
+                        add(com.aeriotv.android.core.tv.TvMenuAction("Remove Commercials") { scope.launch { viewModel.applyComskip(rec).onFailure { toast("Removing commercials failed: ${it.message}") }.onSuccess { toast("Removing commercials started") } } })
                     }
                 }
             }
