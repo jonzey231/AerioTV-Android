@@ -104,13 +104,13 @@ enum class AppTheme(
     ),
 
     /**
-     * Standalone neutral "Light" theme. A low-chroma teal-grey accent that
+     * Standalone neutral theme, shown as "Slate" (enum name and sync value stay "Light"). A low-chroma teal-grey accent that
      * reads on white. Orthogonal to [AppearanceMode]: picking this theme does
      * NOT flip the mode. It ships a dark rendition too so it stays consistent
      * when the user's mode is Dark/System-dark.
      */
     Light(
-        displayName = "Light",
+        displayName = "Slate",
         // Dark rendition: a lighter teal reads on the near-black ground.
         accentPrimary = Color(0xFF3E9EAC),
         accentSecondary = Color(0xFF2B7A86),
