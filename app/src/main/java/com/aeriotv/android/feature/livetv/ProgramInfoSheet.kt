@@ -282,13 +282,7 @@ fun ProgramInfoSheet(
 @Composable
 private fun ProgramInfoRecordButton(onClick: () -> Unit) {
     androidx.compose.material3.Button(onClick = onClick) {
-        androidx.compose.material3.Icon(
-            imageVector = androidx.compose.material.icons.Icons.Filled.FiberManualRecord,
-            contentDescription = null,
-            tint = EpgLiveRed,
-            modifier = Modifier.size(14.dp),
-        )
-        Spacer(Modifier.width(8.dp))
+        // Text only (Logan 2026-11-05), matching Apple.
         Text("Record")
     }
 }
