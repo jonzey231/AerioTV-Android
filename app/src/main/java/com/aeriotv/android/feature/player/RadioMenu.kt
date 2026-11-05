@@ -13,7 +13,7 @@ import dagger.hilt.android.EntryPointAccessors
 /**
  * The channel long-press menu's Radio Mode row (guide grid and channel list,
  * every form factor). "Exit Radio Mode" on the channel Radio Mode is playing,
- * "Radio Mode" on any other channel (switches the audio when already in Radio
+ * "Radio Mode" on any other is_radio channel (switches the audio when already in Radio
  * Mode). Null while casting (hidden, Apple parity) or for a channel with no
  * stream URL.
  */
@@ -33,6 +33,9 @@ fun radioMenuAction(
     if (playingHere) {
         return TvMenuAction("Exit Radio Mode", Icons.Filled.Radio) { RadioMode.stop(context, "menu Exit") }
     }
+    // 2026-10-14 decision: Radio Mode is offered only on channels the server
+    // flags is_radio (tvOS review 2026-11-05, Apple parity).
+    if (!channel.isRadio) return null
     return TvMenuAction("Radio Mode", Icons.Filled.Radio) {
         beforeStart()
         val headers = RadioMode.headersProvider?.invoke() ?: entry.exoPlayerHolder().httpHeaders
