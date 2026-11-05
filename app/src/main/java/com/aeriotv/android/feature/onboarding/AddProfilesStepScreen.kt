@@ -448,40 +448,34 @@ fun AddProfilesStepScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) { header() }
-                Row(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(32.dp),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    // Left: search, suggestions, and users as one scrolling
-                    // list, with a bottom fade while more is below.
-                    Box(Modifier.weight(0.58f).fillMaxHeight()) {
-                        userList(Modifier.fillMaxHeight())
-                        if (listScroll.canScrollForward) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .background(
-                                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                                            listOf(
-                                                androidx.compose.ui.graphics.Color.Transparent,
-                                                MaterialTheme.colorScheme.background,
-                                            ),
+                // One centered column (tvOS review 2026-11-05, Apple parity):
+                // the roster at full width, then Continue and the count line
+                // under it, instead of a list beside an actions column.
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    userList(Modifier.fillMaxHeight())
+                    if (listScroll.canScrollForward) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        listOf(
+                                            androidx.compose.ui.graphics.Color.Transparent,
+                                            MaterialTheme.colorScheme.background,
                                         ),
                                     ),
-                            )
-                        }
+                                ),
+                        )
                     }
-                    // Right: the actions.
-                    Column(
-                        modifier = Modifier.weight(0.42f).verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        controlsTail()
-                    }
+                }
+                Column(
+                    modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    controlsTail()
                 }
             }
         } else {
