@@ -21,6 +21,12 @@ object SetupProtocol {
     const val TXT_PK = "pk"
     /** Receiver form factor: [KIND_PHONE], [KIND_TABLET], or [KIND_TV]. Absent (older builds) = TV. */
     const val TXT_KIND = "kind"
+    /** `source` = a device showing a user QR that accepts POST [USER_QR_PATH]. Receivers omit it. */
+    const val TXT_ROLE = "role"
+    const val ROLE_SOURCE = "source"
+    /** Lowercase hex of the first 8 bytes of SHA-256("aeriotv-userqr-v1:" + api_key). */
+    const val TXT_USER_QR = "uq"
+    const val USER_QR_PATH = "/user-qr"
     const val KIND_PHONE = "phone"
     const val KIND_TABLET = "tablet"
     const val KIND_TV = "tv"

@@ -11,6 +11,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,6 +104,8 @@ fun ConfigureSourceScreen(
     sourceType: SourceType,
     onBack: () -> Unit,
     viewModel: PlaylistViewModel = hiltViewModel(),
+    /** A setup copied from the device showing a user QR was applied: the Dispatcharr playlist id, or null. */
+    onSetupReceived: (String?) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -155,6 +159,74 @@ fun ConfigureSourceScreen(
         // Probe DVR access now so the recording row knows the account's
         // access; Connect reuses the result.
         viewModel.probeScannedDvrAccess()
+    }
+
+    // User QR from a device on this network (docs/DeviceSetupHandoff.md): look
+    // for the device showing it for 3 s; found = offer to copy its whole setup.
+    val userQrContext = androidx.compose.ui.platform.LocalContext.current
+    val userQrScope = androidx.compose.runtime.rememberCoroutineScope()
+    var userQrProbing by remember { mutableStateOf(false) }
+    var userQrPick by remember { mutableStateOf<Pair<com.aeriotv.android.core.setup.UserQrRequest.Found, com.aeriotv.android.core.qr.ScannedCode.Result.UserKey>?>(null) }
+    var userQrRequest by remember { mutableStateOf<Pair<com.aeriotv.android.core.setup.UserQrRequest.Found, com.aeriotv.android.core.qr.ScannedCode.Result.UserKey>?>(null) }
+    val onScannedUserKey: (com.aeriotv.android.core.qr.ScannedCode.Result.UserKey) -> Unit = { k ->
+        userQrProbing = true
+        userQrScope.launch {
+            val found = com.aeriotv.android.core.setup.UserQrRequest.find(userQrContext, k.apiKey)
+            userQrProbing = false
+            if (found == null) applyUserKey(k) else userQrPick = found to k
+        }
+    }
+    userQrRequest?.let { (found, k) ->
+        com.aeriotv.android.feature.devicesetup.TvSetupScreen(
+            addPlaylist = { req -> viewModel.addFromSetup(req) },
+            onCancel = { userQrRequest = null },
+            onDone = { pid -> userQrRequest = null; onSetupReceived(pid) },
+            request = com.aeriotv.android.feature.devicesetup.TvSetupViewModel.Request(found, k.apiKey),
+            onImportUserOnly = { userQrRequest = null; applyUserKey(k) },
+        )
+        return
+    }
+    if (userQrProbing) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+            androidx.compose.foundation.layout.Row(
+                Modifier.background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(20.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                Text("Looking for the device showing this code", color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+    userQrPick?.let { (found, k) ->
+        var userOnly by remember(found) { mutableStateOf(false) }
+        com.aeriotv.android.ui.scale.AlertDialog(
+            onDismissRequest = { userQrPick = null },
+            title = { Text("Copy from ${found.name}") },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    listOf(false to "Copy entire setup from this device", true to "Import this user only").forEach { (value, label) ->
+                        androidx.compose.foundation.layout.Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = userOnly == value, onClick = { userOnly = value }, role = androidx.compose.ui.semantics.Role.RadioButton)
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            androidx.compose.material3.RadioButton(selected = userOnly == value, onClick = null)
+                            Text(label, modifier = Modifier.padding(start = 12.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.Button(onClick = {
+                    userQrPick = null
+                    if (userOnly) applyUserKey(k) else userQrRequest = found to k
+                }) { Text("Continue") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { userQrPick = null }) { Text("Cancel") } },
+            containerColor = MaterialTheme.colorScheme.surface,
+        )
     }
 
     val cardIcon: ImageVector
@@ -271,7 +343,7 @@ fun ConfigureSourceScreen(
                         viewModel = viewModel,
                         authMode = dispatcharrAuthMode,
                         scannedUser = scannedUser,
-                        onUserKey = applyUserKey,
+                        onUserKey = onScannedUserKey,
                         onAuthModeChange = { mode ->
                             dispatcharrAuthMode = mode
                             viewModel.onSourceTypeChange(

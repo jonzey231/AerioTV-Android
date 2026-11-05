@@ -93,7 +93,14 @@ class TvSetupViewModel @Inject constructor(
         data class Failed(val message: String) : Phase
         /** [dispatcharrPlaylistId] set = continue into Add Profiles for that playlist. */
         data class Done(val dispatcharrPlaylistId: String?) : Phase
+        /** User QR request mode: waiting for Send on the showing device. */
+        data class Requesting(val sourceName: String) : Phase
+        data class RequestFailed(val message: String) : Phase
     }
+
+    /** User QR request mode: ask the device showing [apiKey]'s code for its setup (no advert, no code shown). */
+    data class Request(val source: com.aeriotv.android.core.setup.UserQrRequest.Found, val apiKey: String)
+
 
     private val _phase = MutableStateFlow<Phase>(Phase.Starting)
     val phase: StateFlow<Phase> = _phase.asStateFlow()
@@ -105,18 +112,38 @@ class TvSetupViewModel @Inject constructor(
 
     fun bind(add: suspend (PlaylistRepository.SaveRequest) -> Result<PlaylistEntity>) { addPlaylist = add }
 
-    fun start() {
+    private var request: Request? = null
+    private var requestJob: Job? = null
+
+    fun start(req: Request? = null) {
         if (receiver != null) return
-        val r = SetupReceiver(context) { payload -> viewModelScope.launch { onPayload(payload) } }
+        request = req
+        val r = SetupReceiver(context, { payload -> viewModelScope.launch { onPayload(payload) } }, advertise = req == null)
         receiver = r
         viewModelScope.launch {
             if (!r.start()) { receiver = null; _phase.value = Phase.NoNetwork; return@launch }
-            r.offer.collect { o -> if (o != null && _phase.value.isOfferish()) _phase.value = Phase.Offering(o) }
+            r.offer.collect { o ->
+                if (o == null || !_phase.value.isOfferish()) return@collect
+                if (req == null) { _phase.value = Phase.Offering(o); return@collect }
+                if (requestJob != null) return@collect
+                _phase.value = Phase.Requesting(req.source.name)
+                requestJob = viewModelScope.launch {
+                    val err = com.aeriotv.android.core.setup.UserQrRequest.request(req.source, req.apiKey, o.link)
+                    // Success: the payload has arrived (or is arriving) on the receiver.
+                    if (err != null && _phase.value is Phase.Requesting) {
+                        stop()
+                        _phase.value = Phase.RequestFailed(
+                            if (err == "network") com.aeriotv.android.core.setup.UserQrSource.UNREACHABLE
+                            else "${req.source.name} did not send its setup.",
+                        )
+                    }
+                }
+            }
         }
         armTimeout()
     }
 
-    private fun Phase.isOfferish() = this is Phase.Starting || this is Phase.Offering
+    private fun Phase.isOfferish() = this is Phase.Starting || this is Phase.Offering || this is Phase.Requesting
 
     private fun armTimeout() {
         timeout?.cancel()
@@ -130,19 +157,22 @@ class TvSetupViewModel @Inject constructor(
     }
 
     fun restart() {
+        val req = request
         stop()
         _phase.value = Phase.Starting
-        start()
+        start(req)
     }
 
     fun stop() {
+        requestJob?.cancel()
+        requestJob = null
         timeout?.cancel()
         receiver?.stop()
         receiver = null
     }
 
     fun reset() {
-        if (_phase.value !is Phase.Applying) { pending = null; _phase.value = Phase.Starting }
+        if (_phase.value !is Phase.Applying) { pending = null; request = null; _phase.value = Phase.Starting }
     }
 
     fun retry() {
@@ -239,10 +269,14 @@ fun TvSetupScreen(
     onCancel: () -> Unit,
     /** Gets the Dispatcharr playlist id (null otherwise) so the caller opens Add Profiles next. */
     onDone: (String?) -> Unit,
+    /** User QR request mode (docs/DeviceSetupHandoff.md): ask this device for its setup instead of showing a code. */
+    request: TvSetupViewModel.Request? = null,
+    /** Request mode failure: "Import this user only" applies the scanned user key. */
+    onImportUserOnly: () -> Unit = {},
     vm: TvSetupViewModel = hiltViewModel(),
 ) {
     val phase by vm.phase.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { vm.bind(addPlaylist); vm.start() }
+    LaunchedEffect(Unit) { vm.bind(addPlaylist); vm.start(request) }
     // The view model can outlive the screen (Settings host scope): leave it fresh for the next visit.
     DisposableEffect(Unit) { onDispose { vm.stop(); vm.reset() } }
     LaunchedEffect(phase) { (phase as? TvSetupViewModel.Phase.Done)?.let { onDone(it.dispatcharrPlaylistId) } }
@@ -283,6 +317,21 @@ fun TvSetupScreen(
                 onCancel = cancel,
             )
             is TvSetupViewModel.Phase.Done -> CircularProgressIndicator()
+            is TvSetupViewModel.Phase.Requesting -> Column(Modifier.widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(20.dp))
+                Text("Waiting for ${p.sourceName}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+                Text("Tap Send on ${p.sourceName} to copy its setup to this device.", style = MaterialTheme.typography.bodyLarge.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(24.dp))
+                OutlinedButton(onClick = cancel, modifier = Modifier.secondaryButtonFrame()) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
+            }
+            is TvSetupViewModel.Phase.RequestFailed -> Message(
+                title = "Setup did not finish",
+                body = p.message,
+                primary = "Import this user only" to { vm.stop(); onImportUserOnly() },
+                onCancel = cancel,
+            )
         }
     }
 }

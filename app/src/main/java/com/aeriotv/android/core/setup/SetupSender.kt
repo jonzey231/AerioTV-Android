@@ -107,7 +107,9 @@ class SetupDiscovery(private val context: Context) {
                 val attrs = runCatching { info.attributes }.getOrNull().orEmpty()
                 fun attr(k: String) = attrs[k]?.let { String(it, Charsets.UTF_8) }
                 val pk = attr(SetupProtocol.TXT_PK)?.let(SetupCrypto::unb64)?.takeIf { it.size == 32 }
-                if (host != null && pk != null && attr(SetupProtocol.TXT_VERSION) == SetupProtocol.VERSION.toString()) {
+                // role=source is a device showing a user QR (POST /user-qr), never a receiver.
+                val isSource = attr(SetupProtocol.TXT_ROLE) == SetupProtocol.ROLE_SOURCE
+                if (!isSource && host != null && pk != null && attr(SetupProtocol.TXT_VERSION) == SetupProtocol.VERSION.toString()) {
                     val t = SetupTarget(
                         name = attr(SetupProtocol.TXT_NAME)?.takeIf { it.isNotBlank() } ?: info.serviceName ?: "AerioTV",
                         host = host,

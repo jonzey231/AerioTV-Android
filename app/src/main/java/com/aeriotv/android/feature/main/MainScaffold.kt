@@ -3196,6 +3196,12 @@ private fun SettingsTabContent(
                     nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
                 },
                 viewModel = playlistVm,
+                // Copied from the device showing a user QR: same next step as Set up from another device.
+                onSetupReceived = { pid ->
+                    if (nav.current != r) Unit
+                    else if (pid != null) nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.AddProfiles(pid)))
+                    else nav.pop()
+                },
             )
             is AddPlaylistWizardStep.AddProfiles ->
                 com.aeriotv.android.feature.onboarding.AddProfilesStepScreen(

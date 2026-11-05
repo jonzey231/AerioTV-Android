@@ -37,6 +37,12 @@ class SetupReceiver(
     private val context: Context,
     /** Called on the server's coroutine with a verified payload. */
     private val onPayload: (SetupProtocol.Payload) -> Unit,
+    /**
+     * False for the user QR request mode (docs/DeviceSetupHandoff.md): the
+     * offer goes straight to the showing device in a POST /user-qr, so no
+     * advert is needed for a sender to find this receiver.
+     */
+    private val advertise: Boolean = true,
 ) {
     data class Offer(val code: String, val link: String, val deviceName: String, val ip: String, val port: Int, val fingerprint: String)
 
@@ -93,7 +99,7 @@ class SetupReceiver(
         val lan = ip ?: return
         val name = deviceName()
         _offer.value = Offer(code, SetupProtocol.buildLink(lan, port, code, keys.publicKey, name), name, lan, port, SetupCrypto.keyFingerprint(keys.publicKey))
-        register(name)
+        if (advertise) register(name)
     }
 
     private suspend fun handle(call: ApplicationCall) {
@@ -168,35 +174,39 @@ class SetupReceiver(
         regListener = null
     }
 
-    /** phone, tablet, or tv for the TXT `kind` key, so senders show the right icon. */
-    private fun deviceKind(): String {
-        val cfg = context.resources.configuration
-        val tv = (cfg.uiMode and android.content.res.Configuration.UI_MODE_TYPE_MASK) ==
-            android.content.res.Configuration.UI_MODE_TYPE_TELEVISION ||
-            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
-        return when {
-            tv -> SetupProtocol.KIND_TV
-            cfg.smallestScreenWidthDp >= 600 -> SetupProtocol.KIND_TABLET
-            else -> SetupProtocol.KIND_PHONE
-        }
-    }
-
-    private fun deviceName(): String =
-        runCatching { Settings.Global.getString(context.contentResolver, "device_name") }
-            .getOrNull()?.takeIf { it.isNotBlank() } ?: Build.MODEL ?: "Android device"
-
-    private fun lanIpv4(): String? = runCatching {
-        NetworkInterface.getNetworkInterfaces().toList().asSequence()
-            .filter { runCatching { it.isUp && !it.isLoopback && !it.isVirtual && !it.isPointToPoint }.getOrDefault(false) }
-            .sortedBy { if (it.name.startsWith("eth")) 0 else if (it.name.startsWith("wlan")) 1 else 2 }
-            .flatMap { it.inetAddresses.toList() }
-            .filterIsInstance<Inet4Address>()
-            .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
-            ?.hostAddress
-    }.getOrNull()
+    private fun deviceKind(): String = setupDeviceKind(context)
+    private fun deviceName(): String = setupDeviceName(context)
+    private fun lanIpv4(): String? = setupLanIpv4()
 
     private companion object {
         const val TAG = "AerioSetup"
         const val MAX_BODY = 256L * 1024L
     }
 }
+
+/** phone, tablet, or tv for the TXT `kind` key, so senders show the right icon. */
+internal fun setupDeviceKind(context: Context): String {
+    val cfg = context.resources.configuration
+    val tv = (cfg.uiMode and android.content.res.Configuration.UI_MODE_TYPE_MASK) ==
+        android.content.res.Configuration.UI_MODE_TYPE_TELEVISION ||
+        context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+    return when {
+        tv -> SetupProtocol.KIND_TV
+        cfg.smallestScreenWidthDp >= 600 -> SetupProtocol.KIND_TABLET
+        else -> SetupProtocol.KIND_PHONE
+    }
+}
+
+internal fun setupDeviceName(context: Context): String =
+    runCatching { Settings.Global.getString(context.contentResolver, "device_name") }
+        .getOrNull()?.takeIf { it.isNotBlank() } ?: Build.MODEL ?: "Android device"
+
+internal fun setupLanIpv4(): String? = runCatching {
+    NetworkInterface.getNetworkInterfaces().toList().asSequence()
+        .filter { runCatching { it.isUp && !it.isLoopback && !it.isVirtual && !it.isPointToPoint }.getOrDefault(false) }
+        .sortedBy { if (it.name.startsWith("eth")) 0 else if (it.name.startsWith("wlan")) 1 else 2 }
+        .flatMap { it.inetAddresses.toList() }
+        .filterIsInstance<Inet4Address>()
+        .firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+        ?.hostAddress
+}.getOrNull()

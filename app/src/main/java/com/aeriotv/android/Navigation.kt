@@ -1245,6 +1245,8 @@ fun AerioTVNavHost(
                     sourceType = resolvedType,
                     onBack = { navController.popBackStack() },
                     viewModel = vm,
+                    // Copied from the device showing a user QR: same next step as Set up from another device.
+                    onSetupReceived = { pid -> if (pid != null) profileStepFor = pid else toMain() },
                 )
             }
 
