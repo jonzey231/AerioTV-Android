@@ -47,7 +47,12 @@ class GoogleDriveAuth(private val context: Context) {
             throw IllegalStateException("Drive Sync OAuth client id is not configured.")
         }
         val credentialManager = CredentialManager.create(context)
-        val option = GetSignInWithGoogleOption.Builder(SyncConfig.WEB_CLIENT_ID).build()
+        // Fresh nonce per sign-in (the Credential Manager form of OAuth state):
+        // the hash goes in the request, the ID token must echo it back.
+        val rawNonce = SignInNonce.newRaw()
+        val option = GetSignInWithGoogleOption.Builder(SyncConfig.WEB_CLIENT_ID)
+            .setNonce(SignInNonce.hashed(rawNonce))
+            .build()
         val request = GetCredentialRequest.Builder()
             .addCredentialOption(option)
             .build()
@@ -62,6 +67,10 @@ class GoogleDriveAuth(private val context: Context) {
                 GoogleIdTokenCredential.createFrom(cred.data)
             } catch (e: GoogleIdTokenParsingException) {
                 Log.w(TAG, "GoogleId token parse failed", e)
+                return@runCatching null
+            }
+            if (!SignInNonce.matches(google.idToken, rawNonce)) {
+                Log.w(TAG, "Sign-in rejected: ID token nonce does not match this request")
                 return@runCatching null
             }
             SignInResult(
@@ -92,6 +101,10 @@ class GoogleDriveAuth(private val context: Context) {
         // it, authorize() returns a cached access token with NO UI once the
         // user has granted the Drive AppData scope -- the basis for
         // [DriveSyncManager.ensureSignedIn].
+        // AuthorizationRequest (play-services-auth 21.4.0) has no state or
+        // nonce setter; the request is bound to the app by package and
+        // signing certificate, and the account comes from the nonce-checked
+        // sign-in above.
         val request = AuthorizationRequest.builder()
             .setRequestedScopes(listOf(Scope(SyncConfig.DRIVE_APPDATA_SCOPE)))
             .build()
