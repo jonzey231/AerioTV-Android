@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.multiview
 
+import androidx.compose.foundation.layout.wrapContentHeight
 import kotlinx.coroutines.launch
 import com.aeriotv.android.ui.theme.decorTertiary
 import com.aeriotv.android.ui.scale.subtext
@@ -2019,7 +2020,13 @@ private fun Tile(
                         (tileFormatBadge != null || tilePipeline != null),
                     enter = androidx.compose.animation.fadeIn(),
                     exit = androidx.compose.animation.fadeOut(),
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                    // Above the picture's bottom inset (the lowest 22%):
+                    // tickers and lower thirds fill it; the pill sat on ESPN2's
+                    // ticker (tvOS review 2026-11-05, Apple parity).
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .fillMaxHeight(0.78f)
+                        .wrapContentHeight(Alignment.Bottom)
+                        .padding(6.dp),
                 ) {
                     val pillSize = if (LocalConfiguration.current.smallestScreenWidthDp >= 600) 12.sp else 10.sp
                     Row(
