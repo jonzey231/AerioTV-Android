@@ -202,20 +202,24 @@ fun ConfigureSourceScreen(
     }
     userQrPick?.let { (found, k) ->
         var userOnly by remember(found) { mutableStateOf(false) }
-        // Same layout as the scope step in Set up another device (SetUpTvScreen): full screen, 560 dp column.
+        // Headline, card, and buttons as in Set up another device (SetUpTvScreen, 12 dp spacing, 560 dp column), sized to content.
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { userQrPick = null },
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
         ) {
+            // Sized to its content: the card ends just below Cancel.
             Column(
-                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                Modifier.fillMaxWidth()
                     .then(Modifier.windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing))
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                    .padding(16.dp),
                 horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
             ) {
                 Column(
-                    Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+                    Modifier.widthIn(max = 560.dp).fillMaxWidth()
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+                        .background(MaterialTheme.colorScheme.background)
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 20.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
                 ) {
                     Text(
@@ -223,6 +227,11 @@ fun ConfigureSourceScreen(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        "Copy every playlist and profile from ${found.name}, or add just the user in this code.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Column(
                         Modifier.fillMaxWidth().clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
