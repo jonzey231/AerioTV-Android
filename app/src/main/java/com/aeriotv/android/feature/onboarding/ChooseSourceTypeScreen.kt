@@ -80,8 +80,12 @@ fun ChooseSourceTypeScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         if (!(isTv && onboarding)) {
-            TopAppBar(
-                title = {
+            // Phones and tablets: "Add Playlist" centered over the centered content, as on iPhone and iPad. TV unchanged.
+            val bar: @Composable (@Composable () -> Unit, @Composable () -> Unit, @Composable androidx.compose.foundation.layout.RowScope.() -> Unit, androidx.compose.material3.TopAppBarColors) -> Unit =
+                if (isTv) { t, n, a, c -> TopAppBar(title = t, navigationIcon = n, actions = a, colors = c) }
+                else { t, n, a, c -> androidx.compose.material3.CenterAlignedTopAppBar(title = t, navigationIcon = n, actions = a, colors = c) }
+            bar(
+                {
                     Text(
                         if (onboarding) "" else "Add Playlist",
                         style = MaterialTheme.typography.titleLarge,
@@ -89,7 +93,7 @@ fun ChooseSourceTypeScreen(
                         modifier = if (isTv) Modifier.padding(start = TvSettingsMetrics.topAppBarTitleOverscanPadding) else Modifier,
                     )
                 },
-                navigationIcon = {
+                {
                     // No back arrow on Android TV: the remote BACK steps back.
                     if (!isTv) {
                         IconButton(onClick = onBack) {
@@ -97,8 +101,8 @@ fun ChooseSourceTypeScreen(
                         }
                     }
                 },
-                actions = { if (onboarding) StepDots(current = 1, total = 3, modifier = Modifier.padding(end = 16.dp)) },
-                colors = TopAppBarDefaults.topAppBarColors(
+                { if (onboarding) StepDots(current = 1, total = 3, modifier = Modifier.padding(end = 16.dp)) },
+                TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
