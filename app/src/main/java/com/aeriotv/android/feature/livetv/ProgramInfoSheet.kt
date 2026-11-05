@@ -129,6 +129,7 @@ fun ProgramInfoSheet(
     }
     val feedIcon = target.iconUrl?.takeIf { it.isNotBlank() }
     val posterUrl = detailPoster ?: bannerPoster ?: feedIcon ?: tmdbPoster
+    LaunchedEffect(posterUrl) { posterUrl?.let { ProgramArtResolver.remember(target, it) } }
 
     // Keyed on the playlist too: this sheet's PlaylistViewModel can still be
     // loading when it opens, and running with no playlist skipped the detail
@@ -711,3 +712,72 @@ private fun formatDuration(millis: Long): String {
  * matches it (Appearance > Rounded corners on logos and artwork).
  */
 private val INFO_CARD_CORNER = 14.dp
+
+
+/**
+ * Program art on the Live TV search Programs cards (Logan 2026-11-05): the
+ * SAME calls and order Program Info uses, so a card shows the picture the
+ * sheet shows. Server program detail poster (Dispatcharr only, through
+ * [fetchProgramDetailResolving]), then art the guide preview already
+ * resolved, then the program's feed icon, then TMDB by title (opt-in, the
+ * user's own key, only when the detail lookup did not fail). Memoized per
+ * airing; null means no program art (the card falls back to the channel logo).
+ */
+object ProgramArtResolver {
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val misses = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    private fun key(t: ProgramInfoTarget) = t.dispatcharrProgramId?.let { "pid:$it" } ?: "t:${t.epgChannelKey}|${t.startMillis}|${t.title}"
+
+    fun cached(t: ProgramInfoTarget): String? = cache[key(t)]
+
+    fun remember(t: ProgramInfoTarget, url: String) { cache[key(t)] = url }
+
+    suspend fun resolve(
+        context: android.content.Context,
+        playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity?,
+        t: ProgramInfoTarget,
+    ): String? {
+        val k = key(t)
+        cache[k]?.let { return it }
+        if (k in misses) return null
+        val entry = EntryPointAccessors.fromApplication(context.applicationContext, ProgramInfoEntryPoint::class.java)
+        var detailFailed = false
+        var source = "none"
+        var url: String? = null
+        val programId = t.dispatcharrProgramId
+        val isDispatcharr = playlist != null && (
+            playlist.sourceType == SourceType.DispatcharrApiKey.name ||
+                playlist.sourceType == SourceType.DispatcharrUserPass.name
+            )
+        if (programId != null && playlist != null && isDispatcharr) {
+            val detail = runCatching {
+                fetchProgramDetailResolving(
+                    entry, playlist.urlString, playlist.id, programId,
+                    listOfNotNull(t.epgChannelKey), t.startMillis, t.title,
+                )
+            }.getOrNull()?.detail
+            if (detail == null) detailFailed = true
+            else detail.bestPosterString?.let { raw ->
+                url = if (raw.startsWith("/")) playlist.urlString.trimEnd('/') + raw else raw
+                source = "detail"
+            }
+        }
+        if (url == null) com.aeriotv.android.feature.livetv.grid.cachedPreviewArt(programId, t.title)?.let { url = it; source = "banner" }
+        if (url == null) t.iconUrl?.takeIf { it.isNotBlank() }?.let { url = it; source = "feed" }
+        if (url == null && !detailFailed && t.title.isNotBlank()) {
+            val prefs = entry.appPreferences()
+            if (prefs.programPostersTmdbEnabled.first()) {
+                val apiKey = prefs.tmdbApiKey.first()
+                if (apiKey.isNotBlank()) {
+                    url = runCatching { entry.tmdbService().posterUrlForTitle(t.title, apiKey) }.getOrNull()
+                    if (url != null) source = "tmdb"
+                }
+            }
+        }
+        android.util.Log.i("AerioGuide", "[PREVIEW-ART] search card art source=$source pid=$programId (${t.title})")
+        val out = url
+        if (out != null) cache[k] = out else if (!detailFailed) misses += k
+        return out
+    }
+}

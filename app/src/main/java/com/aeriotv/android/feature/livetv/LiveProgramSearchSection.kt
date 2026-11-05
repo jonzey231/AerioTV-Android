@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.aeriotv.android.core.data.toInfoTarget
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.core.data.M3UChannel
 
@@ -114,11 +116,18 @@ internal fun LiveSearchSectionHeader(title: String) {
 private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val now = System.currentTimeMillis()
     val p = hit.programme
-    val art = remember(hit.key) {
-        p.iconUrl?.takeIf { it.isNotBlank() }
-            ?: com.aeriotv.android.feature.livetv.grid.cachedPreviewArt(p.dispatcharrProgramId, p.title)
-            ?: hit.channel.tvgLogo.takeIf { it.isNotBlank() }
+    // Program Info's art path (ProgramArtResolver), lazy per visible card;
+    // the channel logo only when it finds no program art.
+    val target = remember(hit.key) {
+        p.let { it.toInfoTarget(hit.channel.name, hit.channel.dispatcharrChannelId) }
     }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val playlistVm: com.aeriotv.android.feature.playlist.PlaylistViewModel = androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel()
+    val playlist = playlistVm.state.collectAsState().value.playlist
+    val programArt by androidx.compose.runtime.produceState(ProgramArtResolver.cached(target), hit.key, playlist?.id) {
+        if (value == null && playlist != null) value = ProgramArtResolver.resolve(context, playlist, target)
+    }
+    val art = programArt ?: hit.channel.tvgLogo.takeIf { it.isNotBlank() }
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val corner = com.aeriotv.android.feature.channels.CHANNEL_ROW_CORNER
