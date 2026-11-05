@@ -47,11 +47,17 @@ object SearchDismissSignal {
  * handled here, so the keyboard cannot be re-summoned by the minimize or PiP
  * transition that follows.
  *
+ * [keepOnPlayer] (Live TV list and guide, Logan 2026-11-05): entering the
+ * player only hides the keyboard and clears focus, so leaving a channel opened
+ * from a search result returns to the same field, query, and results. Its
+ * field has no auto-focus effect, so the keyboard does not come back.
+ *
  * Safe to host unconditionally: it does nothing while [searchActive] is false.
  */
 @Composable
 fun CloseSearchOnLeave(
     searchActive: Boolean,
+    keepOnPlayer: Boolean = false,
     onClose: () -> Unit,
 ) {
     val tabActive = LocalTabIsActive.current
@@ -75,7 +81,14 @@ fun CloseSearchOnLeave(
     // behind: only a dismissal raised while this surface is composed counts.
     val baseSerial = androidx.compose.runtime.remember { SearchDismissSignal.serial }
     LaunchedEffect(SearchDismissSignal.serial) {
-        if (SearchDismissSignal.serial != baseSerial && active) dismiss()
+        if (SearchDismissSignal.serial != baseSerial && active) {
+            if (keepOnPlayer) {
+                keyboard?.hide()
+                focusManager.clearFocus(force = true)
+            } else {
+                dismiss()
+            }
+        }
     }
 
     // The surface itself is going away (tab disposed, route popped): make sure
@@ -84,7 +97,10 @@ fun CloseSearchOnLeave(
         onDispose {
             if (active) {
                 keyboard?.hide()
-                close()
+                // keepOnPlayer: a player route covering this surface keeps
+                // the search (the caller restores it with rememberSaveable).
+                val coveredByPlayer = keepOnPlayer && SearchDismissSignal.serial != baseSerial
+                if (!coveredByPlayer) close()
             }
         }
     }

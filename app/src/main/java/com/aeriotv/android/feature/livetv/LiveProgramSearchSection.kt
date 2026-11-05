@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.core.data.M3UChannel
 
 /**
@@ -100,20 +103,139 @@ internal fun LiveSearchSectionHeader(title: String) {
     )
 }
 
-/** Program row: title, channel logo and name, day and start time, live badge. */
+/**
+ * Program result card (Logan 2026-11-05, Apple parity): the List view
+ * channel card's height, corner, and padding. Program art on the left (the
+ * feed icon, then art the guide preview already resolved, then the channel
+ * logo), then the title, the day and start time, and the channel logo, name,
+ * and number with a LIVE badge while it airs.
+ */
 @Composable
 private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val now = System.currentTimeMillis()
-    LiveSearchCard(
-        logo = hit.channel.tvgLogo,
-        title = hit.programme.title,
-        subtitle = listOf(hit.channel.name.takeIf { it.isNotBlank() }, programHitWhen(hit.programme, now))
-            .filterNotNull().joinToString(" · "),
-        live = hit.isAiring(now),
-        isTv = isTv,
-        modifier = modifier,
-        onClick = onClick,
-    )
+    val p = hit.programme
+    val art = remember(hit.key) {
+        p.iconUrl?.takeIf { it.isNotBlank() }
+            ?: com.aeriotv.android.feature.livetv.grid.cachedPreviewArt(p.dispatcharrProgramId, p.title)
+            ?: hit.channel.tvgLogo.takeIf { it.isNotBlank() }
+    }
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val corner = com.aeriotv.android.feature.channels.CHANNEL_ROW_CORNER
+    val shape = RoundedCornerShape(corner)
+    val height = rememberChannelCardHeight(isTv)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.45f))
+            .then(
+                if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shape)
+                else Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), shape),
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .height(height)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(PROGRAM_CARD_ART_WIDTH)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(corner))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (art != null) {
+                AsyncImage(
+                    model = art,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.Tv,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                text = p.title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = programHitWhen(p, now),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 28.dp, height = 18.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (hit.channel.tvgLogo.isNotBlank()) AsyncImage(
+                        model = hit.channel.tvgLogo,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize().padding(2.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = listOf(hit.channel.name.takeIf { it.isNotBlank() }, hit.channel.channelNumber?.takeIf { it.isNotBlank() })
+                        .filterNotNull().joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (hit.isAiring(now)) {
+                    Spacer(Modifier.width(8.dp))
+                    LiveNowBadge()
+                }
+            }
+        }
+    }
+}
+
+/** Program art slot width: the List view channel card's leading column. */
+private val PROGRAM_CARD_ART_WIDTH = 86.dp
+
+/**
+ * The List view channel card's height (ChannelRow): 10 dp padding top and
+ * bottom around the name line, the program title line, an optional subtitle
+ * line (phones and tablets with subtitles on), two description lines, and the
+ * 4 dp gap plus 2 dp progress bar. Measured from the same text styles at the
+ * current Text Size, like the row itself.
+ */
+@Composable
+private fun rememberChannelCardHeight(isTv: Boolean): androidx.compose.ui.unit.Dp {
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val name = MaterialTheme.typography.bodyLarge
+    val title = MaterialTheme.typography.bodyMedium
+    val body = MaterialTheme.typography.bodySmall.subtext()
+    val subtitles = !isTv && com.aeriotv.android.core.ui.LocalShowProgramSubtitles.current
+    return remember(name, title, body, density, subtitles) {
+        fun lines(style: androidx.compose.ui.text.TextStyle, count: Int): Int =
+            measurer.measure(List(count) { " " }.joinToString("\n"), style = style, maxLines = count).size.height
+        val px = lines(name, 1) + lines(title, 1) + (if (subtitles) lines(body, 1) else 0) + lines(body, 2)
+        with(density) { px.toDp() + 6.dp + 20.dp }
+    }
 }
 
 /** Channels row of the TV Search screen: logo, name, number, and the

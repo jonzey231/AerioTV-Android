@@ -579,9 +579,8 @@ private class LiveSections(
     val hits: com.aeriotv.android.feature.livetv.LiveProgramHits,
 )
 
-/** Same rules as the phone Live TV search: name or number, then a program
- *  title on that channel now or later (start order), then the whole-guide
- *  Programs scan. */
+/** Same rules as the phone Live TV search: channels by name or number,
+ *  then the whole-guide Programs scan. */
 private fun liveSections(
     q: String,
     channels: List<com.aeriotv.android.core.data.M3UChannel>,
@@ -589,20 +588,12 @@ private fun liveSections(
 ): LiveSections {
     val now = System.currentTimeMillis()
     val index = com.aeriotv.android.feature.livetv.LiveProgramIndex.of(epg)
-    val byName = ArrayList<com.aeriotv.android.core.data.M3UChannel>()
-    val byProgram = ArrayList<Pair<com.aeriotv.android.core.data.M3UChannel, com.aeriotv.android.core.data.EPGProgramme>>()
-    for (ch in channels) {
-        if (com.aeriotv.android.feature.livetv.LiveSearchMatcher.channelMatches(ch, q)) {
-            byName += ch
-        } else {
-            index.firstMatch(ch.guideMatchKey, q, now)?.let { byProgram += ch to it }
-        }
-    }
-    byProgram.sortBy { it.second.startMillis }
-    val lines = byProgram.associate { (ch, p) -> ch.url to com.aeriotv.android.feature.livetv.searchMatchLine(p, now) }
+    // Channels match on name or number only (Logan 2026-11-05); program
+    // titles show under Programs.
+    val byName = channels.filter { com.aeriotv.android.feature.livetv.LiveSearchMatcher.channelMatches(it, q) }
     return LiveSections(
-        channels = byName + byProgram.map { it.first },
-        matchLines = lines,
+        channels = byName,
+        matchLines = emptyMap(),
         hits = index.programHits(q, now, channels),
     )
 }

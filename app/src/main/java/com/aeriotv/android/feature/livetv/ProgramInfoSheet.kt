@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.livetv
 
+import androidx.compose.material.icons.filled.FiberManualRecord
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.core.ui.subtitleIsRedundant
 import com.aeriotv.android.core.ui.rememberClockMode
@@ -197,6 +198,16 @@ fun ProgramInfoSheet(
         LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK
         ) == Configuration.UI_MODE_TYPE_TELEVISION
 
+    // Record (Logan 2026-11-05, Apple parity): a visible button that hands
+    // over to the standard record sheet, the same one the long-press Record
+    // action opens. Hidden once the program has ended.
+    var recordOpen by remember(target) { mutableStateOf(false) }
+    if (recordOpen) {
+        RecordProgramSheet(target = target, onDismiss = onDismiss)
+        return
+    }
+    val canRecord = target.endMillis > System.currentTimeMillis()
+
     if (isTv) {
         // TV: a centered modal card, not a bottom-edge sheet. tvOS shows
         // program detail as a focused panel in the middle of the screen;
@@ -232,6 +243,7 @@ fun ProgramInfoSheet(
                         posterUrl = posterUrl,
                         enrichedRepeat = enrichedRepeat,
                     )
+                    if (canRecord) ProgramInfoRecordButton { recordOpen = true }
                 }
             }
         }
@@ -254,9 +266,29 @@ fun ProgramInfoSheet(
                     posterWidth = 100.dp,
                     enrichedRepeat = enrichedRepeat,
                 )
+                if (canRecord) {
+                    Spacer(Modifier.height(16.dp))
+                    ProgramInfoRecordButton { recordOpen = true }
+                }
                 Spacer(Modifier.height(24.dp))
             }
         }
+    }
+}
+
+/** The Program Info "Record" button: D-pad focusable on TV, a tap target
+ *  on phones and tablets. */
+@Composable
+private fun ProgramInfoRecordButton(onClick: () -> Unit) {
+    androidx.compose.material3.Button(onClick = onClick) {
+        androidx.compose.material3.Icon(
+            imageVector = androidx.compose.material.icons.Icons.Filled.FiberManualRecord,
+            contentDescription = null,
+            tint = EpgLiveRed,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Record")
     }
 }
 

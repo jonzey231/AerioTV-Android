@@ -119,14 +119,14 @@ internal object LiveSearchCopy {
     const val CAP_FOOTER = "Showing the first 200 matches"
 }
 
-/** "8:20 PM" today (or already airing), "Sat 9:00 PM" on any later day. */
+/** "Today 8:20 PM" today (or already airing), "Sat 9:00 PM" on any later day. */
 internal fun programHitWhen(p: EPGProgramme, nowMillis: Long = System.currentTimeMillis()): String {
     val zone = java.time.ZoneId.systemDefault()
     val nowDay = java.time.Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
     val atDay = java.time.Instant.ofEpochMilli(p.startMillis).atZone(zone).toLocalDate()
     val at = java.util.Date(p.startMillis)
     val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(at)
-    if (p.startMillis <= nowMillis || atDay == nowDay) return time
+    if (p.startMillis <= nowMillis || atDay == nowDay) return "Today $time"
     return java.text.SimpleDateFormat("EEE", java.util.Locale.getDefault()).format(at) + " " + time
 }
 

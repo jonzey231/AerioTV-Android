@@ -243,8 +243,11 @@ fun GuideScreen(
     val remoteMap by settingsVm.remoteControlMap.collectAsStateWithLifecycle()
     val tabActive = com.aeriotv.android.feature.main.LocalTabIsActive.current
     var groupSidebarOpen by remember { mutableStateOf(false) }
-    var searchActive by remember { mutableStateOf(false) }
-    com.aeriotv.android.ui.search.CloseSearchOnLeave(searchActive) {
+    // Saveable so the search survives the player route covering the tab
+    // (Logan 2026-11-05): back from a channel opened from a result lands on
+    // the same query and results.
+    var searchActive by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    com.aeriotv.android.ui.search.CloseSearchOnLeave(searchActive, keepOnPlayer = true) {
         searchActive = false
         viewModel.onSearchQueryChange("")
     }
@@ -355,7 +358,6 @@ fun GuideScreen(
     }
     // Program search (Logan 2026-11-01): phones and tablets also match
     // program titles from the loaded guide map; TV keeps its Search tab.
-    val searchEpg = if (isTv) null else state.epgByChannel
     val guideSearch by produceState(
         initialValue = com.aeriotv.android.feature.livetv.computeLiveSearch(
             state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
@@ -363,14 +365,12 @@ fun GuideScreen(
         ),
         state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
         allGroupNames, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
-        searchEpg,
     ) {
         if (state.searchQuery.isNotBlank()) kotlinx.coroutines.delay(com.aeriotv.android.feature.livetv.LIVE_SEARCH_DEBOUNCE_MS)
         value = withContext(Dispatchers.Default) {
             com.aeriotv.android.feature.livetv.computeLiveSearch(
                 state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
                 allGroupNames, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
-                searchEpg,
             )
         }
     }

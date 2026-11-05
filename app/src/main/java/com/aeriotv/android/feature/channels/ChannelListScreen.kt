@@ -238,8 +238,11 @@ fun ChannelListScreen(
     // Search is a reveal-on-tap button (parity with Guide view), not an
     // always-on field, so the channel list gets full height until the user
     // opts into searching. Closing it clears the query.
-    var searchActive by remember { mutableStateOf(false) }
-    com.aeriotv.android.ui.search.CloseSearchOnLeave(searchActive) {
+    // Saveable so the search survives the player route covering the tab
+    // (Logan 2026-11-05): back from a channel opened from a result lands on
+    // the same query and results.
+    var searchActive by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    com.aeriotv.android.ui.search.CloseSearchOnLeave(searchActive, keepOnPlayer = true) {
         searchActive = false
         viewModel.onSearchQueryChange("")
     }
@@ -345,7 +348,6 @@ fun ChannelListScreen(
         ),
         state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
         allGroupsRaw, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
-        searchEpg,
     ) {
         // Per-keystroke search with a short debounce: a newer keystroke
         // restarts this producer and cancels the pending pass.
@@ -354,7 +356,6 @@ fun ChannelListScreen(
             com.aeriotv.android.feature.livetv.computeLiveSearch(
                 state.channels, state.selectedGroup, state.searchQuery, state.sortMode,
                 allGroupsRaw, groupSortMode, effectiveHidden, favoriteIds, collections, recentChannelIds,
-                searchEpg,
             )
         }
     }
