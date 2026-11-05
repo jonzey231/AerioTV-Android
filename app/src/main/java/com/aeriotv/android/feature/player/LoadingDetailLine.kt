@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
@@ -282,6 +283,36 @@ fun LiveFailoverStatusOverlay(
     ) {
         LoadingSpinner(isTv = isTv)
         LoadingStatusText(status = statusText ?: "Buffering...")
+        DetailLineText(detail = detail, isTv = isTv)
+    }
+}
+
+/**
+ * Multiview tile live status (Apple TSHLSRemuxer tile overlay: spinner, the
+ * status line, then the same loading detail line as the player). The status
+ * wraps to three lines because a tile is narrow and a quoted server reason
+ * ("Server: <reason>. Trying another stream...") must stay readable.
+ */
+@Composable
+fun TileLiveStatus(
+    statusText: String,
+    isTv: Boolean,
+    sample: () -> PlaybackTracer.LoadingSnapshot,
+) {
+    val detail = loadingDetail(active = true, restartKey = statusText, sample = sample)
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        LoadingSpinner(isTv = isTv)
+        Text(
+            text = statusText,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.8f),
+            maxLines = 3,
+            textAlign = TextAlign.Center,
+        )
         DetailLineText(detail = detail, isTv = isTv)
     }
 }

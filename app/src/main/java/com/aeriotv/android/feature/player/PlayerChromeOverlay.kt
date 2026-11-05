@@ -2314,6 +2314,8 @@ fun SwitchStreamSheet(
     /** Replaces the footer's first sentence (Radio Mode: "Audio keeps
      *  playing while the stream switches."). */
     footerText: String? = null,
+    /** Empty-list line; a Multiview tile passes Apple's tile wording. */
+    emptyText: String = "No alternate streams available for this channel.",
 ) {
     // Reorder mode: the sheet never drags or swipes away. A handle drag owns
     // the finger, and a quick drag on a row body (Onn 2026-10-04 23:20:45,
@@ -2405,7 +2407,7 @@ fun SwitchStreamSheet(
             Spacer(Modifier.height(12.dp))
             if (streams.isEmpty()) {
                 Text(
-                    text = "No alternate streams available for this channel.",
+                    text = emptyText,
                     style = MaterialTheme.typography.bodySmall.subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),

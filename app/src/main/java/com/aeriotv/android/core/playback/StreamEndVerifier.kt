@@ -82,4 +82,13 @@ object StreamEndVerifier {
     /** A session below this many bytes counts as empty: time alone is not
      *  healthy playback, so an empty session never resets the streak. */
     const val EMPTY_SESSION_BYTES = 256L * 1024L
+
+    /** The empty-session streak after a clean end whose session delivered
+     *  [sessionBytes]: one more when it was empty, back to 0 when it was not. */
+    fun emptyRunAfter(previous: Int, sessionBytes: Long): Int =
+        if (sessionBytes >= EMPTY_SESSION_BYTES) 0 else previous + 1
+
+    /** True once [emptyRun] empty sessions in a row stop the reconnects with
+     *  the Stream ended notice and its Retry. */
+    fun stopsReconnects(emptyRun: Int): Boolean = emptyRun >= EMPTY_ENDS_LIMIT
 }

@@ -48,7 +48,31 @@ import kotlinx.coroutines.withTimeoutOrNull
 class LiveStreamFailover(
     private val scope: CoroutineScope =
         CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()),
+    /** Names the surface in the [STATUS] log line: "player" for the live
+     *  holder, "tile" for a Multiview tile (Apple TSHLSRemuxer wording). */
+    private val surface: String = "player",
 ) {
+
+    /** How a walk step ended, for an owner that must act on it (a Multiview
+     *  tile restarts its pipeline after a 503 step, Apple stepFailover
+     *  restartPipeline). The live holder leaves [onWalkOutcome] unset. */
+    enum class WalkOutcome {
+        /** change_stream to the next member stream succeeded. */
+        SWITCHED,
+
+        /** No step was possible (no hooks, stream list unavailable, single
+         *  stream, change_stream refused, channel session gone). */
+        NO_SWITCH,
+
+        /** Every member stream has been tried. */
+        EXHAUSTED,
+    }
+
+    /** Terminal outcome of a walk step. [from503] is true for the 503 entry
+     *  point, where the ingest is already gone; false for the silent-start
+     *  deadline, where it stays open. Not called when the walk ended because
+     *  the tune went away or bytes arrived. Main thread. */
+    @Volatile var onWalkOutcome: ((from503: Boolean, outcome: WalkOutcome) -> Unit)? = null
 
     /**
      * Server access, wired by PlayerScreen (the same shape as the holder's
@@ -227,11 +251,13 @@ class LiveStreamFailover(
             if (h == null || !h.canSwitch(id)) {
                 Log.i(TAG, "[FAILOVER] 503 reason=\"$reason\" -> standing retry")
                 _statusText.value = "Channel unavailable. Retrying..."
+                onWalkOutcome?.invoke(true, WalkOutcome.NO_SWITCH)
                 return@launch
             }
             if (goneChannelId == id) {
                 Log.i(TAG, "[FAILOVER] walker cancelled: channel session gone")
                 _statusText.value = "Channel unavailable. Retrying..."
+                onWalkOutcome?.invoke(true, WalkOutcome.NO_SWITCH)
                 return@launch
             }
             Log.i(TAG, "[FAILOVER] 503 reason=\"$reason\" -> next stream")
@@ -249,6 +275,13 @@ class LiveStreamFailover(
      *  shown while a "Channel is stopping" 503 is waited out). */
     fun publishServerStatus(text: String?) {
         scope.launch { _statusText.value = text }
+    }
+
+    /** Publish "Server: <reason>. <tail>" when the server explained itself,
+     *  else [tail] alone (Apple showStatus(serverReason:tail:)); a line that
+     *  quotes the server is logged as [STATUS]. Main thread. */
+    fun showServerStatus(serverReason: String?, tail: String) {
+        showStatus(serverStatusText(serverReason, tail))
     }
 
     /** True when a tune of [channelId] can walk member streams (Dispatcharr
@@ -390,12 +423,14 @@ class LiveStreamFailover(
         if (ids.isNullOrEmpty()) {
             _statusText.value = "Reconnecting..."
             Log.i(TAG, "[FAILOVER] channel=$channelName stream list unavailable; staying on $retryPath")
+            if (from503) onWalkOutcome?.invoke(true, WalkOutcome.NO_SWITCH)
             return
         }
         if (!walkStillWanted(id, from503, "stream list")) return
         if (ids.size < 2) {
             _statusText.value = "Reconnecting..."
             Log.i(TAG, "[FAILOVER] channel=$channelName single stream; staying on $retryPath")
+            if (from503) onWalkOutcome?.invoke(true, WalkOutcome.NO_SWITCH)
             return
         }
         // Seed "where are we" once. /status is only trustworthy before any
@@ -416,6 +451,7 @@ class LiveStreamFailover(
             Log.w(TAG, "[FAILOVER] channel=$channelName exhausted ${ids.size} streams")
             _statusText.value = "Channel unavailable. Retrying..."
             onExhausted?.invoke()
+            onWalkOutcome?.invoke(from503, WalkOutcome.EXHAUSTED)
             return
         }
         // The status read can take seconds: re-check before the POST.
@@ -435,10 +471,12 @@ class LiveStreamFailover(
                 deadlineJob = null
                 Log.w(TAG, "[FAILOVER] channel session gone (404); walker stopped")
                 _statusText.value = "Channel unavailable. Retrying..."
+                if (from503) onWalkOutcome?.invoke(true, WalkOutcome.NO_SWITCH)
                 return
             }
             Log.i(TAG, "[FAILOVER] channel=$channelName change_stream refused; staying on $retryPath")
             _statusText.value = "Reconnecting..."
+            if (from503) onWalkOutcome?.invoke(true, WalkOutcome.NO_SWITCH)
             return
         }
         if (!walkStillWanted(id, from503, "change_stream")) return
@@ -456,13 +494,14 @@ class LiveStreamFailover(
                 "reason=${serverReason ?: "no bytes within the ${budgetMs}ms silent-start budget"}",
         )
         armDeadline(firstAttempt = false)
+        if (from503) onWalkOutcome?.invoke(true, WalkOutcome.SWITCHED)
     }
 
     /** Sets the status line. A line that quotes the server is logged verbatim
      *  as [STATUS], so a report of on-screen text can be matched to the log. */
     private fun showStatus(text: String) {
         if (text.startsWith("Server: ") && _statusText.value != text) {
-            Log.i(TAG, "[STATUS] player shows \"$text\" channel=$channelName")
+            Log.i(TAG, "[STATUS] $surface shows \"$text\" channel=$channelName")
         }
         _statusText.value = text
     }
@@ -487,6 +526,13 @@ class LiveStreamFailover(
 
     companion object {
         private const val TAG = "AerioTrace"
+
+        /** Apple serverStatus(_:_:): the server's sentence verbatim apart
+         *  from its first letter and trailing periods, then [tail]. */
+        fun serverStatusText(serverReason: String?, tail: String): String {
+            val text = serverReason?.trim()?.trimEnd('.')?.takeIf { it.isNotEmpty() } ?: return tail
+            return "Server: ${text[0].uppercaseChar()}${text.substring(1)}. $tail"
+        }
 
         /** Pure stop conditions for a walk step; null = the step may proceed. */
         internal fun walkBlockReason(

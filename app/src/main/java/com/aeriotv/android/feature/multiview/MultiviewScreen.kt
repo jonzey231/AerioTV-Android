@@ -790,6 +790,29 @@ fun MultiviewScreen(
     val mvLivePlaylist by playlistVm.activePlaylistLive.collectAsState(initial = null)
     val mvCanSwitchStream = (mvLivePlaylist ?: mvPlaylistState.playlist)
         ?.let { with(it) { canSwitchStream() } } ?: false
+    // Live tiles' stream walk (Apple tile stepFailover parity): the same
+    // Dispatcharr calls and gate as the player's LiveFailoverStatusOverlay,
+    // read by each tile at walk time. Channel ids arrive as parameters.
+    val mvChannelsNow = androidx.compose.runtime.rememberUpdatedState(mvPlaylistState.channels)
+    val mvCanSwitchNow = androidx.compose.runtime.rememberUpdatedState(mvCanSwitchStream)
+    // Installed during composition, not in an effect: the tiles' AndroidView
+    // factories run before effects, and the first prime's ingest timeout
+    // (134 s when the tune can walk) is decided there.
+    MultiviewTileFailover.hooks = remember(playlistVm) {
+        com.aeriotv.android.core.playback.LiveStreamFailover.Hooks(
+            canSwitch = { id ->
+                mvCanSwitchNow.value && id.startsWith("disp:") &&
+                    mvChannelsNow.value.firstOrNull { it.id == id }?.dispatcharrChannelId != null
+            },
+            listStreamIds = { id ->
+                val pk = mvChannelsNow.value.firstOrNull { it.id == id }?.dispatcharrChannelId
+                if (pk == null) emptyList() else playlistVm.loadChannelStreams(pk).map { it.id }
+            },
+            currentStreamId = { uuid -> playlistVm.loadCurrentStreamId(uuid) },
+            changeStream = { uuid, streamId -> playlistVm.switchChannelStream(uuid, streamId).getOrThrow() },
+        )
+    }
+    DisposableEffect(playlistVm) { onDispose { MultiviewTileFailover.hooks = null } }
     fun tileSwitchChannel(tile: MultiviewTile): com.aeriotv.android.core.data.M3UChannel? =
         if (tile.kind != TileKind.Live) null
         else mvPlaylistState.channels.firstOrNull { it.id == tile.id }
@@ -1005,6 +1028,8 @@ fun MultiviewScreen(
                 }
             },
             onDismiss = { tileSwitchStreams = null },
+            // Apple MultiviewContainerView tile Switch Stream wording.
+            emptyText = "No alternate streams are available for this channel.",
         )
     }
 
@@ -1170,8 +1195,18 @@ fun MultiviewScreen(
     // Auto-hide stands down while a tile is being moved so the instruction
     // label cannot fade mid-move; the key restarts the timer when the move
     // finishes.
-    LaunchedEffect(chromeVisible, lastInteractionAt, relocatingIndex) {
-        if (chromeVisible && relocatingIndex == null) {
+    // Connection issue on the sole tile (Apple MultiviewContainerView
+    // connectionIssueChanged): summon and pin the chrome for the whole
+    // outage; the normal fade takes over again on recovery.
+    val soleTileIssue = selected.size == 1 && MultiviewTileFailover.issueTiles.value.isNotEmpty()
+    LaunchedEffect(soleTileIssue) {
+        if (soleTileIssue) {
+            Log.i(TAG, "[MV] connection issue on the sole tile; chrome pinned")
+            chromeVisible = true
+        }
+    }
+    LaunchedEffect(chromeVisible, lastInteractionAt, relocatingIndex, soleTileIssue) {
+        if (chromeVisible && relocatingIndex == null && !soleTileIssue) {
             kotlinx.coroutines.delay(
                 com.aeriotv.android.feature.player.PLAYER_CHROME_HIDE_MS,
             )
@@ -2284,6 +2319,32 @@ private fun ExoTile(
     // [3] = clean ends in a row whose session delivered under 256 KB.
     val tileCleanEnd = remember { longArrayOf(0L, 0L, 0L, 0L) }
     val tileRetrySerial = remember { mutableIntStateOf(0) }
+    // Live tile stream walk and 503 handling (Apple TSHLSRemuxer tile
+    // parity): the player's LiveStreamFailover, one per tile, walking on the
+    // tile's own connection through the screen's hooks.
+    val failoverScope = remember {
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate + kotlinx.coroutines.SupervisorJob())
+    }
+    val failover = remember {
+        com.aeriotv.android.core.playback.LiveStreamFailover(failoverScope, surface = "tile")
+            .also { it.hooks = MultiviewTileFailover.tileHooks }
+    }
+    val failoverStatus by failover.statusText.collectAsState()
+    // [0] "Channel is stopping" same-url retries, [1] ms waited on them,
+    // [2] when this tile last released its own connection (elapsed ms),
+    // [3] standing retries, [4] tune serial (a pending timer from an older
+    // tune is dropped), [5] 1 while the current prime has had no byte.
+    // Reset by a channel change; [0], [1] and [3] also by steady playback.
+    val tile503 = remember { longArrayOf(0L, 0L, 0L, 0L, 0L, 0L) }
+    val tileServerReason = remember { mutableStateOf<String?>(null) }
+    val liveTileIdRef = remember { mutableStateOf(if (tile.kind == TileKind.Live) tile.id else null) }
+    DisposableEffect(Unit) {
+        onDispose {
+            failover.onWalkOutcome = null
+            failover.resetWalk()
+            failoverScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
     // Always-on playback tracer (tag AerioTrace), one per tile. The "press"
     // is the tune that opened this tile, so press->firstFrame measures a
     // multiview tile start the same way the live holder measures a zap.
@@ -2381,7 +2442,20 @@ private fun ExoTile(
                 vodDataSourceFactory
                     ?: tracer.wrapDataSourceFactory(
                         com.aeriotv.android.core.playback.ServerHlsGuard.Factory(
-                            forceHlsTile.wrap(liveCalls.newFactory(headers, tileUserAgent, 30_000)),
+                            // A tune that can walk keeps its ingest open across the
+                            // whole walk (Apple 5267c55, 134 s); the silent-start
+                            // deadline owns the silence.
+                            forceHlsTile.wrap(
+                                liveCalls.newFactory(
+                                    headers,
+                                    tileUserAgent,
+                                    if (failover.canWalk(liveTileIdRef.value)) {
+                                        com.aeriotv.android.core.playback.LiveStreamFailover.WALK_INGEST_TIMEOUT_MS.toInt()
+                                    } else {
+                                        30_000
+                                    },
+                                ),
+                            ),
                         ),
                     )
             }
@@ -2480,6 +2554,134 @@ private fun ExoTile(
             MultiviewTilePlayers.register(player)
             com.aeriotv.android.core.playback.PlaybackActivityTracker.playerCreated()
 
+            // ---- Live tile stream walk and 503 handling (Apple tile parity) ----
+            // Bytes feed the silent-start deadline exactly as the live holder's
+            // tracer does (AerioExoPlayerHolder onFirstByte / onByteActivity).
+            tracer.onFirstByte = {
+                tile503[5] = 0L
+                failover.noteFirstByte()
+            }
+            tracer.onByteActivity = { failover.noteBytes() }
+            failover.isTuneActive = { id ->
+                liveTileIdRef.value == id && tileError.value == null && tileLimit.value == null &&
+                    playerRef.value?.let { it.playbackState != Player.STATE_IDLE } == true
+            }
+            // A 503 stops the tile on purpose before walking: that is not the
+            // tune going away (Apple 6c5b9c2).
+            failover.isTuneWanted = { id ->
+                liveTileIdRef.value == id && tileError.value == null && tileLimit.value == null &&
+                    playerRef.value != null
+            }
+            // Arm the walk for the prime that just started. An internal re-prime
+            // keeps the status line it was showing until the first byte.
+            fun armLiveTune(userInitiated: Boolean) {
+                val id = liveTileIdRef.value ?: return
+                tile503[5] = 1L
+                val keep = failover.statusText.value
+                failover.onLiveTune(id, channelNameNow.value, userInitiated)
+                if (!userInitiated && keep != null) failover.publishServerStatus(keep)
+            }
+            // The tile re-opened its own channel: a "Channel is stopping" now is
+            // this tile's previous session draining (Apple 65c0663).
+            fun noteLiveReprime(userInitiated: Boolean) {
+                if (liveTileIdRef.value == null) return
+                tile503[2] = android.os.SystemClock.elapsedRealtime()
+                armLiveTune(userInitiated)
+            }
+            // A delayed step of this tune; dropped when the tile is gone or
+            // the channel changed meanwhile.
+            fun scheduleLive(delayMs: Long, what: String, block: () -> Unit) {
+                val serial = tile503[4]
+                failoverScope.launch {
+                    kotlinx.coroutines.delay(delayMs)
+                    if (serial != tile503[4] || playerRef.value == null || currentUrlRef.value.isBlank()) {
+                        Log.i(TAG, "[RECOVER] tile ${channelNameNow.value} $what dropped (tile gone or channel changed)")
+                        return@launch
+                    }
+                    block()
+                }
+            }
+            fun reprimeLive(why: String) {
+                val p = playerRef.value ?: return
+                val u = currentUrlRef.value
+                if (u.isBlank()) return
+                liveCalls.setSource(p) { buildTileMediaSource(u, dataSourceFactory()) }
+                tracer.recover(why)
+                tracer.markTuneStart(channelNameNow.value, traceKind)
+                p.prepare()
+                p.playWhenReady = !paused
+                armLiveTune(userInitiated = false)
+            }
+            // Apple scheduleStandingRetry: 15 s, 30 s, then every 60 s, quoting
+            // the server when it said something.
+            fun standingRetry(reason: String) {
+                tile503[3] += 1
+                val n = tile503[3].toInt()
+                val delayMs = com.aeriotv.android.core.playback.TileLive503Policy.standingRetryDelayMs(n)
+                failover.disarm()
+                liveCalls.stop(player)
+                failover.showServerStatus(tileServerReason.value, "Reconnecting...")
+                Log.i(TAG, "[RECOVER] tile ${channelNameNow.value} standing retry #$n in ${delayMs}ms ($reason)")
+                scheduleLive(delayMs, "standing retry") { reprimeLive("tile standing retry #$n") }
+            }
+            failover.onWalkOutcome = { from503, outcome ->
+                when {
+                    // The 503 had no connection to keep: start a fresh pipeline
+                    // on the stream the server just switched to.
+                    from503 && outcome == com.aeriotv.android.core.playback.LiveStreamFailover.WalkOutcome.SWITCHED ->
+                        scheduleLive(com.aeriotv.android.core.playback.TileLive503Policy.POST_SWITCH_RESTART_MS, "post-switch start") {
+                            reprimeLive("tile 503 walk step")
+                        }
+                    from503 || outcome == com.aeriotv.android.core.playback.LiveStreamFailover.WalkOutcome.EXHAUSTED ->
+                        standingRetry("walk ${outcome.name.lowercase()}")
+                }
+            }
+            // An explained Dispatcharr 503, parsed exactly as the live holder
+            // parses it ([Dispatcharr503]); the tile's recovery is Apple's tile.
+            fun handleTile503(info: com.aeriotv.android.core.playback.Dispatcharr503.Info) {
+                if (liveTileIdRef.value == null) return
+                tileServerReason.value = info.reason
+                val now = android.os.SystemClock.elapsedRealtime()
+                when (
+                    val a = com.aeriotv.android.core.playback.TileLive503Policy.decide(
+                        info, tile503[0].toInt(), tile503[1], tile503[2], now,
+                    )
+                ) {
+                    is com.aeriotv.android.core.playback.TileLive503Policy.Action.SameUrlRetry -> {
+                        tile503[0] = a.attempt.toLong()
+                        tile503[1] = a.waitedMs
+                        Log.i(
+                            TAG,
+                            "[RECOVER] tile ${channelNameNow.value} 503 reason=\"${info.reason}\"; same-URL retry " +
+                                "${a.attempt} in ${a.delayMs}ms (server retryAfter=${info.retryAfterMs}ms, " +
+                                "waited ${a.waitedMs}ms of ${a.budgetMs}ms" +
+                                (if (a.drainingOwn) ", draining this tile's own previous session" else "") + ")",
+                        )
+                        failover.disarm()
+                        liveCalls.stop(player)
+                        failover.publishServerStatus("Reconnecting...")
+                        scheduleLive(a.delayMs, "channel-stopping retry") {
+                            reprimeLive("tile 503 stopping retry ${a.attempt}")
+                        }
+                    }
+                    com.aeriotv.android.core.playback.TileLive503Policy.Action.Walk -> {
+                        // No connection is open (the response WAS the failure);
+                        // the walk's outcome restarts the pipeline or falls to
+                        // the standing retry.
+                        liveCalls.stop(player)
+                        failover.onServer503(info.reason)
+                    }
+                    com.aeriotv.android.core.playback.TileLive503Policy.Action.StandingRetry -> {
+                        Log.i(
+                            TAG,
+                            "[FAILOVER] 503 reason=\"${info.reason}\" after this tile's own release; " +
+                                "no stream walk, standing retry channel=${channelNameNow.value}",
+                        )
+                        standingRetry("503 ${info.reason}")
+                    }
+                }
+            }
+
             // Bounded re-prepare on fatal error, copying the cooldown shape
             // of AerioExoPlayerHolder.forceReload (5s cooldown, 3 attempts,
             // counter reset on recovery). Without it a tile hitting an HTTP
@@ -2512,6 +2714,9 @@ private fun ExoTile(
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) {
                         consecutiveRetries = 0
+                        tile503[0] = 0L
+                        tile503[1] = 0L
+                        tile503[3] = 0L
                         // Task #150: a retry reached steady playback.
                         tileError.value = null
                         tileLimit.value = null
@@ -2538,8 +2743,8 @@ private fun ExoTile(
                         // each restarted the ladder every 2 minutes).
                         val sessionBytes = tracer.feedSinceTune().first
                         val delivered = sessionBytes >= verifier.EMPTY_SESSION_BYTES
-                        tileCleanEnd[3] = if (delivered) 0L else tileCleanEnd[3] + 1
-                        if (tileCleanEnd[3] >= verifier.EMPTY_ENDS_LIMIT) {
+                        tileCleanEnd[3] = verifier.emptyRunAfter(tileCleanEnd[3].toInt(), sessionBytes).toLong()
+                        if (verifier.stopsReconnects(tileCleanEnd[3].toInt())) {
                             Log.w(
                                 TAG,
                                 "[RECONNECT] tile $channelName upstream closed the live stream after $sessionBytes B; " +
@@ -2550,6 +2755,7 @@ private fun ExoTile(
                             tileCleanEnd[1] = 0L
                             tileCleanEnd[3] = 0L
                             tileError.value = null
+                            failover.halt("stream ended notice")
                             tileLimit.value =
                                 com.aeriotv.android.core.playback.DispatcharrConnectionLimit.STREAM_ENDED
                             liveCalls.stop(player)
@@ -2604,6 +2810,7 @@ private fun ExoTile(
                             tracer.markTuneStart(channelName, traceKind)
                             player.prepare()
                             player.playWhenReady = !paused
+                            noteLiveReprime(userInitiated = false)
                         }
                     }
                 }
@@ -2628,14 +2835,22 @@ private fun ExoTile(
                         tracer.markTuneStart(channelName, traceKind)
                         player.prepare()
                         player.playWhenReady = !paused
+                        noteLiveReprime(userInitiated = false)
                         return
                     }
                     if (!isVod && tile.kind != TileKind.Dvr) {
                         com.aeriotv.android.core.playback.DispatcharrConnectionLimit.parse(error)?.let { notice ->
                             Log.w(TAG, "[LIMIT] tile $channelName ${notice.kind} \"${notice.message}\"; waiting for Retry")
                             tileError.value = null
+                            failover.halt("connection limit notice")
                             tileLimit.value = notice
                             return
+                        }
+                        if (tile.kind == TileKind.Live) {
+                            com.aeriotv.android.core.playback.Dispatcharr503.parse(error)?.let { info ->
+                                handleTile503(info)
+                                return
+                            }
                         }
                     }
                     // Audio sink could not be created or written (the device's
@@ -2655,6 +2870,7 @@ private fun ExoTile(
                         tracer.markTuneStart(channelName, traceKind)
                         player.prepare()
                         player.playWhenReady = !paused
+                        noteLiveReprime(userInitiated = false)
                         return
                     }
                     // A format this device's decoders can NEVER play (wrong
@@ -2693,6 +2909,7 @@ private fun ExoTile(
                     tracer.recover("tile re-prepare attempt=$consecutiveRetries")
                     tracer.markTuneStart(channelName, traceKind)
                     player.prepare()
+                    noteLiveReprime(userInitiated = false)
                 }
             })
 
@@ -2713,6 +2930,11 @@ private fun ExoTile(
                     tracer.recover("tile error-overlay retry")
                     tracer.markTuneStart(channelName, traceKind)
                     p.prepare()
+                    tile503[0] = 0L
+                    tile503[1] = 0L
+                    tile503[3] = 0L
+                    tile503[4] += 1
+                    noteLiveReprime(userInitiated = false)
                 }
             }
 
@@ -2722,6 +2944,7 @@ private fun ExoTile(
                 tracer.markTuneStart(channelName, traceKind)
                 player.prepare()
                 currentUrlRef.value = url
+                armLiveTune(userInitiated = true)
             }
 
             // Inflated (not PlayerView(ctx)) because surface_type is a
@@ -2797,6 +3020,15 @@ private fun ExoTile(
                 tileCleanEnd[1] = 0L
                 tileCleanEnd[3] = 0L
                 tileTuneWall[0] = System.currentTimeMillis() / 1000.0
+                // A channel change starts a fresh walk and fresh 503 counters;
+                // any timer of the old channel is dropped by the serial.
+                tile503[0] = 0L
+                tile503[1] = 0L
+                tile503[2] = 0L
+                tile503[3] = 0L
+                tile503[4] += 1
+                tileServerReason.value = null
+                liveTileIdRef.value = if (tile.kind == TileKind.Live) tile.id else null
                 // setSource closes the old channel's live connection once the
                 // player has dropped it; the swap factory is built inside so
                 // the new source's tracker is never the one retired.
@@ -2818,7 +3050,11 @@ private fun ExoTile(
                                         liveCalls.newFactory(
                                             headers,
                                             "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})",
-                                            8_000,
+                                            if (failover.canWalk(liveTileIdRef.value)) {
+                                                com.aeriotv.android.core.playback.LiveStreamFailover.WALK_INGEST_TIMEOUT_MS.toInt()
+                                            } else {
+                                                8_000
+                                            },
                                         ),
                                     ),
                                 )
@@ -2830,6 +3066,13 @@ private fun ExoTile(
                 tracer.markTuneStart(channelName, traceKind)
                 player.prepare()
                 currentUrlRef.value = url
+                val liveId = liveTileIdRef.value
+                if (liveId != null) {
+                    tile503[5] = 1L
+                    failover.onLiveTune(liveId, channelName, userInitiated = true)
+                } else {
+                    failover.onLiveTune(null, null, userInitiated = false)
+                }
             }
             // Flip audio on focus change: volume only, no track change, so the
             // video never stalls on the switch. A tile that had to fall back to
@@ -2854,6 +3097,8 @@ private fun ExoTile(
         },
         onRelease = { _ ->
             Log.i(TAG, "Tile ExoPlayer releasing: $channelName")
+            failover.halt("tile released")
+            tile503[4] += 1
             forceHlsTile.end("tile released")
             statsStopRef.value?.set(true)
             onPlayer(null)
@@ -2897,9 +3142,13 @@ private fun ExoTile(
         while (true) {
             kotlinx.coroutines.delay(1_000L)
             tracer.tick(p)
+            // A walk-capable tile waiting for its first byte belongs to the
+            // silent-start deadline and the stream walk, not this watchdog: a
+            // re-prime there would drop the one connection the walk keeps open.
+            val walkOwnsSilence = tile503[5] == 1L && failover.canWalk(liveTileIdRef.value)
             if (traceKind == "live" && p.playWhenReady &&
                 p.playbackState == androidx.media3.common.Player.STATE_BUFFERING &&
-                tileError.value == null && tileLimit.value == null
+                tileError.value == null && tileLimit.value == null && !walkOwnsSilence
             ) {
                 // Only a SILENT loader re-primes: a tile refilling toward the
                 // 10 s resume gate can buffer for two bursts (~19 s) while
@@ -2932,6 +3181,26 @@ private fun ExoTile(
     // Task #150 (iOS parity): tile playback-error overlay. Real error text,
     // a Retry button, and an auto-reconnect loop on an escalating 5s->30s
     // delay. STATE_READY in the listener clears it.
+    // Live status line (Apple tile overlay): "Reconnecting...", "Server:
+    // <reason>. Trying another stream...", with the loading detail line
+    // ("Connecting to server", "Waiting for stream data"). A tile hidden
+    // behind a full-screen tile shows no Reconnecting / Retrying spinner.
+    val tileStatus = failoverStatus
+    if (tile.kind == TileKind.Live && tileStatus != null && tileError.value == null && tileLimit.value == null &&
+        !(paused && (tileStatus.startsWith("Reconnecting") || tileStatus.startsWith("Retrying")))
+    ) {
+        com.aeriotv.android.feature.player.TileLiveStatus(
+            statusText = tileStatus,
+            isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice(),
+            sample = { tracer.loadingSnapshot() },
+        )
+    }
+    // Connection issue for the screen's sole-tile chrome pin.
+    val issueKey = remember { Any() }
+    val hasIssue = tile.kind == TileKind.Live &&
+        (tileStatus != null || tileError.value != null || tileLimit.value != null)
+    LaunchedEffect(hasIssue) { MultiviewTileFailover.reportIssue(issueKey, hasIssue) }
+    DisposableEffect(issueKey) { onDispose { MultiviewTileFailover.reportIssue(issueKey, false) } }
     tileLimit.value?.let { notice ->
         com.aeriotv.android.feature.player.ConnectionLimitCard(
             notice = notice,
@@ -2939,15 +3208,23 @@ private fun ExoTile(
             compact = true,
             onRetry = {
                 tileRetrySerial.intValue += 1
+                // Retry is a fresh tune: the walk starts over.
+                failover.resetWalk()
                 tileRetryRef.value?.invoke()
             },
         )
     }
     if (tileLimit.value == null) tileError.value?.let { errMsg ->
+        // Apple reconnectStatusText: "Retrying in Ns" while the countdown
+        // runs, "Reconnecting…" while the retry itself runs.
+        var retryCountdown by remember { mutableIntStateOf(0) }
         LaunchedEffect(tileRetrySerial.intValue) {
-            kotlinx.coroutines.delay(
-                minOf(30, 5 shl minOf(tileRetrySerial.intValue, 3)) * 1_000L,
-            )
+            val seconds = minOf(30, 5 shl minOf(tileRetrySerial.intValue, 3))
+            for (left in seconds downTo 1) {
+                retryCountdown = left
+                kotlinx.coroutines.delay(1_000L)
+            }
+            retryCountdown = 0
             tileRetrySerial.intValue += 1
             tileRetryRef.value?.invoke()
         }
@@ -2971,8 +3248,14 @@ private fun ExoTile(
                 textAlign = TextAlign.Center,
                 maxLines = 3,
             )
+            Text(
+                text = if (retryCountdown > 0) "Retrying in ${retryCountdown}s" else "Reconnecting\u2026",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.7f),
+            )
             Button(onClick = {
                 tileRetrySerial.intValue += 1
+                failover.resetWalk()
                 tileRetryRef.value?.invoke()
             }) {
                 Text("Retry")
@@ -3068,8 +3351,9 @@ internal fun buildTileMediaSource(
     return when {
         url.endsWith(".m3u8", ignoreCase = true) || forcedHls ->
             HlsMediaSource.Factory(dataSourceFactory)
-                // A Dispatcharr connection-limit refusal is shown, never re-GET.
-                .setLoadErrorHandlingPolicy(com.aeriotv.android.core.playback.DispatcharrConnectionLimit.LoadErrorPolicy())
+                // A connection-limit refusal or an explained 503 is handled by
+                // the tile, never re-GET by Media3.
+                .setLoadErrorHandlingPolicy(TileLiveLoadErrorPolicy())
                 .createMediaSource(mediaItem)
         url.endsWith(".ts", ignoreCase = true) ||
             url.contains("/proxy/ts/", ignoreCase = true) -> {
@@ -3085,7 +3369,7 @@ internal fun buildTileMediaSource(
                     .toTypedArray()
             }
             ProgressiveMediaSource.Factory(dataSourceFactory, extractors)
-                .setLoadErrorHandlingPolicy(com.aeriotv.android.core.playback.DispatcharrConnectionLimit.LoadErrorPolicy())
+                .setLoadErrorHandlingPolicy(TileLiveLoadErrorPolicy())
                 .createMediaSource(mediaItem)
         }
         else -> DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)

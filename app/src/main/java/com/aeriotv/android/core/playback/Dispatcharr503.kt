@@ -96,13 +96,19 @@ object Dispatcharr503 {
     fun parse(error: Throwable?): Info? {
         val http = findInvalidResponseCode(error) ?: return null
         if (http.responseCode != 503) return null
-        val reason = reasonFrom(String(http.responseBody, Charsets.UTF_8))
+        return infoFrom(String(http.responseBody, Charsets.UTF_8), http.headerFields)
+    }
+
+    /** The [Info] for a 503 [body] and its response [headers]; the one parse
+     *  both the live holder and the Multiview tiles go through. */
+    internal fun infoFrom(body: String, headers: Map<String, List<String>>): Info {
+        val reason = reasonFrom(body)
         val kind =
             if (reason.contains("stopping", ignoreCase = true)) Kind.STOPPING else Kind.UNAVAILABLE
         return Info(
             kind = kind,
             reason = sentenceCase(reason),
-            retryAfterMs = retryAfterMs(http.headerFields),
+            retryAfterMs = retryAfterMs(headers),
         )
     }
 

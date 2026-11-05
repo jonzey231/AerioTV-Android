@@ -190,3 +190,25 @@ internal class TileLiveCalls {
         }
     }
 }
+
+/**
+ * Live tile load-error policy: a Dispatcharr 503 is never silently re-GET by
+ * Media3 (the live holder's [com.aeriotv.android.core.playback.Live503LoadErrorPolicy]
+ * rule), so it reaches the tile's onPlayerError at once and the tile reads the
+ * body: wait out "Channel is stopping" or walk the member streams. Every other
+ * error keeps the connection-limit policy the tiles already used.
+ */
+@OptIn(UnstableApi::class)
+internal class TileLiveLoadErrorPolicy(
+    private val base: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy =
+        com.aeriotv.android.core.playback.DispatcharrConnectionLimit.LoadErrorPolicy(),
+) : androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy by base {
+    override fun getRetryDelayMsFor(
+        loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo,
+    ): Long {
+        if (com.aeriotv.android.core.playback.DispatcharrConnectionLimit.parse(loadErrorInfo.exception) == null &&
+            com.aeriotv.android.core.playback.Dispatcharr503.parse(loadErrorInfo.exception) != null
+        ) return androidx.media3.common.C.TIME_UNSET
+        return base.getRetryDelayMsFor(loadErrorInfo)
+    }
+}
