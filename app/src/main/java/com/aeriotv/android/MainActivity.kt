@@ -1441,7 +1441,9 @@ class MainActivity : ComponentActivity() {
                 appTheme = theme,
                 customAccent = customAccent,
                 appearanceMode = appearanceMode,
-                trueBlack = trueBlack,
+                // True Black is a Mode choice now: honored only with Dark
+                // (a stored System or Light plus trueBlack reads as plain).
+                trueBlack = trueBlack && appearanceMode == AppearanceMode.Dark,
             ) {
                 Surface(
                     // Root key interceptor for the staged resume: every key

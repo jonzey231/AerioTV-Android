@@ -153,6 +153,27 @@ enum class AppTheme(
 }
 
 /**
+ * Settings > Appearance > Mode, one one-of-N choice (Apple AppearanceChoice).
+ * True Black = Dark surfaces at pure black; it is stored as AppearanceMode.Dark
+ * plus the trueBlack flag, and the flag is honored only with Dark.
+ */
+enum class AppearanceChoice(val label: String, val subtitle: String) {
+    System("System", "Follow the system setting"),
+    Light("Light", "Light surfaces"),
+    Dark("Dark", "Dark surfaces (default)"),
+    TrueBlack("True Black", "Dark surfaces at pure black, for OLED screens"),
+    ;
+
+    companion object {
+        fun of(mode: AppearanceMode, trueBlack: Boolean): AppearanceChoice = when (mode) {
+            AppearanceMode.System -> System
+            AppearanceMode.Light -> Light
+            AppearanceMode.Dark -> if (trueBlack) TrueBlack else Dark
+        }
+    }
+}
+
+/**
  * Appearance mode axis, ORTHOGONAL to [AppTheme]. Theme picks the hue; mode
  * picks the surface luminance. Default is [Dark] so every existing install
  * (no stored value) is visually unchanged on upgrade. Persisted + Drive-synced

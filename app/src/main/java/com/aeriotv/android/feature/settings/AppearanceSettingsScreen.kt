@@ -82,9 +82,19 @@ import com.aeriotv.android.ui.settings.settingsRowFocusCard
 import com.aeriotv.android.core.preferences.TEXT_SCALE_MAX
 import com.aeriotv.android.core.preferences.TEXT_SCALE_MIN
 import com.aeriotv.android.ui.theme.AppTheme
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.graphics.toArgb
 import com.aeriotv.android.ui.tv.dpadFocusEscape
 import kotlin.math.roundToInt
 import com.aeriotv.android.ui.theme.AppearanceMode
+import com.aeriotv.android.ui.theme.AppearanceChoice
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 
 /**
@@ -271,25 +281,15 @@ fun AppearanceSettingsScreen(
                     ) {
                         SettingsPickerRow(
                             title = "Mode",
-                            options = APPEARANCE_MODE_ORDER.map { mode ->
-                                SettingsPickerOption(
-                                    value = mode,
-                                    label = appearanceModeLabel(mode),
-                                    subtitle = appearanceModeSubtitle(mode),
-                                )
+                            // One choice: System, Light, Dark, True Black (GH #105
+                            // OLED black is now the fourth Mode, not a toggle).
+                            options = AppearanceChoice.entries.map { c ->
+                                SettingsPickerOption(value = c, label = c.label, subtitle = c.subtitle)
                             },
-                            selected = appearanceMode,
-                            onSelect = viewModel::setAppearanceMode,
+                            selected = AppearanceChoice.of(appearanceMode, trueBlack),
+                            onSelect = viewModel::setAppearanceChoice,
                             leadingIcon = Icons.Filled.Contrast,
                             tvChoiceSheet = true,
-                        )
-                        // GH #105: OLED true black. Applies to the dark
-                        // rendition only (Dark, or System resolving to dark).
-                        com.aeriotv.android.ui.settings.SettingsToggleRow(
-                            title = "True Black Background",
-                            subtitle = "Use pure black for backgrounds, for OLED screens.",
-                            checked = trueBlack,
-                            onCheckedChange = viewModel::setTrueBlack,
                         )
                     }
                 }
@@ -316,7 +316,7 @@ fun AppearanceSettingsScreen(
                     PreviewCard(
                         theme = currentTheme,
                         customAccentHex = customAccentHex.takeIf { useCustomAccent },
-                        trueBlack = trueBlack,
+                        trueBlack = trueBlack && appearanceMode == AppearanceMode.Dark,
                     )
                 }
 
@@ -420,37 +420,24 @@ fun AppearanceSettingsScreen(
     }
 
     if (themeColorPickerOpen) {
-        AccentPickerDialog(
-            current = customThemeHex,
-            preset = currentTheme.appBackground,
+        ColorPickerDialog(
             title = "Theme Color",
+            initialHex = customThemeHex,
+            onColor = viewModel::setCustomThemeHex,
             onDismiss = { themeColorPickerOpen = false },
-            onSave = { hex ->
-                viewModel.setCustomThemeHex(hex)
-                themeColorPickerOpen = false
-            },
-            onReset = {
-                viewModel.setCustomThemeHex(com.aeriotv.android.ui.theme.CustomThemePalette.DEFAULT_HEX)
-                themeColorPickerOpen = false
-            },
         )
     }
 
     if (accentPickerOpen) {
-        AccentPickerDialog(
-            current = customAccentHex,
-            preset = currentTheme.accentPrimary,
-            onDismiss = { accentPickerOpen = false },
-            onSave = { hex ->
+        ColorPickerDialog(
+            title = "Accent Color",
+            initialHex = customAccentHex.takeIf { it.length == 6 }
+                ?: com.aeriotv.android.ui.theme.CustomThemePalette.hexString(currentTheme.accentPrimary.toArgb()),
+            onColor = { hex ->
                 viewModel.setCustomAccentHex(hex)
                 viewModel.setUseCustomAccent(true)
-                accentPickerOpen = false
             },
-            onReset = {
-                viewModel.setCustomAccentHex("")
-                viewModel.setUseCustomAccent(false)
-                accentPickerOpen = false
-            },
+            onDismiss = { accentPickerOpen = false },
         )
     }
 }
@@ -1186,55 +1173,121 @@ internal fun AddMoreCategoriesRow(
     }
 }
 
+/**
+ * Theme Color / Accent Color dialog: a hue (across) by saturation (down)
+ * grid, a brightness slider, and the Hex Color field. Picking fills the hex
+ * field; typing six valid hex digits moves the grid and slider. Every change
+ * applies live through [onColor] (Apple's color sheet parity). On TV the grid
+ * takes D-pad focus: Left/Right change hue, Up/Down change saturation.
+ */
 @Composable
-private fun AccentPickerDialog(
-    current: String,
-    preset: Color,
-    title: String = "Custom Accent",
+private fun ColorPickerDialog(
+    title: String,
+    initialHex: String,
+    onColor: (String) -> Unit,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
-    onReset: () -> Unit,
 ) {
-    var input by remember { mutableStateOf(current.uppercase()) }
-    val sanitized = input.trim().removePrefix("#").uppercase()
-    val isValid = sanitized.length == 6 && sanitized.all { it in HEX_CHARS_ACCENT }
-    val preview = if (isValid) parseHex(sanitized) else preset
+    val start = remember {
+        FloatArray(3).also { android.graphics.Color.colorToHSV(parseHex(initialHex).toArgb(), it) }
+    }
+    var hue by remember { mutableStateOf(start[0]) }
+    var sat by remember { mutableStateOf(start[1]) }
+    var value by remember { mutableStateOf(start[2]) }
+    var input by remember { mutableStateOf(initialHex.uppercase()) }
+
+    fun hsvHex(h: Float, s: Float, v: Float): String =
+        "%06X".format(android.graphics.Color.HSVToColor(floatArrayOf(h, s, v)) and 0xFFFFFF)
+
+    fun pick(h: Float, s: Float, v: Float) {
+        hue = h.coerceIn(0f, 359.9f); sat = s.coerceIn(0f, 1f); value = v.coerceIn(0f, 1f)
+        val hex = hsvHex(hue, sat, value)
+        input = hex
+        onColor(hex)
+    }
+
+    val current = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)))
+    val accent = MaterialTheme.colorScheme.primary
 
     com.aeriotv.android.ui.scale.AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = {
-            SettingsDialogTextButton(
-                label = "Save",
-                onClick = { if (isValid) onSave(sanitized) },
-                enabled = isValid,
-            )
-        },
-        dismissButton = {
-            Row {
-                SettingsDialogTextButton(label = "Reset", onClick = onReset)
-                SettingsDialogTextButton(label = "Cancel", onClick = onDismiss)
-            }
-        },
+        confirmButton = { SettingsDialogTextButton(label = "Done", onClick = onDismiss) },
         title = { Text(title) },
         text = {
             Column {
+                var gridFocused by remember { mutableStateOf(false) }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(
+                            width = if (gridFocused) 2.dp else 1.dp,
+                            color = if (gridFocused) accent else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .onFocusChanged { gridFocused = it.isFocused }
+                        .onPreviewKeyEvent { e ->
+                            if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (e.key) {
+                                androidx.compose.ui.input.key.Key.DirectionLeft -> { pick((hue - 6f + 360f) % 360f, sat, value); true }
+                                androidx.compose.ui.input.key.Key.DirectionRight -> { pick((hue + 6f) % 360f, sat, value); true }
+                                androidx.compose.ui.input.key.Key.DirectionUp ->
+                                    if (sat >= 1f) false else { pick(hue, sat + 0.05f, value); true }
+                                androidx.compose.ui.input.key.Key.DirectionDown ->
+                                    if (sat <= 0f) false else { pick(hue, sat - 0.05f, value); true }
+                                else -> false
+                            }
+                        }
+                        .focusable()
+                        .pointerInput(value) {
+                            detectTapGestures { o ->
+                                pick(o.x / size.width * 360f, 1f - o.y / size.height, value)
+                            }
+                        }
+                        .pointerInput(value) {
+                            detectDragGestures { change, _ ->
+                                val o = change.position
+                                pick(o.x / size.width * 360f, 1f - o.y / size.height, value)
+                            }
+                        }
+                        .drawBehind {
+                            drawRect(
+                                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                    (0..6).map { Color(android.graphics.Color.HSVToColor(floatArrayOf(it * 60f % 360f, 1f, 1f))) },
+                                ),
+                            )
+                            drawRect(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.White),
+                                ),
+                            )
+                            val cx = hue / 360f * size.width
+                            val cy = (1f - sat) * size.height
+                            drawCircle(Color.White, radius = 9.dp.toPx(), center = androidx.compose.ui.geometry.Offset(cx, cy),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()))
+                            drawCircle(Color.Black.copy(alpha = 0.5f), radius = 11.dp.toPx(), center = androidx.compose.ui.geometry.Offset(cx, cy),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()))
+                        },
+                )
+                Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(36.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(preview)
-                            .border(
-                                1.5.dp,
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                RoundedCornerShape(8.dp),
-                            ),
+                            .background(current)
+                            .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
                     )
                     Spacer(Modifier.size(12.dp))
-                    Text(
-                        text = if (isValid) "Preview $sanitized" else "Enter 6-char hex",
-                        style = MaterialTheme.typography.bodySmall.subtext(),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    androidx.compose.material3.Slider(
+                        value = value,
+                        onValueChange = { pick(hue, sat, it) },
+                        valueRange = 0f..1f,
+                        colors = androidx.compose.material3.SliderDefaults.colors(
+                            thumbColor = accent,
+                            activeTrackColor = accent,
+                        ),
+                        modifier = Modifier.weight(1f).dpadFocusRing(RoundedCornerShape(50)),
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -1242,14 +1295,27 @@ private fun AccentPickerDialog(
                     label = "Hex Color",
                     value = input,
                     onValueChange = { raw ->
-                        input = raw.removePrefix("#").uppercase().filter { it in HEX_CHARS_ACCENT }.take(6)
+                        val cleaned = raw.removePrefix("#").uppercase().filter { it in HEX_CHARS_ACCENT }.take(6)
+                        input = cleaned
+                        if (cleaned.length == 6) {
+                            val hsv = FloatArray(3)
+                            android.graphics.Color.colorToHSV(parseHex(cleaned).toArgb(), hsv)
+                            hue = hsv[0]; sat = hsv[1]; value = hsv[2]
+                            onColor(cleaned)
+                        }
                     },
-                    placeholder = "1AC4D8",
+                    placeholder = "2DD4BF",
                     keyboardOptions = com.aeriotv.android.ui.textfield.aerioTextFieldKeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii,
                         capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Characters,
                         imeAction = androidx.compose.ui.text.input.ImeAction.Done,
                     ),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Six hex digits, for example 2DD4BF.",
+                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },

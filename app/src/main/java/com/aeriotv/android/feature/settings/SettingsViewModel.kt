@@ -9,6 +9,7 @@ import com.aeriotv.android.core.network.TMDBService
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.ui.theme.AppTheme
 import com.aeriotv.android.ui.theme.AppearanceMode
+import com.aeriotv.android.ui.theme.AppearanceChoice
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import com.aeriotv.android.core.data.db.entity.canRecordToServer
@@ -131,6 +132,24 @@ class SettingsViewModel @Inject constructor(
     /** Appearance > True Black Background (default OFF, GH #105). */
     val trueBlack: StateFlow<Boolean> = prefs.trueBlack
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /**
+     * Settings > Appearance > Mode: System, Light, Dark, True Black. Stored
+     * as the two existing synced fields so older clients keep working:
+     * True Black = appearanceMode dark plus trueBlack true.
+     */
+    fun setAppearanceChoice(choice: AppearanceChoice) {
+        viewModelScope.launch {
+            prefs.setTrueBlack(choice == AppearanceChoice.TrueBlack)
+            prefs.setAppearanceMode(
+                when (choice) {
+                    AppearanceChoice.System -> AppearanceMode.System
+                    AppearanceChoice.Light -> AppearanceMode.Light
+                    AppearanceChoice.Dark, AppearanceChoice.TrueBlack -> AppearanceMode.Dark
+                },
+            )
+        }
+    }
+
     fun setTrueBlack(value: Boolean) {
         viewModelScope.launch { prefs.setTrueBlack(value) }
     }
