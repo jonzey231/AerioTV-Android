@@ -17,7 +17,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import com.aeriotv.android.feature.livetv.liveProgramSearchSection
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -375,6 +378,23 @@ fun GuideScreen(
         }
     }
     val groupedChannels = guideSearch.channels
+    // Guide view "Programs" section (Logan 2026-11-05, Apple parity): the
+    // List view's program search, shown under the grid on phones and
+    // tablets. Same scan, cards, taps, and copy; TV keeps its Search tab.
+    val guideSearchEpg = if (isTv || favoritesOnly) null else state.epgByChannel
+    val guideProgramHits by produceState<com.aeriotv.android.feature.livetv.LiveProgramHits?>(
+        initialValue = null, state.channels, state.searchQuery, guideSearchEpg,
+    ) {
+        val q = state.searchQuery.trim()
+        if (q.isEmpty() || guideSearchEpg == null) { value = null; return@produceState }
+        value = null
+        kotlinx.coroutines.delay(com.aeriotv.android.feature.livetv.LIVE_SEARCH_DEBOUNCE_MS)
+        value = withContext(Dispatchers.Default) {
+            com.aeriotv.android.feature.livetv.LiveProgramIndex.of(guideSearchEpg)
+                .programHits(q, System.currentTimeMillis(), state.channels)
+        }
+    }
+    val guideProgramSearchActive = guideSearchEpg != null && state.searchQuery.isNotBlank()
     // favoritesOnly: the starred channels in the user's favorites order,
     // joined against the loaded playlist so stale rows fall away.
     val favoriteChannels = remember(favoritesList, state.channels) {
@@ -1521,7 +1541,10 @@ fun GuideScreen(
                 hiddenGroupCount = hiddenGroups.size,
             )
         }
-        Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+        Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+        val programsPanelShown = guideProgramSearchActive &&
+            !(rows.isEmpty && guideProgramHits?.hits?.isEmpty() == true)
+        if (!(rows.isEmpty && programsPanelShown)) Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         if (rows.isEmpty && favoritesOnly && favoritesOrNull == null) {
             // Favorites not loaded yet: draw nothing rather than flash the
             // empty-group notice for a frame (Streamer 2026-09-03).
@@ -1625,6 +1648,42 @@ fun GuideScreen(
                 onRefresh = { viewModel.refreshPlaylist() },
                 modifier = Modifier.fillMaxSize(),
             ) { gridContent() }
+        }
+        }
+        if (programsPanelShown) {
+            androidx.compose.foundation.lazy.LazyColumn(
+                // With channel matches the grid keeps the top; with none the
+                // Programs section takes the whole area.
+                modifier = Modifier.fillMaxWidth().then(
+                    if (rows.isEmpty) Modifier.weight(1f) else Modifier.fillMaxHeight(0.45f),
+                ),
+                contentPadding = PaddingValues(
+                    start = 12.dp,
+                    end = 12.dp,
+                    bottom = com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset.current,
+                ),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                run {
+                    liveProgramSearchSection(
+                        hits = guideProgramHits?.hits.orEmpty(),
+                        truncated = guideProgramHits?.truncated == true,
+                        pending = guideProgramHits == null,
+                        isTv = false,
+                        onTap = { hit ->
+                            if (hit.isAiring(System.currentTimeMillis())) {
+                                android.util.Log.i("AerioSearch", "[SEARCH] guide program hit: play channel")
+                                onChannelClick(hit.channel)
+                            } else {
+                                android.util.Log.i("AerioSearch", "[SEARCH] guide program hit: program info")
+                                programInfoTarget = hit.programme.toInfoTarget(
+                                    hit.channel.name, hit.channel.dispatcharrChannelId,
+                                )
+                            }
+                        },
+                    )
+                }
+            }
         }
         }
         }
