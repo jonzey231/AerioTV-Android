@@ -118,7 +118,7 @@ class TvSetupViewModel @Inject constructor(
     fun start(req: Request? = null) {
         if (receiver != null) return
         request = req
-        val r = SetupReceiver(context, { payload -> viewModelScope.launch { onPayload(payload) } }, advertise = req == null)
+        val r = SetupReceiver(context, { payload -> viewModelScope.launch { onPayload(payload) } }, advertise = true) // Advertised in every mode, as on Welcome, so other devices show the waiting banner.
         receiver = r
         viewModelScope.launch {
             if (!r.start()) { receiver = null; _phase.value = Phase.NoNetwork; return@launch }
