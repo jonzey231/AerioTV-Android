@@ -15,6 +15,25 @@ internal object LiveSearchMatcher {
     fun channelMatches(ch: M3UChannel, query: String): Boolean =
         ch.name.contains(query, ignoreCase = true) ||
             (ch.channelNumber?.contains(query, ignoreCase = true) == true)
+
+    /**
+     * Lowercased titles that only repeat the channel's identity: the channel
+     * name and its call sign (the tvg-id before the first dot, "ESPN2.us"
+     * gives "espn2"). Guides fill unlisted hours with entries titled like
+     * that, and a channel-name query would otherwise list them for every
+     * hour of the week (tvOS review 2026-11-05, Apple channelTitleKeys).
+     */
+    fun channelTitleKeys(name: String, tvgId: String?): Set<String> {
+        val out = HashSet<String>(2)
+        name.trim().lowercase().takeIf { it.isNotEmpty() }?.let { out += it }
+        tvgId?.trim()?.takeIf { it.isNotEmpty() }
+            ?.substringBefore('.')?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out += it }
+        return out
+    }
+
+    /** True when [title] is only the channel's name or call sign. */
+    fun isChannelTitle(title: String, keys: Set<String>): Boolean =
+        title.trim().lowercase() in keys
 }
 
 /**
@@ -61,10 +80,12 @@ internal class LiveProgramIndex private constructor(
         val found = ArrayList<Pair<Int, LiveProgramHit>>()
         for ((key, entries) in byKey) {
             val (order, ch) = chByKey[key] ?: continue
+            val own = LiveSearchMatcher.channelTitleKeys(ch.name, ch.tvgID)
             var lastStart: Long? = null
             for (e in entries) {
                 if (e.programme.endMillis <= nowMillis) continue
                 if (!e.title.contains(q)) continue
+                if (e.title.trim() in own) continue
                 if (e.programme.startMillis == lastStart) continue
                 lastStart = e.programme.startMillis
                 found += order to LiveProgramHit(ch, e.programme)

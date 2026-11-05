@@ -80,7 +80,7 @@ import java.util.Locale
 
 /**
  * Global Search screen (parity task #41). Reproduces the iOS SearchView: a
- * search field + four scope chips (All / Movies / TV Shows / EPG) over a mixed
+ * search field + four scope chips (All / Movies / TV Shows / Programs) over a mixed
  * result list. EPG results jump to the guide; movie/series results open detail.
  */
 @Composable
@@ -229,7 +229,7 @@ fun SearchScreen(
         when {
             state.query.isBlank() -> CenterMessage(
                 icon = Icons.Filled.Search,
-                title = "Search for movies, shows, or EPG programs",
+                title = "Search for movies, shows, or programs",
             )
             liveMode -> {
                 val sections = live

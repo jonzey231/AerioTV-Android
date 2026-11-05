@@ -113,4 +113,26 @@ class LiveSearchMatcherTest {
         assertEquals(200, many.hits.size)
         assertTrue(many.truncated)
     }
+
+    @Test
+    fun channelNameFillerIsNotAProgram() {
+        val keys = LiveSearchMatcher.channelTitleKeys("ESPN2", "ESPN2HD.us")
+        assertEquals(setOf("espn2", "espn2hd"), keys)
+        assertEquals(emptySet<String>(), LiveSearchMatcher.channelTitleKeys(" ", null))
+        assertTrue(LiveSearchMatcher.isChannelTitle(" espn2 ", keys))
+        assertEquals(false, LiveSearchMatcher.isChannelTitle("ESPN2 College Football", keys))
+        val x = M3UChannel(id = "x", name = "ESPN2", url = "http://x/x", channelNumber = "1", groupTitle = "G", tvgID = "ESPN2HD.us")
+        val y = ch("Other", "2")
+        val epg = mapOf(
+            x.guideMatchKey to listOf(
+                prog(x, "ESPN2", now, now + hour),
+                prog(x, "SportsCenter on ESPN2", now + hour, now + 2 * hour),
+                prog(x, "espn2hd", now + 2 * hour, now + 3 * hour),
+            ),
+            y.guideMatchKey to listOf(prog(y, "ESPN2", now, now + hour)),
+        )
+        val r = LiveProgramIndex.build(epg).programHits("espn2", now, listOf(x, y))
+        assertEquals(listOf("ESPN2", "SportsCenter on ESPN2"), r.hits.map { it.programme.title })
+        assertEquals(listOf(y, x), r.hits.map { it.channel })
+    }
 }
