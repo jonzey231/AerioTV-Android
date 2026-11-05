@@ -21,7 +21,7 @@ class DsyncV2Test {
 
     @Test fun oneKeyHoldsEveryCategory() {
         assertEquals(1, DsyncBucket.entries.size)
-        assertEquals("app.molinete.aerio", DsyncBucket.Main.wire)
+        assertEquals("logan.aeriotv", DsyncBucket.Main.wire("logan.aeriotv"))
         assertEquals(DsyncKey.entries.toSet(), DsyncBucket.Main.keys.toSet())
         DsyncKey.entries.forEach { assertEquals(DsyncBucket.Main, DsyncBucket.of(it)) }
     }
@@ -132,6 +132,44 @@ class DsyncV2Test {
         val empty = DsyncV2.encodeBucket(null, dev, "0.5.13", now, emptyMap())
         assertNull(DsyncV2.applyTrim(empty, 0))
         assertTrue(JsonArray(emptyList()).isEmpty())
+    }
+
+    /** Key derivation vectors (identical in the Apple Scripts/dsync-tests). */
+    @Test fun userKeyDerivation() {
+        val vectors = listOf(
+            "Logan" to "logan.aeriotv",
+            "john.doe-1_x" to "john.doe-1_x.aeriotv",
+            "a@b.com" to "a-40b.com.aeriotv",
+            "first+tag" to "first-2btag.aeriotv",
+            "_admin" to "u_admin.aeriotv",
+            "Jos\u00E9" to "jos-c3-a9.aeriotv",
+            "ADMIN" to "admin.aeriotv",
+            "" to null,
+            "a".repeat(60) to "a".repeat(46) + ".aeriotv",
+        )
+        for ((u, want) in vectors) {
+            assertEquals(u, want, DsyncKeyName.main(u))
+            if (want != null) assertTrue(u, DsyncKey.isValidKeyName("$want.favorites"))
+        }
+        assertEquals(setOf("logan.aeriotv", "logan.aeriotv.favorites", "logan.aeriotv.progress"), DsyncKeyName.v2Wires("logan.aeriotv"))
+        assertTrue(DsyncKeyName.isLegacy("app.molinete.aerio") && DsyncKeyName.isLegacy("app.molinete.aerio.favorites"))
+        assertTrue(!DsyncKeyName.isLegacy("app.molinete.aeriotv") && !DsyncKeyName.isLegacy("logan.aeriotv"))
+        assertTrue(DsyncKeyName.isMain("logan.aeriotv") && !DsyncKeyName.isMain(".aeriotv"))
+    }
+
+    @Test fun legacyKeyRenamesOnceToTheUserKey() {
+        assertEquals(
+            listOf("app.molinete.aerio", "app.molinete.aerio.progress"),
+            DsyncKeyName.renamePlan(listOf("other", "app.molinete.aerio.progress", "app.molinete.aerio"), "logan.aeriotv"),
+        )
+        assertEquals(emptyList<String>(), DsyncKeyName.renamePlan(listOf("logan.aeriotv", "app.molinete.aerio"), "logan.aeriotv"))
+        assertEquals(emptyList<String>(), DsyncKeyName.renamePlan(listOf("other"), "logan.aeriotv"))
+        val legacyV3 = DsyncV2.encodeBucket(null, "old", "1", now, mapOf(DsyncKey.Favorites to sub(obj("""{"ids":[4,5]}"""), now, "old")))
+        assertEquals(legacyV3, DsyncKeyName.renameValue(listOf("app.molinete.aerio" to legacyV3), dev, "2", now))
+        val v1Newer = DsyncEnvelopeCodec.encode(DsyncKey.Favorites, null, "z", "1", now + 100, obj("""{"ids":[9]}"""))
+        val merged = ok(DsyncKeyName.renameValue(listOf("app.molinete.aerio" to legacyV3, "app.molinete.aerio.favorites" to v1Newer), dev, "2", now)!!)
+        assertEquals(listOf(9), DsyncPayloads.decodeFavorites(cat(merged, DsyncKey.Favorites).data))
+        assertNull(DsyncKeyName.renameValue(listOf("app.molinete.aerio" to obj("""{"x":1}""")), dev, "2", now))
     }
 }
 

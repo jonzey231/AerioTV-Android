@@ -87,6 +87,8 @@ class ScannedCodeTest {
     @Test fun restoreProbeFindsMainKey() {
         assertTrue(DsyncRestoreProbe.listsMainKey("""{"apps":[{"key":"app.molinete.aerio","bytes":120}]}"""))
         assertFalse(DsyncRestoreProbe.listsMainKey("""{"apps":[{"key":"app.molinete.aerio.favorites","bytes":1}]}"""))
+        assertTrue(DsyncRestoreProbe.listsMainKey("""{"apps":[{"key":"logan.aeriotv","bytes":10}]}"""))
+        assertFalse(DsyncRestoreProbe.listsMainKey("""{"apps":[{"key":".aeriotv","bytes":10},{"key":"logan.aeriotv.favorites","bytes":1}]}"""))
         assertFalse(DsyncRestoreProbe.listsMainKey("""{"apps":[]}"""))
         assertFalse(DsyncRestoreProbe.listsMainKey("nope"))
         assertFalse(DsyncRestoreProbe.listsMainKey(null))

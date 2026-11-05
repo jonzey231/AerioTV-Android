@@ -139,6 +139,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** The live session, or a picker peek while no session runs (one writer at a time). */
         fun live(): Boolean = session === this || (peek && session == null)
         @Volatile var bound: Conn? = null
+        /** This session's App Data key, `<user>.aeriotv` (DsyncKeyName), once /me/ answered. */
+        @Volatile var userKey: String? = null
         /** Keys deferred because their id cache was not built (DsyncReadiness), with the local row count waiting. */
         val awaitingCache = java.util.concurrent.ConcurrentHashMap<DsyncKey, Int>()
         /** Deferred keys already retried once mid-sweep after a clean probe. */
@@ -446,8 +448,9 @@ class DispatcharrSyncManager @Inject constructor(
             Log.i(TAG, "[DSYNC] profiles: picker-open pull not applied (reason=$reason, profile cannot write profiles)")
             return false
         }
+        if (!ensureUserKey(s, c)) return false
         var ok = false
-        when (val f = fetchBucket(c, DsyncBucket.of(DsyncKey.Profiles))) {
+        when (val f = fetchBucket(c, wire(s, DsyncBucket.Main))) {
             is Fetched.Got -> when (val d = DsyncV2.category(f.bucket, DsyncKey.Profiles)) {
                 is DsyncDecode.Ok -> {
                     val env = d.envelope
@@ -786,8 +789,15 @@ class DispatcharrSyncManager @Inject constructor(
             val row = playlistDao.byId(playlistId) ?: return@withContext null
             val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext null
             val base = repository.get().effectiveBaseUrl(row)
-            val r = runCatching { client.appDataGet(base, apiKey, DsyncBucket.Main.wire) }.getOrNull()
+            val name = runCatching { client.fetchMe(base, apiKey) }.getOrNull()?.username.orEmpty()
+            val main = DsyncKeyName.main(name) ?: return@withContext null
+            var r = runCatching { client.appDataGet(base, apiKey, main) }.getOrNull()
                 ?: return@withContext null
+            // Before the first sync of this release the record is still under the legacy key.
+            if (r.status == 404) {
+                r = runCatching { client.appDataGet(base, apiKey, DsyncKeyName.LEGACY_MAIN) }.getOrNull()
+                    ?: return@withContext null
+            }
             if (r.status == 404) return@withContext com.aeriotv.android.core.sync.SetupSourceChoice.Summary.EMPTY
             if (!r.ok) {
                 Log.w(TAG, "[DSYNC] setup probe status=${r.status}")
@@ -1023,6 +1033,21 @@ class DispatcharrSyncManager @Inject constructor(
 
     // ---- pull (section 7.1, 7.2) ----
 
+    /** Reads the signed-in username once per session (GET users/me/) and names the key from it. */
+    private suspend fun ensureUserKey(s: Session, c: Conn): Boolean {
+        if (s.userKey != null) return true
+        val name = runCatching { client.fetchMe(c.base, c.apiKey) }.getOrNull()?.username.orEmpty()
+        val main = DsyncKeyName.main(name) ?: run {
+            Log.w(TAG, "[DSYNC] username not read; sync waits for the next attempt")
+            return false
+        }
+        s.userKey = main
+        return true
+    }
+
+    /** The server key for [b] in this session; empty before /me/ answered (every caller checks userKey first). */
+    private fun wire(s: Session, b: DsyncBucket): String = b.wire(s.userKey.orEmpty())
+
     private fun bucketRaw(s: Session, b: DsyncBucket): JsonObject? =
         state.getString(k("braw", s) + "|" + b.name, null)?.let { runCatching { json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
 
@@ -1042,6 +1067,7 @@ class DispatcharrSyncManager @Inject constructor(
         s.bucketFailed = false
         _ui.value = _ui.value.copy(running = true)
         try {
+            if (!ensureUserKey(s, c)) return@withLock
             val list = runCatching { client.appDataList(c.base, c.apiKey) }.getOrNull()
             if (list == null || list.status >= 500) {
                 Log.w(TAG, "[DSYNC] list failed status=${list?.status ?: "network"} ($reason)")
@@ -1068,7 +1094,7 @@ class DispatcharrSyncManager @Inject constructor(
                     s.serverBytes[name] = o["bytes"].asLong() ?: 0L
                 }
             }
-            if (!migrateV1(s, c)) return@withLock
+            if (!migrateKey(s, c)) return@withLock
             for (b in DsyncBucket.entries) {
                 if (session !== s) return@withLock
                 val keys = b.keys.filter { enabled(it, s) }
@@ -1103,15 +1129,15 @@ class DispatcharrSyncManager @Inject constructor(
         data class Got(val bucket: DsyncV2.Bucket, val bytes: Int) : Fetched
     }
 
-    private suspend fun fetchBucket(c: Conn, b: DsyncBucket): Fetched {
-        val r = runCatching { client.appDataGet(c.base, c.apiKey, b.wire) }.getOrNull()
+    private suspend fun fetchBucket(c: Conn, wire: String): Fetched {
+        val r = runCatching { client.appDataGet(c.base, c.apiKey, wire) }.getOrNull()
         if (r == null || r.status >= 500) {
-            Log.w(TAG, "[DSYNC] get ${b.wire} status=${r?.status ?: "network"}")
+            Log.w(TAG, "[DSYNC] get $wire status=${r?.status ?: "network"}")
             return Fetched.Failed
         }
         if (r.status == 404) return Fetched.Absent
         if (!r.ok) {
-            Log.w(TAG, "[DSYNC] get ${b.wire} status=${r.status} code=${r.code}")
+            Log.w(TAG, "[DSYNC] get $wire status=${r.status} code=${r.code}")
             return Fetched.Failed
         }
         val raw = runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull() ?: return Fetched.Malformed
@@ -1123,7 +1149,7 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     private suspend fun pullBucket(s: Session, c: Conn, b: DsyncBucket, keys: List<DsyncKey>) {
-        if (b.wire !in s.serverBytes) {
+        if (wire(s, b) !in s.serverBytes) {
             keys.forEach { s.present -= it; s.read += it }
             return
         }
@@ -1131,22 +1157,22 @@ class DispatcharrSyncManager @Inject constructor(
         // change signal. A pull under BUCKET_REFETCH_MIN_MS after the last
         // one that sees the same size skips the GET (review 2026-10-27);
         // anything older, or any size change, fetches as before.
-        val listed = s.serverBytes[b.wire]
-        if (!s.forceApply && shouldSkipBucketGet(s.lastPullAt, System.currentTimeMillis(), s.fetchedBytes[b.wire], listed)) {
-            Log.d(TAG, "[DSYNC] skip get ${b.wire}: unchanged ${listed}B, last pull under ${BUCKET_REFETCH_MIN_MS / 1000}s ago")
+        val listed = s.serverBytes[wire(s, b)]
+        if (!s.forceApply && shouldSkipBucketGet(s.lastPullAt, System.currentTimeMillis(), s.fetchedBytes[wire(s, b)], listed)) {
+            Log.d(TAG, "[DSYNC] skip get ${wire(s, b)}: unchanged ${listed}B, last pull under ${BUCKET_REFETCH_MIN_MS / 1000}s ago")
             return
         }
-        when (val f = fetchBucket(c, b)) {
+        when (val f = fetchBucket(c, wire(s, b))) {
             Fetched.Absent -> keys.forEach { s.present -= it; s.read += it }
             Fetched.Failed -> s.bucketFailed = true
-            Fetched.Malformed -> { s.bucketFailed = true; Log.w(TAG, "[DSYNC] malformed ${b.wire}") }
+            Fetched.Malformed -> { s.bucketFailed = true; Log.w(TAG, "[DSYNC] malformed ${wire(s, b)}") }
             is Fetched.TooNew -> {
                 s.bucketFailed = true
                 s.blocked += keys
-                Log.w(TAG, "[DSYNC] skip ${b.wire} v${f.version} > v${DsyncV2.SCHEMA}")
+                Log.w(TAG, "[DSYNC] skip ${wire(s, b)} v${f.version} > v${DsyncV2.SCHEMA}")
             }
             is Fetched.Got -> {
-                listed?.let { s.fetchedBytes[b.wire] = it }
+                listed?.let { s.fetchedBytes[wire(s, b)] = it }
                 saveBucketRaw(s, b, f.bucket.raw)
                 foldProviders(s, f.bucket)
                 keys.forEach { key ->
@@ -1156,7 +1182,7 @@ class DispatcharrSyncManager @Inject constructor(
                             s.present += key
                             processCategory(s, key, d.envelope, f.bytes)
                         }
-                        else -> Log.w(TAG, "[DSYNC] malformed ${b.wire} category ${key.suffix}")
+                        else -> Log.w(TAG, "[DSYNC] malformed ${wire(s, b)} category ${key.suffix}")
                     }
                 }
             }
@@ -1164,59 +1190,31 @@ class DispatcharrSyncManager @Inject constructor(
     }
 
     /**
-     * Migration to schema v3 (one key): when any other `app.molinete.aerio.*`
-     * key exists (the 13 v1 keys or the v2 favorites/progress keys) or the
-     * main key still holds a v2 value, read them all, merge per category by
-     * updatedAt into the single key, PUT it, then DELETE every other
-     * `app.molinete.aerio.*` key. False = the server could not be reached.
+     * Key rename (schema section 11, 2026-11-05): when `<user>.aeriotv` is
+     * absent and any legacy `app.molinete.aerio*` key exists (v1, v2, or v3),
+     * read them all, PUT the merged value under the new key, then DELETE every
+     * legacy key. Runs once: after it the new key is listed and the plan is
+     * empty. False = the server could not be reached.
      */
-    private suspend fun migrateV1(s: Session, c: Conn): Boolean {
-        val main = DsyncBucket.Main.wire
-        val others = s.serverBytes.keys.filter { it.startsWith("$main.") }
-        var mainRaw: JsonObject? = null
-        var mainIsOld = false
-        if (main in s.serverBytes && !state.getBoolean(k("v3seen", s), false)) {
-            val r = runCatching { client.appDataGet(c.base, c.apiKey, main) }.getOrNull()
-            if (r == null || r.status >= 500) return false
-            val got = if (r.ok) runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull() else null
-            mainRaw = got
-            mainIsOld = got != null && DsyncV2.decode(got) !is DsyncV2.Decode.Ok
-            if (!mainIsOld) state.edit().putBoolean(k("v3seen", s), true).apply()
-        }
-        if (others.isEmpty() && !mainIsOld) return true
-        if (mainRaw == null && main in s.serverBytes) {
-            val r = runCatching { client.appDataGet(c.base, c.apiKey, main) }.getOrNull()
-            if (r == null || r.status >= 500) return false
-            mainRaw = if (r.ok) runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull() else null
-        }
-        val v1 = LinkedHashMap<DsyncKey, DsyncEnvelope>()
-        val v2 = ArrayList<DsyncV2.Bucket>()
-        var v3: JsonObject? = null
-        val mainNow = mainRaw
-        mainNow?.let { raw ->
-            when (val d = DsyncV2.decode(raw, min = DsyncV2.MIN_SUBOBJECT_SCHEMA)) {
-                is DsyncV2.Decode.Ok -> if (d.bucket.schemaVersion >= DsyncV2.SCHEMA) v3 = raw else v2 += d.bucket
-                else -> Unit
-            }
-        }
-        for (name in others) {
+    private suspend fun migrateKey(s: Session, c: Conn): Boolean {
+        val main = s.userKey ?: return false
+        val legacy = DsyncKeyName.renamePlan(s.serverBytes.keys.toList(), main)
+        if (legacy.isEmpty()) return true
+        val values = ArrayList<Pair<String, JsonObject>>()
+        for (name in legacy) {
             val r = runCatching { client.appDataGet(c.base, c.apiKey, name) }.getOrNull()
             if (r == null || r.status >= 500) return false
             if (!r.ok) continue
             val raw = runCatching { json.parseToJsonElement(r.body.orEmpty()) as? JsonObject }.getOrNull() ?: continue
-            val k1 = DsyncKey.fromWire(name)
-            val d1 = if (k1 != null) DsyncEnvelopeCodec.decode(raw, 1) else null
-            if (k1 != null && d1 is DsyncDecode.Ok) { v1[k1] = d1.envelope; continue }
-            (DsyncV2.decode(raw, min = DsyncV2.MIN_SUBOBJECT_SCHEMA) as? DsyncV2.Decode.Ok)?.let { v2 += it.bucket }
+            values += name to raw
         }
-        val now = System.currentTimeMillis() / 1000
-        val value = DsyncV2.migrate(v1, v2, v3, deviceId, BuildConfig.VERSION_NAME, now)
+        val value = DsyncKeyName.renameValue(values, deviceId, BuildConfig.VERSION_NAME, System.currentTimeMillis() / 1000)
         if (value != null) {
             var body: JsonObject = value
             var step = 0
             while (true) {
                 val r = runCatching { client.appDataPut(c.base, c.apiKey, main, body.toString()) }.getOrNull()
-                Log.i(TAG, "[DSYNC] migration put $main bytes=${DsyncEnvelopeCodec.byteSize(body)} status=${r?.status ?: "network"}")
+                Log.i(TAG, "[DSYNC] migration put bytes=${DsyncEnvelopeCodec.byteSize(body)} status=${r?.status ?: "network"}")
                 if (r == null || r.status >= 500) return false
                 if (r.ok) break
                 if (r.status != 413) return true // old keys stay; try again next pull
@@ -1230,12 +1228,11 @@ class DispatcharrSyncManager @Inject constructor(
             s.serverBytes[main] = DsyncEnvelopeCodec.byteSize(body).toLong()
         }
         var removed = 0
-        for (name in others) {
+        for (name in legacy) {
             val r = runCatching { client.appDataDelete(c.base, c.apiKey, name) }.getOrNull()
             if (r != null && (r.ok || r.status == 404)) { removed++; s.serverBytes.remove(name) }
         }
-        state.edit().putBoolean(k("v3seen", s), true).apply()
-        Log.i(TAG, "[DSYNC] migrated to the single key ($removed keys removed)")
+        Log.i(TAG, "[DSYNC] migrated key (${values.size} read, $removed of ${legacy.size} old keys removed)")
         return true
     }
 
@@ -1503,6 +1500,7 @@ class DispatcharrSyncManager @Inject constructor(
         }
         if (key in s.blocked || !enabled(key, s)) return
         val c = conn(s) ?: return
+        if (!ensureUserKey(s, c)) { retryLater(s, key); return }
         val b = DsyncBucket.of(key)
         if (key in s.resend) Log.i(TAG, "[DSYNC] retry ${key.suffix} after offline")
         // Every PUT reads the key first: row categories merge, whole-value
@@ -1545,7 +1543,7 @@ class DispatcharrSyncManager @Inject constructor(
             // forced key (every force push ends in a status line) and for a
             // dirty shared key (the flag clears here).
             if (force || (isDirty(s, key) && key in DsyncCoexistence.FORCE_KEYS)) {
-                Log.i(TAG, "[DSYNC] put ${b.wire} (${key.suffix}) status=unchanged rows=${DsyncCoexistence.rowCount(key, data)} (server already holds this copy)")
+                Log.i(TAG, "[DSYNC] put ${wire(s, b)} (${key.suffix}) status=unchanged rows=${DsyncCoexistence.rowCount(key, data)} (server already holds this copy)")
             }
             if (force) clearForced(s, key)
             markSent(s, key)
@@ -1559,7 +1557,7 @@ class DispatcharrSyncManager @Inject constructor(
             }
             return
         }
-        if (s.serverFull && b.wire !in s.serverBytes) {
+        if (s.serverFull && wire(s, b) !in s.serverBytes) {
             refreshMessage(s)
             return
         }
@@ -1593,7 +1591,7 @@ class DispatcharrSyncManager @Inject constructor(
                         continue
                     }
                     s.tooLarge += key
-                    Log.w(TAG, "[DSYNC] ${b.wire} still too large after every trim; stopped until the next change")
+                    Log.w(TAG, "[DSYNC] ${wire(s, b)} still too large after every trim; stopped until the next change")
                 }
                 PutStatus.Full -> s.serverFull = true
                 PutStatus.Auth -> s.paused = true
@@ -1647,7 +1645,7 @@ class DispatcharrSyncManager @Inject constructor(
      * and a newer whole value is taken instead of overwriting it.
      */
     private suspend fun refreshBeforePut(s: Session, c: Conn, b: DsyncBucket, key: DsyncKey, force: Boolean = false): Refresh {
-        val f = fetchBucket(c, b)
+        val f = fetchBucket(c, wire(s, b))
         val got = when (f) {
             Fetched.Failed -> return Refresh.Unreachable
             Fetched.Absent, Fetched.Malformed -> return Refresh.Ok
@@ -1655,7 +1653,7 @@ class DispatcharrSyncManager @Inject constructor(
             is Fetched.Got -> f
         }
         saveBucketRaw(s, b, got.bucket.raw)
-        s.serverBytes[b.wire] = got.bytes.toLong()
+        s.serverBytes[wire(s, b)] = got.bytes.toLong()
         foldProviders(s, got.bucket)
         val d = DsyncV2.category(got.bucket, key) as? DsyncDecode.Ok ?: return Refresh.Ok
         val env = d.envelope
@@ -1698,16 +1696,16 @@ class DispatcharrSyncManager @Inject constructor(
     private suspend fun put(s: Session, c: Conn, b: DsyncBucket, key: DsyncKey, value: JsonObject, data: JsonObject): PutStatus? {
         val body = value.toString()
         val bytes = body.toByteArray(Charsets.UTF_8).size
-        var r = runCatching { client.appDataPut(c.base, c.apiKey, b.wire, body) }.getOrNull()
+        var r = runCatching { client.appDataPut(c.base, c.apiKey, wire(s, b), body) }.getOrNull()
         if (r != null && (r.status == 401 || r.status == 403)) {
             // Section 7.7: take the current credential (a re-login stores a new
             // key on the profile) and try once more before pausing.
             val again = freshConn(s)?.also { s.bound = it }
             if (again != null && again.apiKey != c.apiKey) {
-                r = runCatching { client.appDataPut(again.base, again.apiKey, b.wire, body) }.getOrNull()
+                r = runCatching { client.appDataPut(again.base, again.apiKey, wire(s, b), body) }.getOrNull()
             }
         }
-        Log.i(TAG, "[DSYNC] put ${b.wire} (${key.suffix}) bytes=$bytes status=${r?.status ?: "network"}${r?.code?.let { " code=$it" } ?: ""}")
+        Log.i(TAG, "[DSYNC] put ${wire(s, b)} (${key.suffix}) bytes=$bytes status=${r?.status ?: "network"}${r?.code?.let { " code=$it" } ?: ""}")
         if (r == null || r.status >= 500) return PutStatus.Retry
         return when {
             r.ok -> {
@@ -1715,7 +1713,7 @@ class DispatcharrSyncManager @Inject constructor(
                 val sub = (value[DsyncV2.CATEGORIES] as? JsonObject)?.get(key.suffix) as? JsonObject ?: JsonObject(emptyMap())
                 val at = sub["updatedAt"].asStr()?.let(DsyncEnvelopeCodec::parseIso) ?: (System.currentTimeMillis() / 1000)
                 saveAfter(s, key, sub, at, deviceId, data)
-                s.serverBytes[b.wire] = bytes.toLong()
+                s.serverBytes[wire(s, b)] = bytes.toLong()
                 s.present += key
                 stampLast(s)
                 PutStatus.Ok
