@@ -3,6 +3,7 @@ package com.aeriotv.android.ui.settings
 import androidx.compose.ui.graphics.graphicsLayer
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
+import com.aeriotv.android.ui.theme.textThemeTint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -184,7 +185,7 @@ fun SettingsSectionHeader(
     Text(
         text = text.uppercase(),
         style = settingsEyebrowStyle().copy(letterSpacing = 0.9.sp),
-        color = color ?: MaterialTheme.colorScheme.textAccent,
+        color = color ?: MaterialTheme.colorScheme.textThemeTint,
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
     )

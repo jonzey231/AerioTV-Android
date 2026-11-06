@@ -17,15 +17,15 @@ import kotlin.math.pow
 // 1. Parse the base color "RRGGBB" and convert it to HSL: h in degrees
 //    [0, 360), s and l in [0, 1]. Let cap(x) = min(s, x).
 // 2. Dark rendition:
-//      background   = HSL(h, cap(0.55), 0.07)
-//      card / sheet = HSL(h, cap(0.50), 0.12)
+//      background   = HSL(h, cap(0.55), 0.10)
+//      card / sheet = HSL(h, cap(0.50), 0.15)
 //      text primary = HSL(h, cap(0.30), 0.94)
 // 3. Light rendition:
 //      background   = HSL(h, cap(0.45), 0.965)
 //      card / sheet = #FFFFFF (as every preset)
 //      text ink     = HSL(h, cap(0.40), 0.10)
 //    Secondary text, tertiary text, and dividers keep the preset rules
-//    (accent or ink at the preset opacities), so they follow these values.
+//    (theme tint or ink at the preset opacities), so they follow these values.
 // 4. Matching accent: hue ha = (h - 30) mod 360 (the step from AerioTV's
 //    navy ground to its cyan accent); saturation sa = s when s < 0.08 (a gray
 //    base keeps a gray accent), otherwise clamp(s, 0.65, 0.90).
@@ -41,12 +41,16 @@ import kotlin.math.pow
 //    floor(v * 255 + 0.5). Contrast is measured on those 8-bit values.
 // Mode (Light, Dark, System) and True Black Background apply on top exactly
 // as for presets (Theme.kt). Custom Accent Color, when on, replaces the
-// matching accent in both modes.
+// matching accent for interactive elements in both modes; secondary text,
+// tertiary text, dividers, borders, and section headers keep the matching
+// accent (Theme.kt themeTint). Dark surfaces sit at 10 and 15 percent
+// lightness (measured 2026-11-06 on the Apple TV: 7 and 12 read as near
+// black for every hue; True Black still overrides to pure black).
 //
 // Reference vectors (Apple and Android must agree):
-//   0A1628 -> dark bg 08101C, card 0F1C2E, text EBEFF4, accent 57CEDB / 2BBACA,
+//   0A1628 -> dark bg 0B1728, card 132239, text EBEFF4, accent 57CEDB / 2BBACA,
 //             light bg F2F5FA, ink 0F1724, accent 1B747E / 14555D
-//   FF0000 -> dark bg 1C0808, card 2E0F0F, accent F53D99, light accent C20A66
+//   FF0000 -> dark bg 280B0B, card 391313, accent F53D99, light accent C20A66
 data class CustomThemePalette(
     val darkBackground: Int,
     val darkCard: Int,
@@ -73,7 +77,7 @@ data class CustomThemePalette(
             val v = (clean(hex) ?: DEFAULT_HEX).toInt(16)
             val (h, s, _) = rgbToHsl((v shr 16) and 0xFF, (v shr 8) and 0xFF, v and 0xFF)
             fun cap(x: Double) = min(s, x)
-            val darkBg = hsl(h, cap(0.55), 0.07)
+            val darkBg = hsl(h, cap(0.55), 0.10)
             val lightBg = hsl(h, cap(0.45), 0.965)
             val ha = if (h >= 30) h - 30 else h + 330
             val sa = if (s < 0.08) s else min(0.90, max(0.65, s))
@@ -89,7 +93,7 @@ data class CustomThemePalette(
             }
             return CustomThemePalette(
                 darkBackground = darkBg,
-                darkCard = hsl(h, cap(0.50), 0.12),
+                darkCard = hsl(h, cap(0.50), 0.15),
                 darkText = hsl(h, cap(0.30), 0.94),
                 lightBackground = lightBg,
                 lightInk = hsl(h, cap(0.40), 0.10),

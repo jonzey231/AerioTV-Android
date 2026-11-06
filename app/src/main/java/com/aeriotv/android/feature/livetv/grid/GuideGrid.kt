@@ -1198,7 +1198,10 @@ private fun GridRow(
             }
             if (channel.hasCatchup) {
                 translate(left = clockLeft, top = glyphTop) {
-                    with(catchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tertiary.copy(alpha = 0.8f))) }
+                    // Full accent, matching the program-cell clocks (Apple
+                    // 584cc63): tertiary read the theme tint once the tint
+                    // rule landed, which split the guide into two clock colors.
+                    with(catchupPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(colors.primary)) }
                 }
             }
         }

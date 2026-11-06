@@ -40,6 +40,9 @@ val LocalBaseTextColors = staticCompositionLocalOf {
 /** Accent-colored text, blended by Text Contrast. */
 internal val LocalTextAccent = staticCompositionLocalOf { Color.Unspecified }
 
+/** Theme-tinted text (section headers), blended by Text Contrast. */
+internal val LocalTextThemeTint = staticCompositionLocalOf { Color.Unspecified }
+
 /** Blend [color] toward plain white / black ink by [amount] (alpha toward 1). */
 fun contrastBlend(color: Color, amount: Float, isDark: Boolean): Color {
     if (amount <= 0f || color == Color.Unspecified) return color
@@ -57,6 +60,15 @@ val ColorScheme.textAccent: Color
     @Composable
     @ReadOnlyComposable
     get() = LocalTextAccent.current.takeIf { it != Color.Unspecified } ?: primary
+
+/**
+ * Theme tint for TEXT (section headers): the theme's own accent, never the
+ * custom accent override on the Custom theme (Apple ThemeManager.themeTint).
+ */
+val ColorScheme.textThemeTint: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalTextThemeTint.current.takeIf { it != Color.Unspecified } ?: textAccent
 
 /** One-off dimmed text color (e.g. onBackground.copy(alpha = 0.7f)) with Text Contrast applied. */
 @Composable

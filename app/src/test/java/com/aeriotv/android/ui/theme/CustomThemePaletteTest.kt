@@ -11,22 +11,22 @@ class CustomThemePaletteTest {
     ).map { CustomThemePalette.hexString(it) }
 
     @Test fun navyMatchesApple() = assertEquals(
-        listOf("08101C", "0F1C2E", "EBEFF4", "F2F5FA", "0F1724", "57CEDB", "2BBACA", "1B747E", "14555D"),
+        listOf("0B1728", "132239", "EBEFF4", "F2F5FA", "0F1724", "57CEDB", "2BBACA", "1B747E", "14555D"),
         hexes(CustomThemePalette.derive("0A1628")),
     )
 
     @Test fun redMatchesApple() = assertEquals(
-        listOf("1C0808", "2E0F0F", "F4EBEB", "FAF2F2", "240F0F", "F53D99", "E90C7A", "C20A66", "9B0852"),
+        listOf("280B0B", "391313", "F4EBEB", "FAF2F2", "240F0F", "F53D99", "E90C7A", "C20A66", "9B0852"),
         hexes(CustomThemePalette.derive("#ff0000")),
     )
 
     @Test fun grayStaysGray() = assertEquals(
-        listOf("121212", "1F1F1F", "F0F0F0", "F6F6F6", "1A1A1A", "999999", "7A7A7A", "666666", "525252"),
+        listOf("1A1A1A", "262626", "F0F0F0", "F6F6F6", "1A1A1A", "999999", "7A7A7A", "666666", "525252"),
         hexes(CustomThemePalette.derive("808080")),
     )
 
     @Test fun greenMatchesApple() = assertEquals(
-        listOf("081C0F", "0F2E1B", "EBF4EE", "F2FAF5", "0F2417", "64E151", "3BD124", "258217", "1B6011"),
+        listOf("0B2816", "133921", "EBF4EE", "F2FAF5", "0F2417", "64E151", "3BD124", "258217", "1B6011"),
         hexes(CustomThemePalette.derive("22C55E")),
     )
 }

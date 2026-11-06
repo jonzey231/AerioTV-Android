@@ -64,6 +64,14 @@ fun AerioTVTheme(
     // wash out on white); a user-chosen custom accent still wins in both modes.
     val baseAccent = if (isDark) appTheme.accentPrimary else appTheme.lightAccentPrimary
     val effectivePrimary = customAccent ?: baseAccent
+    // Tint for secondary text, tertiary text, dividers, borders, and section
+    // headers (Apple ThemeManager.themeTint). On the Custom theme this is the
+    // accent derived from the Theme Color, ignoring Custom Accent Color, so a
+    // custom accent only recolors interactive elements (selection, focus
+    // rings, pills, checkmarks, buttons, badges), which keep [effectivePrimary].
+    // Presets have no separate theme color to preserve, so there a custom
+    // accent tints text and dividers too, as it always has.
+    val themeTint = if (appTheme == AppTheme.Custom) baseAccent else effectivePrimary
 
     // Surface + ink selection per mode. The dark branch keeps the ORIGINAL
     // values verbatim; the light branch reads the theme's light rendition.
@@ -88,9 +96,9 @@ fun AerioTVTheme(
     // AND raise the alpha to earn real contrast (the accent is already the
     // darkened light-mode accent here).
     val baseTextSecondary = if (isDark) {
-        effectivePrimary.copy(alpha = if (isTv) 0.75f else 0.65f)
+        themeTint.copy(alpha = if (isTv) 0.75f else 0.65f)
     } else {
-        lerp(effectivePrimary, textPrimary, 0.20f).copy(alpha = 0.90f)
+        lerp(themeTint, textPrimary, 0.20f).copy(alpha = 0.90f)
     }
     // Visual-parity polish: iOS has a SECOND, dimmer rung under textSecondary.
     // Colors.swift textTertiary = accent.opacity(0.45 tvOS / 0.28 phone), used
@@ -98,9 +106,9 @@ fun AerioTVTheme(
     // title/description hierarchy. Carried on Material3's otherwise-unused
     // `tertiary` slot; reach it via `MaterialTheme.colorScheme.tertiary`.
     val baseTextTertiary = if (isDark) {
-        effectivePrimary.copy(alpha = if (isTv) 0.45f else 0.28f)
+        themeTint.copy(alpha = if (isTv) 0.45f else 0.28f)
     } else {
-        lerp(effectivePrimary, textPrimary, 0.15f).copy(alpha = 0.65f)
+        lerp(themeTint, textPrimary, 0.15f).copy(alpha = 0.65f)
     }
 
     // Text Contrast (Appearance > Text Contrast, see TextContrast.kt): blends
@@ -116,6 +124,7 @@ fun AerioTVTheme(
     val textSecondary = contrastBlend(baseTextSecondary, textContrast, isDark)
     val textTertiary = contrastBlend(baseTextTertiary, textContrast, isDark)
     val textAccent = contrastBlend(effectivePrimary, textContrast, isDark)
+    val textThemeTint = contrastBlend(themeTint, textContrast, isDark)
 
     val colorScheme = if (isDark) {
         darkColorScheme(
@@ -176,6 +185,7 @@ fun AerioTVTheme(
         LocalTrueBlack provides trueBlack,
         LocalBaseTextColors provides baseTextColors,
         LocalTextAccent provides textAccent,
+        LocalTextThemeTint provides textThemeTint,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

@@ -1416,7 +1416,7 @@ internal fun ChannelRow(
                             Icon(
                                 imageVector = Icons.Filled.History,
                                 contentDescription = "Catch-up available",
-                                tint = MaterialTheme.colorScheme.tertiary,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(13.dp),
                             )
                         }
