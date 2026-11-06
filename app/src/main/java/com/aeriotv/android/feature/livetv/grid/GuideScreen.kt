@@ -1909,8 +1909,10 @@ fun GuideScreen(
             // long-press action surface; Logan 2026-09-09), items in the iPhone
             // context-menu order. Jump To lives on the clock cell here.
             val sheetActions = buildList {
-                if (isLive && channel.url.isNotBlank()) add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { com.aeriotv.android.feature.player.RadioSelect.watchAsVideo { onChannelClick(channel) } })
-                else if (replayable) add(TvMenuAction("Watch from Start", Icons.Outlined.History, onClick = watchFromStart))
+                // Apple guideMenuItems: a replayable aired program leads with
+                // Watch (catch-up), else a live program leads with Watch.
+                if (replayable) add(TvMenuAction("Watch", Icons.Outlined.History, onClick = watchFromStart))
+                else if (isLive && channel.url.isNotBlank()) add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { com.aeriotv.android.feature.player.RadioSelect.watchAsVideo { onChannelClick(channel) } })
                 com.aeriotv.android.feature.player.radioMenuAction(context, channel, if (isLive) cell.title else "") { miniPlayerVm.dismiss() }?.let { add(it) }
             com.aeriotv.android.feature.player.radioFlagMenuAction(context, channel, state.playlist, viewModel)?.let { add(it) }
                 add(TvMenuAction(if (isFavorite) "Remove from Favorites" else "Add to Favorites", if (isFavorite) Icons.Outlined.StarOutline else Icons.Filled.Star) { favoritesVm.toggle(channel) })
@@ -1932,10 +1934,13 @@ fun GuideScreen(
             )
         } else {
         val actions = buildList {
-            // Apple order on TV: Watch first only when a plain Select would
-            // open Radio Mode (declared radio or Radio Mode by Default), then
-            // Radio Mode.
-            if (isLive && channel.url.isNotBlank() && com.aeriotv.android.feature.player.RadioSelect.picksOpenRadio(channel)) {
+            // Apple TV guide order (EPGGuideView confirmationDialog): Watch
+            // always leads (catch-up Watch on a replayable aired program,
+            // else live Watch), then Radio Mode, Mark as Radio Channel,
+            // and Favorites.
+            if (replayable) {
+                add(TvMenuAction("Watch", onClick = watchFromStart))
+            } else if (isLive && channel.url.isNotBlank()) {
                 add(TvMenuAction("Watch", Icons.Filled.PlayArrow) { com.aeriotv.android.feature.player.RadioSelect.watchAsVideo { onChannelClick(channel) } })
             }
             com.aeriotv.android.feature.player.radioMenuAction(context, channel, if (isLive) cell.title else "") { miniPlayerVm.dismiss() }?.let { add(it) }
@@ -1948,7 +1953,6 @@ fun GuideScreen(
             if (!cell.isPlaceholder) {
                 add(TvMenuAction("Program Info") { programInfoTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
                 if (canRecord) add(TvMenuAction(if (isLive) "Record from Now" else "Record") { recordTarget = cell.toInfoTarget(channel.name, channel.dispatcharrChannelId) })
-                if (replayable) add(TvMenuAction("Watch from Start", onClick = watchFromStart))
                 if (cell.startMillis > nowMs) {
                     add(TvMenuAction(if (reminderSet) "Cancel Reminder" else "Set Reminder", onClick = toggleReminder))
                 }
