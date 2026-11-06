@@ -81,6 +81,7 @@ fun OnboardingCard(
     compact: Boolean = false,
     chevron: Boolean = true,
     trailing: (@Composable () -> Unit)? = null,
+    subtitleStyle: androidx.compose.ui.text.TextStyle? = null,
 ) {
     SourceTypeCard(
         modifier = modifier.onboardingTappable(enabled = enabled, onClick = onClick),
@@ -90,6 +91,7 @@ fun OnboardingCard(
         compact = compact,
         highlighted = highlighted,
         subtitleMaxLines = 4,
+        subtitleStyle = subtitleStyle,
         trailing = trailing ?: if (chevron) ({
             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }) else null,

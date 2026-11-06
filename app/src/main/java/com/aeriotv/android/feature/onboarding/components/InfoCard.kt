@@ -48,6 +48,8 @@ fun SourceTypeCard(
     highlighted: Boolean = false,
     /** Overrides the compact one-line subtitle cap (onboarding cards wrap to a few lines). */
     subtitleMaxLines: Int? = null,
+    /** Overrides the subtitle text style (Connect a Server on TV: Apple's 20 pt detail). */
+    subtitleStyle: androidx.compose.ui.text.TextStyle? = null,
 ) {
     val cardBorder = MaterialTheme.colorScheme.primary.copy(alpha = if (highlighted) 1f else 0.20f)
     Row(
@@ -89,7 +91,7 @@ fun SourceTypeCard(
                 Spacer(Modifier.size(if (compact) 1.dp else 2.dp))
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    style = (subtitleStyle ?: MaterialTheme.typography.bodySmall).subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = subtitleMaxLines ?: if (compact) 1 else Int.MAX_VALUE,
                     overflow = TextOverflow.Ellipsis,

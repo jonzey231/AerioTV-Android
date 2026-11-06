@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.onboarding.components.QrAutoScan
 import com.aeriotv.android.feature.onboarding.components.StepCaption
@@ -87,8 +88,12 @@ fun ChooseSourceTypeScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (!(isTv && onboarding)) {
-            // Phones and tablets: "Add Playlist" centered over the centered content, as on iPhone and iPad. TV unchanged.
+        // Android TV: no page bar at all. Apple TV's Settings > Add Playlist
+        // presents Connect a Server with no title (AddServerView
+        // navigationTitle is empty on tvOS, simulator 2026-11-06); the
+        // Streamer showed "Add Playlist" above the centered title.
+        if (!isTv) {
+            // Phones and tablets: "Add Playlist" centered over the centered content, as on iPhone and iPad.
             val bar: @Composable (@Composable () -> Unit, @Composable () -> Unit, @Composable androidx.compose.foundation.layout.RowScope.() -> Unit, androidx.compose.material3.TopAppBarColors) -> Unit =
                 // TV: a 56 dp page bar (the 64 dp default put the handoff
                 // card's bottom edge 9 dp past the screen, measured 16:11 on
@@ -139,27 +144,31 @@ fun ChooseSourceTypeScreen(
             val maxW = if (isTv) 480.dp else vp.onboardingMaxWidth
             Column(
                 modifier = if (maxW != Dp.Unspecified) Modifier.widthIn(max = maxW).fillMaxWidth() else Modifier.fillMaxWidth(),
-                // TV: 4 dp between blocks so title through the handoff card
-                // fits the 540 dp canvas under the tab bar and the page bar
-                // (measured 16:07 on the 1080p emulator: 10 dp overflowed by
-                // about 65 dp and the first Down scrolled the title away).
-                verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 14.dp),
+                // TV: Apple TV's 28 pt between blocks is 14 dp here; the page
+                // bar is gone on TV, which gave back the 56 dp the earlier
+                // 4 dp spacing had to save (measured 2026-11-06).
+                verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (onboarding) StepCaption(1, 3)
-                Text(
-                    "Connect a Server",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    "AerioTV is built around Dispatcharr. Other playlist types work too, with fewer features.",
-                    style = MaterialTheme.typography.bodyMedium.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(if (isTv) 6.dp else 4.dp)) {
+                    Text(
+                        "Connect a Server",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        "AerioTV is built around Dispatcharr. Other playlist types work too, with fewer features.",
+                        // Apple TV 24 pt is 12 sp; 11.5 sp here keeps the line
+                        // count (Roboto runs about 8 percent wider than SF, and
+                        // the page has to fit under the tab bar without a scroll).
+                        style = (if (isTv) MaterialTheme.typography.bodyMedium.copy(fontSize = 11.5.sp, lineHeight = 15.sp) else MaterialTheme.typography.bodyMedium).subtext(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
                 DispatcharrHeroCard(
                     isTv = isTv,
                     onEnterDetails = { onChoose(SourceType.DispatcharrUserPass) },
@@ -186,6 +195,8 @@ fun ChooseSourceTypeScreen(
                             "Live TV tab, or navigate to Settings. Your playlist, profiles, and preferences come over in one step.",
                         onClick = onSetUpFromPhone,
                         compact = isTv,
+                        // Apple TV detail text is 20 pt (10 sp); 9.5 sp keeps its two lines.
+                        subtitleStyle = if (isTv) MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp, lineHeight = 12.5.sp) else null,
                     )
                 }
             }

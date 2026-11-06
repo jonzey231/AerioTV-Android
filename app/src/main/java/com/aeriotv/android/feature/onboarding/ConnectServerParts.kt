@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.RadioButtonChecked
+import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material3.Button
@@ -38,19 +42,32 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
 import com.aeriotv.android.core.data.SourceType
 import com.aeriotv.android.feature.onboarding.components.OnboardingCard
 import com.aeriotv.android.feature.onboarding.components.OnboardingSectionLabel
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.settings.dpadFocusRing
 
+/** Per-feature glyphs, the Material counterparts of Apple's SF symbols
+ *  (AddServerView.dispatcharrFeatures: clock.arrow.circlepath,
+ *  arrow.triangle.swap, record.circle, person.2.fill, qrcode,
+ *  arrow.triangle.2.circlepath). */
 private val DISPATCHARR_FEATURES = listOf(
-    "Catch-up from the server",
-    "Stream switching and reordering",
-    "Server-side DVR with series rules",
-    "Multiple user profiles",
-    "Set up any device with a QR code",
-    "Syncs across platforms",
+    Icons.Outlined.History to "Catch-up from the server",
+    Icons.Outlined.SwapVert to "Stream switching and reordering",
+    Icons.Outlined.RadioButtonChecked to "Server-side DVR with series rules",
+    Icons.Outlined.People to "Multiple user profiles",
+    Icons.Outlined.QrCode2 to "Set up any device with a QR code",
+    Icons.Outlined.Sync to "Syncs across platforms",
 )
 
 /**
@@ -66,34 +83,46 @@ internal fun DispatcharrHeroCard(
     onScanQr: () -> Unit,
     firstFocus: FocusRequester,
 ) {
-    val shape = RoundedCornerShape(16.dp)
+    // TV metrics are Apple TV's AddServerView at half scale (1920 pt canvas
+    // to the 960 dp canvas): 18 dp radius, 16 dp card padding, 10 dp between
+    // blocks, 16 sp bold title, 11 sp subtitle (Streamer 2026-11-06, Logan:
+    // the card had to match the Apple TV one).
+    val shape = RoundedCornerShape(if (isTv) 18.dp else 16.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), shape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.40f))
-            .padding(horizontal = 16.dp, vertical = if (isTv) 4.dp else 16.dp),
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Dispatcharr Direct Connect", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-        Text(
-            "Your own server, and everything AerioTV can do.",
-            style = MaterialTheme.typography.bodyMedium.subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Dispatcharr Direct Connect",
+                style = if (isTv) MaterialTheme.typography.titleLarge.copy(fontSize = 16.sp, lineHeight = 20.sp) else MaterialTheme.typography.titleLarge,
+                fontWeight = if (isTv) FontWeight.Bold else FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                "Your own server, and everything AerioTV can do.",
+                style = (if (isTv) MaterialTheme.typography.bodyMedium.copy(fontSize = 11.sp, lineHeight = 14.sp) else MaterialTheme.typography.bodyMedium).subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
         // Two tiles across on every device: the TV card is a 480 dp column
         // now (Apple e5cb037), three tiles wrapped their labels there.
         val perRow = 2
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 6.dp)) {
+        val tileGap = if (isTv) 7.dp else 6.dp
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(tileGap)) {
             DISPATCHARR_FEATURES.chunked(perRow).forEach { row ->
                 Row(
                     Modifier.fillMaxWidth().height(IntrinsicSize.Max),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(tileGap),
                 ) {
-                    row.forEach { FeatureTile(it, Modifier.weight(1f).fillMaxHeight(), isTv) }
+                    row.forEach { (icon, text) -> FeatureTile(icon, text, Modifier.weight(1f).fillMaxHeight(), isTv) }
                 }
             }
         }
@@ -102,15 +131,46 @@ internal fun DispatcharrHeroCard(
             contentColor = MaterialTheme.colorScheme.onPrimary,
         )
         if (isTv) {
-            Button(
-                onClick = onEnterDetails,
-                colors = filled,
-                modifier = Modifier.focusRequester(firstFocus).heightIn(min = 40.dp)
-                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+            // "YOU WILL NEED" line, Apple TV copy verbatim (AddServerView).
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append("YOU WILL NEED ") }
+                    append(
+                        "server address, plus a username and password (with API key access on) or an API key. " +
+                            "Have the QR code from the Users page? Scan it with AerioTV on your phone and set up from there.",
+                    )
+                },
+                // Apple TV 20 pt is 10 sp; 9.5 sp keeps Apple's two lines
+                // (Roboto runs about 8 percent wider than SF).
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp, lineHeight = 12.5.sp).subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // Sized to its label and centered, filled with the accent gradient,
+            // no trailing arrow (Apple OnboardingPillButton: 24 pt semibold, 36 pt
+            // side padding, 60 pt minimum height). Focus: the app's filled-pill
+            // treatment, white ring plus a slight scale (dpadFocusRing onFilled).
+            val gradient = Brush.linearGradient(
+                listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary),
+            )
+            Box(
+                modifier = Modifier
+                    .focusRequester(firstFocus)
+                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true)
+                    .clip(RoundedCornerShape(50))
+                    .background(gradient)
+                    .clickable(onClick = onEnterDetails)
+                    .heightIn(min = 30.dp)
+                    .padding(horizontal = 18.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Text("Continue with Dispatcharr", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.size(8.dp))
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    "Continue with Dispatcharr",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    maxLines = 1,
+                )
             }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -129,18 +189,34 @@ internal fun DispatcharrHeroCard(
     }
 }
 
+/**
+ * One feature row: the feature's own glyph in the accent, then the label.
+ * TV: a plain top-aligned row (no fill), 7 dp padding, 36 dp minimum height,
+ * 10 sp medium label, the glyph in a 13 dp slot (Apple TV 14 / 72 / 20 / 26 pt).
+ * Phone and tablet keep the quiet tinted tile.
+ */
 @Composable
-private fun FeatureTile(text: String, modifier: Modifier, isTv: Boolean) {
+private fun FeatureTile(icon: ImageVector, text: String, modifier: Modifier, isTv: Boolean) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-            .padding(horizontal = 10.dp, vertical = if (isTv) 4.dp else 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .then(
+                if (isTv) Modifier.heightIn(min = 36.dp).padding(7.dp)
+                else Modifier.clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ),
+        verticalAlignment = if (isTv) Alignment.Top else Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (isTv) 6.dp else 8.dp),
     ) {
-        Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onBackground)
+        Box(Modifier.size(if (isTv) 13.dp else 16.dp), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(if (isTv) 12.dp else 16.dp))
+        }
+        Text(
+            text,
+            style = if (isTv) MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp, lineHeight = 13.sp) else MaterialTheme.typography.bodySmall,
+            fontWeight = if (isTv) FontWeight.Medium else null,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
     }
 }
 
@@ -158,11 +234,26 @@ internal fun OtherSourceTypes(
     firstCardFocus: FocusRequester,
 ) {
     if (!expanded) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             OutlinedButton(
                 onClick = { onExpandedChange(true) },
-                modifier = Modifier.heightIn(min = if (isTv) 40.dp else 44.dp).dpadFocusRing(RoundedCornerShape(50)),
-            ) { Text("Other source types", style = MaterialTheme.typography.titleSmall) }
+                modifier = Modifier.heightIn(min = if (isTv) 30.dp else 44.dp).dpadFocusRing(RoundedCornerShape(50)),
+                contentPadding = if (isTv) PaddingValues(horizontal = 18.dp, vertical = 6.dp) else ButtonDefaults.ContentPadding,
+            ) {
+                Text(
+                    "Other source types",
+                    style = if (isTv) MaterialTheme.typography.titleSmall.copy(fontSize = 12.sp, lineHeight = 16.sp) else MaterialTheme.typography.titleSmall,
+                    fontWeight = if (isTv) FontWeight.SemiBold else null,
+                )
+            }
+            // Helper line under the pill, Apple TV copy (AddServerView otherSourceTypes).
+            Text(
+                if (isTv) "Xtream Codes login, or an M3U playlist with an XMLTV guide"
+                else "Xtream Codes, or an M3U playlist with a guide",
+                style = (if (isTv) MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp, lineHeight = 12.5.sp) else MaterialTheme.typography.bodySmall).subtext(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+            )
         }
         return
     }
