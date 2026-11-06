@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.aeriotv.android.ui.tv.tvFormFieldInput
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -171,6 +172,14 @@ fun SearchScreen(
                 }
                 Spacer(Modifier.width(8.dp))
             }
+            // TV: the keyboard opens on OK only and the IME session starts on
+            // that same press (TvKeyboardOnOkHost + tvFormFieldInput, the gate
+            // every TV form uses). Without it, focusing the field popped the
+            // keyboard with no live session, so the first OK and the next
+            // keystroke went nowhere (2026-11-05: typed "nba", got "qnba").
+            // Phones and tablets: the host is a pass-through.
+            com.aeriotv.android.ui.tv.TvKeyboardOnOkHost {
+            val kbGate = com.aeriotv.android.ui.tv.LocalTvKeyboardGate.current
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::onQueryChange,
@@ -183,6 +192,12 @@ fun SearchScreen(
                     // the scope chips / results with the remote. Hand focus down
                     // to the content instead.
                     .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown &&
+                            (event.key == Key.DirectionDown || event.key == Key.DirectionUp)
+                        ) {
+                            // Leaving the field closes the keyboard gate.
+                            kbGate?.armed = false
+                        }
                         if (event.type == KeyEventType.KeyDown &&
                             event.key == Key.DirectionDown
                         ) {
@@ -202,12 +217,14 @@ fun SearchScreen(
                         } else {
                             false
                         }
-                    },
+                    }
+                    .tvFormFieldInput(),
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 placeholder = { Text("Search movies, shows, programs…") },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             )
+            }
         }
 
         Spacer(Modifier.height(12.dp))
