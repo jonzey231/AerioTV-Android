@@ -91,6 +91,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.compose.runtime.DisposableEffect
@@ -1560,10 +1561,34 @@ fun GuideScreen(
                 hiddenGroupCount = hiddenGroups.size,
             )
         }
-        Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+        // Host height for the search layout below (Apple 528e34a).
+        var guideHostHeightPx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+        Column(
+            modifier = Modifier.weight(1f).fillMaxSize()
+                .onSizeChanged { guideHostHeightPx = it.height },
+        ) {
         val programsPanelShown = guideProgramSearchActive &&
             !(rows.isEmpty && guideProgramHits?.hits?.isEmpty() == true)
-        if (!(rows.isEmpty && programsPanelShown)) Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+        // Guide view search with channel matches and Programs shown (Apple
+        // 528e34a, iPhone "nba": two rows, then a blank area the rest of the
+        // grid's 55 percent, then Programs far below): the grid takes the
+        // natural height of its time header plus rows, capped at 55 percent
+        // of the host so a long match list still leaves Programs on screen,
+        // and Programs sits directly under it taking the rest. Both halves
+        // scroll. Null (grid fills, Programs 45 percent) while the host is
+        // unmeasured on the first frame; no search or no matches: unchanged.
+        val searchGridHeight: Dp? = if (programsPanelShown && !rows.isEmpty && guideHostHeightPx > 0) {
+            val natural = headerHeight + rowHeight * rows.size
+            val cap = with(LocalDensity.current) { (guideHostHeightPx * 0.55f).toDp() }
+            if (natural < cap) natural else cap
+        } else {
+            null
+        }
+        if (!(rows.isEmpty && programsPanelShown)) Box(
+            modifier = Modifier.fillMaxWidth().then(
+                if (searchGridHeight != null) Modifier.height(searchGridHeight) else Modifier.weight(1f),
+            ),
+        ) {
         if (rows.isEmpty && favoritesOnly && favoritesOrNull == null) {
             // Favorites not loaded yet: draw nothing rather than flash the
             // empty-group notice for a frame (Streamer 2026-09-03).
@@ -1674,7 +1699,7 @@ fun GuideScreen(
                 // With channel matches the grid keeps the top; with none the
                 // Programs section takes the whole area.
                 modifier = Modifier.fillMaxWidth().then(
-                    if (rows.isEmpty) Modifier.weight(1f) else Modifier.fillMaxHeight(0.45f),
+                    if (rows.isEmpty || searchGridHeight != null) Modifier.weight(1f) else Modifier.fillMaxHeight(0.45f),
                 ),
                 contentPadding = PaddingValues(
                     start = 12.dp,
