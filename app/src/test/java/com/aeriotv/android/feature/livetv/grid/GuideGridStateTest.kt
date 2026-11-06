@@ -128,6 +128,28 @@ class GuideGridStateTest {
     }
 
     @Test
+    fun backToTopReAnchorsWhenTheAnchorColumnMissesTheCurrentProgram() {
+        // Apple 3dad3e3: the anchor column sits in the top channel's previous
+        // program (timeline 30 minutes back, inside the slop); Back lands on
+        // the CURRENT program with now at the left, in one step.
+        val now = 6 * h
+        val s = state(now)
+        s.installRows(rows(espn, fox, programmes = listOf(
+            p(espn, "A", 0, now - 10 * 60_000L), p(espn, "B", now - 10 * 60_000L, 12 * h),
+            p(fox, "C", 0, 12 * h),
+        )))
+        s.moveRows(1)
+        s.pan(-1)
+        assertTrue(!s.isAwayFromNow(now))
+        assertEquals("A", s.rows.cellAt(0, s.anchorMs)!!.title)
+        assertEquals(GuideGridState.BackStep.TOP, s.back(now))
+        assertEquals(0, s.focusRow)
+        assertEquals(now - GuideGridState.DEFAULT_LEAD_MS, s.viewportStartMs)
+        assertEquals("B", s.focusedCell()!!.title)
+        assertEquals(GuideGridState.BackStep.NONE, s.back(now))
+    }
+
+    @Test
     fun aSmallPanStaysWithinTheSlop() {
         val now = 6 * h
         val s = state(now)

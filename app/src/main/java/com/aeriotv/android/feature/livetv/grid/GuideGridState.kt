@@ -374,7 +374,22 @@ class GuideGridState(
             land(0)
             return BackStep.RESTORED_NOW_AND_TOP
         }
-        if (focusRow > 0) { land(0); return BackStep.TOP }
+        // Apple 3dad3e3 parity (Apple TV trace 2026-11-06 14:15): with the
+        // timeline a few minutes in the past, under the half-hour slop, the
+        // anchor column sits in the top channel's PREVIOUS program, so the
+        // jump landed there instead of on the current one. The home position
+        // is "top channel, current program, now at the left": when the anchor
+        // column would miss the current program and re-anchoring would
+        // actually move the viewport, re-anchor to now first.
+        val current = rows.cellAt(0, nowMs)
+        val anchorMissesCurrent = current != null &&
+            rows.cellAt(0, anchorMs)?.startMillis != current.startMillis &&
+            (nowMs - leadMs).coerceIn(minViewportStart(), maxViewportStart()) != viewportStartMs
+        if (focusRow > 0 || anchorMissesCurrent) {
+            if (anchorMissesCurrent) anchorToNow(nowMs)
+            land(0)
+            return BackStep.TOP
+        }
         return BackStep.NONE
     }
 
