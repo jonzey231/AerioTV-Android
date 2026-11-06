@@ -147,8 +147,11 @@ fun RecordProgramSheet(
     // for server-capable accounts too (still switchable in the sheet).
     val defaultDestination by settingsViewModel.dvrDefaultDestination
         .collectAsStateWithLifecycle(initialValue = "server")
-    var destinationServer by remember(canRecordToServer, defaultDestination) {
-        mutableStateOf(canRecordToServer && defaultDestination != "local")
+    // iOS onAppear: a future program always records on the server (this
+    // device cannot record while the app is closed); only a live program
+    // follows the Default Destination and shows the Destination choice.
+    var destinationServer by remember(canRecordToServer, defaultDestination, isLive) {
+        mutableStateOf(canRecordToServer && (!isLive || defaultDestination != "local"))
     }
     var removeCommercials by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
@@ -511,7 +514,9 @@ fun RecordProgramSheet(
                 // account (or any non-Dispatcharr source) can only record to
                 // this device, so the server option is hidden and the record is
                 // forced local (destinationServer seeded false above).
-                if (canRecordToServer) {
+                // iOS RecordProgramSheet: only for a LIVE program on
+                // Dispatcharr; a future program always records on the server.
+                if (isDispatcharr && isLive && canRecordToServer) {
                     Spacer(Modifier.height(18.dp))
                     SectionLabel("Destination")
                     Spacer(Modifier.height(8.dp))
@@ -533,7 +538,7 @@ fun RecordProgramSheet(
                 // this device. Surface an orange callout explaining why the
                 // server option isn't available. Mirrors iOS .orange
                 // "Saving to this device" hint.
-                if (isDispatcharr && !canRecordToServer) {
+                if (isDispatcharr && isLive && !canRecordToServer) {
                     Spacer(Modifier.height(18.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -564,7 +569,7 @@ fun RecordProgramSheet(
 
                 // Comskip is server-side only; hide it entirely when the account
                 // can't record to the server (iOS parity).
-                if (canRecordToServer) {
+                if (isDispatcharr && canRecordToServer) {
                     Spacer(Modifier.height(18.dp))
                     RecordCard {
                     Row(
@@ -579,7 +584,8 @@ fun RecordProgramSheet(
                                 fontWeight = FontWeight.Medium,
                             )
                             Text(
-                                text = "Detect and remove ad breaks after recording. Processed server-side.",
+                                text = if (destinationServer) "Detect and remove ad breaks after recording. Processed server-side."
+                                else "Removing commercials is only available when recording to a Dispatcharr server via a Dispatcharr API playlist.",
                                 style = MaterialTheme.typography.bodySmall.subtext(),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
