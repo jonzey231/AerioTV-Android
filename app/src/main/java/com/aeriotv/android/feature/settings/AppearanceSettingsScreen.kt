@@ -33,6 +33,9 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -284,7 +287,17 @@ fun AppearanceSettingsScreen(
                             // One choice: System, Light, Dark, True Black (GH #105
                             // OLED black is now the fourth Mode, not a toggle).
                             options = AppearanceChoice.entries.map { c ->
-                                SettingsPickerOption(value = c, label = c.label, subtitle = c.subtitle)
+                                // Apple appearanceModeChoices glyphs: half circle,
+                                // sun, moon, and moon with stars.
+                                SettingsPickerOption(
+                                    value = c, label = c.label, subtitle = c.subtitle,
+                                    icon = when (c) {
+                                        AppearanceChoice.System -> Icons.Filled.Contrast
+                                        AppearanceChoice.Light -> Icons.Filled.LightMode
+                                        AppearanceChoice.Dark -> Icons.Filled.DarkMode
+                                        AppearanceChoice.TrueBlack -> Icons.Filled.NightsStay
+                                    },
+                                )
                             },
                             selected = AppearanceChoice.of(appearanceMode, trueBlack),
                             onSelect = viewModel::setAppearanceChoice,
