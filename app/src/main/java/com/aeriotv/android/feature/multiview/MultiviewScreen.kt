@@ -152,6 +152,9 @@ import com.aeriotv.android.feature.settings.bufferMillisFor
 
 private const val TAG = "MultiviewScreen"
 
+/** TV Multiview chrome auto-hide: Apple's MultiviewChromeState fadeDelayNs (5 s). */
+private const val MULTIVIEW_TV_CHROME_HIDE_MS = 5_000L
+
 /**
  * Multiview tile grid. Mirrors iOS MultiviewContainerView (Aerio/Features/
  * Multiview/MultiviewContainerView.swift) - one MPVPlayerView per selected
@@ -1208,8 +1211,12 @@ fun MultiviewScreen(
     }
     LaunchedEffect(chromeVisible, lastInteractionAt, relocatingIndex, soleTileIssue) {
         if (chromeVisible && relocatingIndex == null && !soleTileIssue) {
+            // TV: 5 s, Apple's MultiviewChromeState fade (the focus
+            // indicator and the tile pills ride on it); the 3 s single
+            // player value hid the tile pills two seconds before Apple TV.
             kotlinx.coroutines.delay(
-                com.aeriotv.android.feature.player.PLAYER_CHROME_HIDE_MS,
+                if (isTvDevice) MULTIVIEW_TV_CHROME_HIDE_MS
+                else com.aeriotv.android.feature.player.PLAYER_CHROME_HIDE_MS,
             )
             chromeVisible = false
         }
@@ -2023,27 +2030,30 @@ private fun Tile(
                     // Above the picture's bottom inset (the lowest 22%):
                     // tickers and lower thirds fill it; the pill sat on ESPN2's
                     // ticker (tvOS review 2026-11-05, Apple parity).
+                    // Apple MultiviewTileView.formatPill: 8 pt from the side,
+                    // max(8 pt, 22 percent) from the bottom, 6 pt between the
+                    // two pills (halved for the 960 dp canvas).
                     modifier = Modifier.align(Alignment.TopEnd)
                         .fillMaxHeight(0.78f)
                         .wrapContentHeight(Alignment.Bottom)
-                        .padding(6.dp),
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
                 ) {
-                    val pillSize = if (LocalConfiguration.current.smallestScreenWidthDp >= 600) 12.sp else 10.sp
+                    // Apple TV draws the tile pills at 14 pt on the 1920 pt
+                    // canvas (formatPillSize), 7 sp on the 960 dp one; the
+                    // Streamer drew them at 12 sp, 1.7 times Apple's size
+                    // (Logan 2026-11-06: "they don't look as nice as Apple
+                    // TV"). iPad 12 and iPhone 10 stay.
+                    val pillSize = if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) 7.sp
+                    else if (LocalConfiguration.current.smallestScreenWidthDp >= 600) 12.sp else 10.sp
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (tilePipeline != null) {
-                            com.aeriotv.android.feature.player.PlayerFormatBadge(
-                                text = tilePipeline,
-                                fontSize = pillSize,
-                            )
+                            MultiviewTilePill(text = tilePipeline, fontSize = pillSize)
                         }
                         if (tileFormatBadge != null) {
-                            com.aeriotv.android.feature.player.PlayerFormatBadge(
-                                text = tileFormatBadge,
-                                fontSize = pillSize,
-                            )
+                            MultiviewTilePill(text = tileFormatBadge, fontSize = pillSize)
                         }
                     }
                 }
@@ -3305,6 +3315,34 @@ private fun ExoTile(
  * the tile actually loaded with the routing [buildTileMediaSource] applies.
  * Updates on every media item change; null while nothing is loaded.
  */
+/**
+ * One Multiview tile pill, Apple's capsule (TVVideoFormatBadge and the tile
+ * pipeline pill): semibold text in white at 55 percent, side padding 16/18
+ * and vertical padding 10/18 of the font size, on a neutral translucent
+ * capsule standing in for the ultra-thin material: measured on the Apple TV
+ * simulator the material reads as about gray 150 at 60 percent over the
+ * picture (lighter on a dark scene, darker on a bright one), where a white
+ * 14 percent fill vanished on a bright scene.
+ */
+@Composable
+internal fun MultiviewTilePill(text: String, fontSize: androidx.compose.ui.unit.TextUnit) {
+    val density = LocalDensity.current
+    val sidePad = with(density) { (fontSize.toPx() * 16f / 18f).toDp() }
+    val vertPad = with(density) { (fontSize.toPx() * 10f / 18f).toDp() }
+    Text(
+        text = text,
+        fontSize = fontSize,
+        lineHeight = fontSize * 1.2f,
+        fontWeight = FontWeight.SemiBold,
+        color = Color.White.copy(alpha = 0.55f),
+        maxLines = 1,
+        modifier = Modifier
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(Color(0.59f, 0.59f, 0.59f, 0.60f))
+            .padding(horizontal = sidePad, vertical = vertPad),
+    )
+}
+
 @androidx.compose.runtime.Composable
 internal fun rememberTilePipelineLabel(player: ExoPlayer?): String? {
     var label by remember(player) {
