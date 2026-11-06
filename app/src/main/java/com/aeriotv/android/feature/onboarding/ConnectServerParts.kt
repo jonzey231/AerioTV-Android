@@ -140,9 +140,9 @@ internal fun DispatcharrHeroCard(
                             "Have the QR code from the Users page? Scan it with AerioTV on your phone and set up from there.",
                     )
                 },
-                // Apple TV 20 pt is 10 sp; 9.5 sp keeps Apple's two lines
+                // Apple TV 20 pt is 10 sp; 9 sp keeps Apple's two lines
                 // (Roboto runs about 8 percent wider than SF).
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp, lineHeight = 12.5.sp).subtext(),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp, lineHeight = 12.sp).subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -191,16 +191,18 @@ internal fun DispatcharrHeroCard(
 
 /**
  * One feature row: the feature's own glyph in the accent, then the label.
- * TV: a plain top-aligned row (no fill), 7 dp padding, 36 dp minimum height,
- * 10 sp medium label, the glyph in a 13 dp slot (Apple TV 14 / 72 / 20 / 26 pt).
- * Phone and tablet keep the quiet tinted tile.
+ * TV: a plain top-aligned row (no fill), 10 sp medium label, the glyph in a
+ * 13 dp slot (Apple TV 20 / 26 pt). Apple's 72 pt rows with 14 pt padding
+ * would be 36 / 7 dp; 28 / 4 dp here because the Android TV page keeps the
+ * tab bar above it (about 60 dp Apple TV does not spend) and has to fit the
+ * 540 dp canvas without a scroll. Phone and tablet keep the quiet tinted tile.
  */
 @Composable
 private fun FeatureTile(icon: ImageVector, text: String, modifier: Modifier, isTv: Boolean) {
     Row(
         modifier = modifier
             .then(
-                if (isTv) Modifier.heightIn(min = 36.dp).padding(7.dp)
+                if (isTv) Modifier.heightIn(min = 28.dp).padding(horizontal = 7.dp, vertical = 4.dp)
                 else Modifier.clip(RoundedCornerShape(10.dp))
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                     .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -234,7 +236,7 @@ internal fun OtherSourceTypes(
     firstCardFocus: FocusRequester,
 ) {
     if (!expanded) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(if (isTv) 2.dp else 4.dp)) {
             OutlinedButton(
                 onClick = { onExpandedChange(true) },
                 modifier = Modifier.heightIn(min = if (isTv) 30.dp else 44.dp).dpadFocusRing(RoundedCornerShape(50)),

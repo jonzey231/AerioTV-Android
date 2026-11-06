@@ -144,14 +144,18 @@ fun ChooseSourceTypeScreen(
             val maxW = if (isTv) 480.dp else vp.onboardingMaxWidth
             Column(
                 modifier = if (maxW != Dp.Unspecified) Modifier.widthIn(max = maxW).fillMaxWidth() else Modifier.fillMaxWidth(),
-                // TV: Apple TV's 28 pt between blocks is 14 dp here; the page
-                // bar is gone on TV, which gave back the 56 dp the earlier
-                // 4 dp spacing had to save (measured 2026-11-06).
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                // TV: Apple TV's 28 pt between blocks would be 14 dp; 8 dp
+                // here because the tab bar stays above this page (about 60 dp
+                // Apple TV does not spend) and the Set up from another device
+                // card has to fit the 540 dp canvas at open (measured
+                // 2026-11-06 on the 1080p emulator: 14 dp overflowed by about
+                // 60 dp, 10 dp by 16 dp, and the first Down scrolled the
+                // title away each time). Phones and tablets keep 14 dp.
+                verticalArrangement = Arrangement.spacedBy(if (isTv) 8.dp else 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (onboarding) StepCaption(1, 3)
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(if (isTv) 6.dp else 4.dp)) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         "Connect a Server",
                         style = MaterialTheme.typography.headlineSmall,
@@ -195,8 +199,8 @@ fun ChooseSourceTypeScreen(
                             "Live TV tab, or navigate to Settings. Your playlist, profiles, and preferences come over in one step.",
                         onClick = onSetUpFromPhone,
                         compact = isTv,
-                        // Apple TV detail text is 20 pt (10 sp); 9.5 sp keeps its two lines.
-                        subtitleStyle = if (isTv) MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp, lineHeight = 12.5.sp) else null,
+                        // Apple TV detail text is 20 pt (10 sp); 9 sp keeps its two lines.
+                        subtitleStyle = if (isTv) MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp, lineHeight = 12.sp) else null,
                     )
                 }
             }
