@@ -3352,7 +3352,9 @@ private fun ExoTile(
  */
 /**
  * One Multiview tile pill, Apple's capsule (TVVideoFormatBadge and the tile
- * pipeline pill): semibold text in white at 55 percent, side padding 16/18
+ * pipeline pill): semibold text in white at 85 percent (raised from Apple's
+ * 55 percent, Logan 2026-11-06: the pills were tough to read on the Streamer;
+ * Apple matches), side padding 16/18
  * and vertical padding 10/18 of the font size, on a neutral translucent
  * capsule standing in for the ultra-thin material: measured on the Apple TV
  * simulator the material reads as about gray 150 at 60 percent over the
@@ -3369,7 +3371,7 @@ internal fun MultiviewTilePill(text: String, fontSize: androidx.compose.ui.unit.
         fontSize = fontSize,
         lineHeight = fontSize * 1.2f,
         fontWeight = FontWeight.SemiBold,
-        color = Color.White.copy(alpha = 0.55f),
+        color = Color.White.copy(alpha = 0.85f),
         maxLines = 1,
         modifier = Modifier
             .clip(androidx.compose.foundation.shape.CircleShape)
