@@ -1613,8 +1613,15 @@ internal val GUIDE_TV_RAIL_BAND = 11.dp
 /** Start / end inset of the band's contents. */
 private val GUIDE_TV_BAND_INSET = 4.dp
 
-/** The band's glyph box (favorite star, radio glyph, catch-up clock). */
-private val GUIDE_TV_BAND_GLYPH = 8.dp
+/**
+ * The band's glyph box (favorite star, radio glyph, catch-up clock). 10 dp
+ * renders the Material glyphs (which keep about 2/24 of their box clear on
+ * each side) at Apple TV's size: the Apple clock measures 15.5 x 14.5 pt on
+ * the 1920 pt canvas (LogoMetrics.glyphSize 14 pt, simulator 2026-11-06);
+ * at 8 dp the Android clock drew 14 x 12 px and the star 12 x 12 px on the
+ * 1920 px canvas, about a fifth smaller (Logan: the radio glyph read small).
+ */
+private val GUIDE_TV_BAND_GLYPH = 10.dp
 
 /** Space between the band glyph slots. */
 private val GUIDE_TV_BAND_GLYPH_GAP = 3.dp
