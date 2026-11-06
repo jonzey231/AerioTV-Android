@@ -998,11 +998,14 @@ private fun GridRow(
         val railContentW = nameW
         // The width the logo and the name actually get.
         val logoColumnW = railContentW
-        // Radio glyph: name-font-sized, one gap after the name text, both
-        // centered together in the name rect, so the name gives up exactly
-        // the glyph's width and still ellipsizes inside the column.
-        val radioIconPx = if (channel.isRadio) railNameStyle.fontSize.toPx() else 0f
-        val radioGapPx = if (channel.isRadio) (if (isTv) 6.dp else 4.dp).toPx() else 0f
+        // Radio glyph (phone / tablet): name-font-sized, one gap after the
+        // name text, both centered together in the name rect, so the name
+        // gives up exactly the glyph's width and still ellipsizes inside the
+        // column. On TV the glyph lives in the band's fixed slot instead
+        // (Logan 2026-11-06, Apple 88ae566), so the name keeps the full width.
+        val inlineRadio = channel.isRadio && !isTv
+        val radioIconPx = if (inlineRadio) railNameStyle.fontSize.toPx() else 0f
+        val radioGapPx = if (inlineRadio) (if (isTv) 6.dp else 4.dp).toPx() else 0f
         val name = if (rail.names) textCache.getOrPut(RAIL_NAME_KEY) {
             // The star is always the corner glyph now (Logan 2026-09-10: left
             // of the catch-up clock on TV too), never inline in the name.
@@ -1151,7 +1154,7 @@ private fun GridRow(
                 val pairW = textW + radioGapPx + radioIconPx
                 val left = railContentLeft + rect.left + (rect.width - pairW) / 2f
                 drawText(it.title, topLeft = Offset(left, bandH + rect.top))
-                if (channel.isRadio) {
+                if (inlineRadio) {
                     val iconTop = bandH + rect.top + (it.title.size.height - radioIconPx) / 2f
                     translate(left = left + textW + radioGapPx, top = iconTop) {
                         with(radioPainter) { draw(Size(radioIconPx, radioIconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tertiary)) }
@@ -1186,14 +1189,33 @@ private fun GridRow(
             val endInset = bandInset + hairlinePx
             val gap = (if (isTv) GUIDE_TV_BAND_GLYPH_GAP else 4.dp).toPx()
             val glyphTop = ((bandH - iconPx) / 2f).coerceAtLeast(0f)
-            // The clock sits hard at the end; the star sits one gap before it.
+            // The clock sits hard at the end. On TV the trailing side carries
+            // THREE fixed-width slots, left to right: favorite star, radio
+            // glyph, catch-up clock, each reserved whether shown or not, so
+            // every mark sits at the same x in every cell whatever the name
+            // length, favorite, or catch-up state (Logan 2026-11-06, Apple
+            // 88ae566: the radio glyph used to follow the name and wandered
+            // with its length). Phone keeps the star one gap before the clock
+            // only when the clock is there, and the radio glyph inline.
             val clockLeft = (railWidthPx - iconPx - endInset).coerceAtLeast(0f)
+            val slotW = iconPx + gap
+            val radioLeft = (clockLeft - slotW).coerceAtLeast(0f)
+            val starLeft = if (isTv) {
+                (clockLeft - 2 * slotW).coerceAtLeast(0f)
+            } else {
+                (clockLeft - (if (channel.hasCatchup) iconPx + gap else 0f)).coerceAtLeast(0f)
+            }
             if (isFavorite) {
                 // Same box and same baseline as the catch-up clock so the two
                 // sit on one line (a text glyph sat lower, Logan 2026-09-09).
-                val left = (clockLeft - (if (channel.hasCatchup) iconPx + gap else 0f)).coerceAtLeast(0f)
-                translate(left = left, top = glyphTop) {
+                translate(left = starLeft, top = glyphTop) {
                     with(starPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color(0xFFFFA502))) }
+                }
+            }
+            if (isTv && channel.isRadio) {
+                // Same box and accent as the catch-up clock.
+                translate(left = radioLeft, top = glyphTop) {
+                    with(radioPainter) { draw(Size(iconPx, iconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(colors.primary)) }
                 }
             }
             if (channel.hasCatchup) {
@@ -1591,10 +1613,10 @@ internal val GUIDE_TV_RAIL_BAND = 11.dp
 /** Start / end inset of the band's contents. */
 private val GUIDE_TV_BAND_INSET = 4.dp
 
-/** The band's glyph box (favorite star, catch-up clock). */
+/** The band's glyph box (favorite star, radio glyph, catch-up clock). */
 private val GUIDE_TV_BAND_GLYPH = 8.dp
 
-/** Space between the two band glyphs. */
+/** Space between the band glyph slots. */
 private val GUIDE_TV_BAND_GLYPH_GAP = 3.dp
 
 /**

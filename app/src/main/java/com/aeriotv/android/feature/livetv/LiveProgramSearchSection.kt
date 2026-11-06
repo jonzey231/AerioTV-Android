@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -133,7 +134,7 @@ private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modi
     val corner = com.aeriotv.android.feature.channels.CHANNEL_ROW_CORNER
     val shape = RoundedCornerShape(corner)
     val height = rememberChannelCardHeight(isTv)
-    Row(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
@@ -145,6 +146,12 @@ private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modi
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .height(height)
             .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+    // TV: the radio mark parks top trailing at a fixed inset (Logan
+    // 2026-11-06, Apple 88ae566), never after the name.
+    if (isTv && hit.channel.isRadio) TvRadioCornerGlyph(Modifier.align(Alignment.TopEnd))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -215,8 +222,9 @@ private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modi
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (hit.channel.isRadio) {
-                    if (name != null) Spacer(Modifier.width(if (isTv) 6.dp else 4.dp))
+                val inlineRadio = hit.channel.isRadio && !isTv
+                if (inlineRadio) {
+                    if (name != null) Spacer(Modifier.width(4.dp))
                     com.aeriotv.android.feature.channels.RadioChannelGlyph(
                         fontSize = MaterialTheme.typography.bodySmall.fontSize,
                     )
@@ -226,7 +234,7 @@ private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modi
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    modifier = Modifier.padding(start = if (hit.channel.isRadio) 4.dp else 0.dp),
+                    modifier = Modifier.padding(start = if (inlineRadio) 4.dp else 0.dp),
                 )
                 if (hit.isAiring(now)) {
                     Spacer(Modifier.width(8.dp))
@@ -235,6 +243,23 @@ private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modi
             }
         }
     }
+    }
+}
+
+/**
+ * TV rows (Live TV search cards, program hits): the radio mark PARKED in the
+ * row's top-trailing corner at a fixed inset, like the guide band's slot, so
+ * its x never depends on the channel name's length (Logan 2026-11-06, Apple
+ * 88ae566). Same size and accent as the channel row's catch-up clock.
+ */
+@Composable
+internal fun TvRadioCornerGlyph(modifier: Modifier = Modifier) {
+    androidx.compose.material3.Icon(
+        imageVector = Icons.Filled.Radio,
+        contentDescription = "Radio",
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = modifier.padding(top = 2.dp, end = 2.dp).size(13.dp),
+    )
 }
 
 /** Program art slot width: the List view channel card's leading column. */
@@ -301,7 +326,7 @@ private fun LiveSearchCard(
     val focused by interaction.collectIsFocusedAsState()
     val shape = RoundedCornerShape(10.dp)
     val logoSize = if (isTv) 56.dp else 40.dp
-    Row(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
@@ -312,6 +337,11 @@ private fun LiveSearchCard(
             .then(if (focused) Modifier.border(2.dp, Color.White, shape) else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 10.dp),
+    ) {
+    // TV: the radio mark parks top trailing (Logan 2026-11-06, Apple 88ae566).
+    if (isTv && radio) TvRadioCornerGlyph(Modifier.align(Alignment.TopEnd))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -348,8 +378,8 @@ private fun LiveSearchCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (radio) {
-                    Spacer(Modifier.width(if (isTv) 6.dp else 4.dp))
+                if (radio && !isTv) {
+                    Spacer(Modifier.width(4.dp))
                     com.aeriotv.android.feature.channels.RadioChannelGlyph(
                         fontSize = MaterialTheme.typography.titleMedium.fontSize,
                     )
@@ -364,6 +394,7 @@ private fun LiveSearchCard(
             )
             if (live) LiveNowBadge()
         }
+    }
     }
 }
 

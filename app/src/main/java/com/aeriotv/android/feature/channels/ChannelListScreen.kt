@@ -102,6 +102,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
@@ -1283,6 +1284,22 @@ internal fun ChannelRow(
             ),
     ) {
         Box {
+            // TV: the radio mark is PARKED top trailing at a fixed inset, like
+            // the guide band's slot, so its x never depends on the channel
+            // name's length (Logan 2026-11-06, Apple 88ae566). Same size and
+            // accent as the row's catch-up clock.
+            if (isTv && channel.isRadio) {
+                Icon(
+                    imageVector = Icons.Filled.Radio,
+                    contentDescription = "Radio",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 10.dp, end = 12.dp)
+                        .size(13.dp)
+                        .zIndex(1f),
+                )
+            }
             // IntrinsicSize.Min makes the row measure to the (unchanged) info
             // column, so the row height is still driven by the text column and
             // is identical to before. The leading logo/number column then
@@ -1388,7 +1405,9 @@ internal fun ChannelRow(
                             // parity): the "radio" glyph right after the
                             // name, name-sized, secondary tint, so the pick
                             // that opens Radio Mode reads as a radio channel.
-                            if (channel.isRadio) {
+                            // Phone / tablet only; TV parks it top trailing
+                            // in a fixed slot (see the Box overlay below).
+                            if (channel.isRadio && !isTv) {
                                 Spacer(Modifier.width(if (isTv) 6.dp else 4.dp))
                                 RadioChannelGlyph(
                                     fontSize = MaterialTheme.typography.bodyLarge.fontSize,
