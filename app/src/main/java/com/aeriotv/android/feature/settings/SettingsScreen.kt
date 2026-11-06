@@ -516,7 +516,7 @@ private fun PlaylistsSection(
             // is one focus stop with no circle, so tvOS points at Actions.
             if (isTv) {
                 // tvOS pane: plain sentence, no glyph (Apple Phase 3 item 10).
-                SectionFooter("Select a playlist to open it; Set Active is in its Actions")
+                SectionFooter("Select a playlist to open it, then Set Active in its Actions to make it active.")
             } else {
                 // iPhone/iPad: Label with the list.bullet glyph. Apple's second
                 // line ("Tap Edit to reorder") is NOT mirrored: Apple removed
