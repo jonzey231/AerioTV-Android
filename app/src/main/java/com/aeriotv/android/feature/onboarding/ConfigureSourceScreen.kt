@@ -335,9 +335,12 @@ fun ConfigureSourceScreen(
                 ),
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
+        // TV: the details form takes a 600 dp column (Apple e5cb037: the
+        // Edit Playlist reading column, not the full width).
+        val formMaxWidth = if (isTv) 600.dp else vp.onboardingMaxWidth
         Column(
-            modifier = if (vp.onboardingMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
-                Modifier.widthIn(max = vp.onboardingMaxWidth).fillMaxWidth()
+            modifier = if (formMaxWidth != androidx.compose.ui.unit.Dp.Unspecified)
+                Modifier.widthIn(max = formMaxWidth).fillMaxWidth()
             else
                 Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp),

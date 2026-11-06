@@ -90,7 +90,10 @@ fun ChooseSourceTypeScreen(
         if (!(isTv && onboarding)) {
             // Phones and tablets: "Add Playlist" centered over the centered content, as on iPhone and iPad. TV unchanged.
             val bar: @Composable (@Composable () -> Unit, @Composable () -> Unit, @Composable androidx.compose.foundation.layout.RowScope.() -> Unit, androidx.compose.material3.TopAppBarColors) -> Unit =
-                if (isTv) { t, n, a, c -> TopAppBar(title = t, navigationIcon = n, actions = a, colors = c) }
+                // TV: a 56 dp page bar (the 64 dp default put the handoff
+                // card's bottom edge 9 dp past the screen, measured 16:11 on
+                // the 1080p emulator).
+                if (isTv) { t, n, a, c -> TopAppBar(title = t, navigationIcon = n, actions = a, colors = c, expandedHeight = 56.dp) }
                 else { t, n, a, c -> androidx.compose.material3.CenterAlignedTopAppBar(title = t, navigationIcon = n, actions = a, colors = c) }
             bar(
                 {
@@ -123,13 +126,24 @@ fun ChooseSourceTypeScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(scroll)
-                .padding(horizontal = vp.gutter, vertical = if (isTv && onboarding) 20.dp else 12.dp),
+                // TV type picker: no vertical padding, so title through the
+                // Set up from another device card fits the safe area and the
+                // first focus (Continue) never drags the page down (Apple
+                // 256f206, Logan tvOS review 2026-11-06).
+                .padding(horizontal = vp.gutter, vertical = if (isTv) 0.dp else 12.dp),
             contentAlignment = Alignment.TopCenter,
         ) {
-            val maxW = if (isTv) 760.dp else vp.onboardingMaxWidth
+            // TV: one 480 dp column on the 960 dp canvas (Apple e5cb037: the
+            // page spanned most of the screen with Continue filling the card
+            // and the handoff card the same width).
+            val maxW = if (isTv) 480.dp else vp.onboardingMaxWidth
             Column(
                 modifier = if (maxW != Dp.Unspecified) Modifier.widthIn(max = maxW).fillMaxWidth() else Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(if (isTv) 10.dp else 14.dp),
+                // TV: 4 dp between blocks so title through the handoff card
+                // fits the 540 dp canvas under the tab bar and the page bar
+                // (measured 16:07 on the 1080p emulator: 10 dp overflowed by
+                // about 65 dp and the first Down scrolled the title away).
+                verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (onboarding) StepCaption(1, 3)

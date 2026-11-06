@@ -55,7 +55,7 @@ private val DISPATCHARR_FEATURES = listOf(
 
 /**
  * Dispatcharr hero card on Connect a Server: centered title, six feature
- * tiles (3 across on TV, 2 on phone), the "You will need" line, then the
+ * tiles (2 across), the "You will need" line, then the
  * CTA (TV: Continue with Dispatcharr; phone: Scan QR code + Enter details).
  * Same quiet border as the other cards.
  */
@@ -73,9 +73,9 @@ internal fun DispatcharrHeroCard(
             .clip(shape)
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), shape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.40f))
-            .padding(horizontal = 16.dp, vertical = if (isTv) 12.dp else 16.dp),
+            .padding(horizontal = 16.dp, vertical = if (isTv) 4.dp else 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(if (isTv) 8.dp else 10.dp),
+        verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 10.dp),
     ) {
         Text("Dispatcharr Direct Connect", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
         Text(
@@ -84,14 +84,16 @@ internal fun DispatcharrHeroCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        val perRow = if (isTv) 3 else 2
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Two tiles across on every device: the TV card is a 480 dp column
+        // now (Apple e5cb037), three tiles wrapped their labels there.
+        val perRow = 2
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 6.dp)) {
             DISPATCHARR_FEATURES.chunked(perRow).forEach { row ->
                 Row(
                     Modifier.fillMaxWidth().height(IntrinsicSize.Max),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    row.forEach { FeatureTile(it, Modifier.weight(1f).fillMaxHeight()) }
+                    row.forEach { FeatureTile(it, Modifier.weight(1f).fillMaxHeight(), isTv) }
                 }
             }
         }
@@ -103,7 +105,7 @@ internal fun DispatcharrHeroCard(
             Button(
                 onClick = onEnterDetails,
                 colors = filled,
-                modifier = Modifier.focusRequester(firstFocus).heightIn(min = 44.dp)
+                modifier = Modifier.focusRequester(firstFocus).heightIn(min = 40.dp)
                     .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
             ) {
                 Text("Continue with Dispatcharr", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -128,12 +130,12 @@ internal fun DispatcharrHeroCard(
 }
 
 @Composable
-private fun FeatureTile(text: String, modifier: Modifier) {
+private fun FeatureTile(text: String, modifier: Modifier, isTv: Boolean) {
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = if (isTv) 4.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -159,7 +161,7 @@ internal fun OtherSourceTypes(
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             OutlinedButton(
                 onClick = { onExpandedChange(true) },
-                modifier = Modifier.heightIn(min = 44.dp).dpadFocusRing(RoundedCornerShape(50)),
+                modifier = Modifier.heightIn(min = if (isTv) 40.dp else 44.dp).dpadFocusRing(RoundedCornerShape(50)),
             ) { Text("Other source types", style = MaterialTheme.typography.titleSmall) }
         }
         return
