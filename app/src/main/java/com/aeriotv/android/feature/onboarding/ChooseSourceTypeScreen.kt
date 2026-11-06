@@ -73,7 +73,15 @@ fun ChooseSourceTypeScreen(
     val firstFocus = remember { FocusRequester() }
     val otherFocus = remember { FocusRequester() }
     var showOthers by rememberSaveable { mutableStateOf(false) }
-    if (isTv) LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
+    val scroll = rememberScrollState()
+    if (isTv) LaunchedEffect(Unit) {
+        runCatching { firstFocus.requestFocus() }
+        // The focus bring-into-view nudged the column up and slid the
+        // "Connect a Server" heading under the top bar (2026-11-05). The hero
+        // card fits below the heading, so park the column at its top.
+        kotlinx.coroutines.delay(300)
+        scroll.scrollTo(0)
+    }
     LaunchedEffect(showOthers) {
         if (isTv) runCatching { if (showOthers) otherFocus.requestFocus() else firstFocus.requestFocus() }
     }
@@ -114,7 +122,7 @@ fun ChooseSourceTypeScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(horizontal = vp.gutter, vertical = if (isTv && onboarding) 20.dp else 12.dp),
             contentAlignment = Alignment.TopCenter,
         ) {
@@ -133,7 +141,7 @@ fun ChooseSourceTypeScreen(
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    "AerioTV is built around Dispatcharr. Other playlist types work too, but with fewer features.",
+                    "AerioTV is built around Dispatcharr. Other playlist types work too, with fewer features.",
                     style = MaterialTheme.typography.bodyMedium.subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -147,12 +155,6 @@ fun ChooseSourceTypeScreen(
                     },
                     firstFocus = firstFocus,
                 )
-                Text(
-                    text = "*AerioTV is not officially affiliated with the Dispatcharr project",
-                    style = MaterialTheme.typography.bodySmall.subtext(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
                 OtherSourceTypes(
                     isTv = isTv,
                     expanded = showOthers,
@@ -160,16 +162,17 @@ fun ChooseSourceTypeScreen(
                     onChoose = onChoose,
                     firstCardFocus = otherFocus,
                 )
-                // Phones and tablets: the same receiver the TV footer opens.
-                if (onSetUpFromPhone != null && !(isTv && onboarding)) {
-                    androidx.compose.material3.OutlinedButton(
+                // Settings > Add Playlist only (Welcome has its own card), every
+                // device: Apple AddServerView's OnboardingActionCard, same copy.
+                if (onSetUpFromPhone != null && !onboarding) {
+                    com.aeriotv.android.feature.onboarding.components.OnboardingCard(
+                        icon = Icons.Filled.Devices,
+                        title = "Set up from another device",
+                        subtitle = "Fastest. On your other device, scan the code on the next screen, tap the banner on the " +
+                            "Live TV tab, or navigate to Settings. Your playlist, profiles, and preferences come over in one step.",
                         onClick = onSetUpFromPhone,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).dpadFocusRing(RoundedCornerShape(50)),
-                    ) {
-                        Icon(Icons.Filled.Devices, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text("Set up from another device")
-                    }
+                        compact = isTv,
+                    )
                 }
             }
         }
@@ -182,15 +185,9 @@ fun ChooseSourceTypeScreen(
             ) {
                 Box(Modifier.weight(1f)) { TvBackHint("Back to Welcome") }
                 StepDots(current = 1, total = 3)
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    if (onSetUpFromPhone != null) {
-                        TextButton(onClick = onSetUpFromPhone, modifier = Modifier.dpadFocusRing(RoundedCornerShape(50))) {
-                            Icon(Icons.Filled.Devices, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.size(6.dp))
-                            Text("Set up from another device")
-                        }
-                    }
-                }
+                // Right column kept empty and equal width so the dots stay
+                // centered (Apple tvFooter); Welcome carries the handoff card.
+                Box(Modifier.weight(1f))
             }
         }
     }
