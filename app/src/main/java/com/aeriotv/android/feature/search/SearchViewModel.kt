@@ -61,6 +61,9 @@ class SearchViewModel @Inject constructor(
             /** [M3UChannel.id] of the matched channel (GH #162): a live
              *  result plays this channel instead of jumping to the guide. */
             val channelRowId: String? = null,
+            /** The matched channel is flagged radio ([M3UChannel.isRadio]):
+             *  the row shows the radio glyph after the channel name. */
+            val channelIsRadio: Boolean = false,
         ) : Result {
             override val key = "epg-${programme.channelId}-${programme.startMillis}"
             val isLive: Boolean
@@ -168,6 +171,7 @@ class SearchViewModel @Inject constructor(
                     channelName = ch?.name?.takeIf { it.isNotBlank() },
                     channelLogo = ch?.tvgLogo?.takeIf { it.isNotBlank() },
                     channelRowId = ch?.id,
+                    channelIsRadio = ch?.isRadio == true,
                 )
             }
             // The same airing can be cached under more than one raw key (the

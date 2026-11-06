@@ -203,14 +203,30 @@ private fun LiveProgramHitRow(hit: LiveProgramHit, isTv: Boolean, modifier: Modi
                     )
                 }
                 Spacer(Modifier.width(6.dp))
-                Text(
-                    text = listOf(hit.channel.name.takeIf { it.isNotBlank() }, hit.channel.channelNumber?.takeIf { it.isNotBlank() })
-                        .filterNotNull().joinToString(" · "),
+                // Name, then the radio glyph right after it (Logan 2026-11-05,
+                // Apple parity), then the number; the name alone ellipsizes.
+                val name = hit.channel.name.takeIf { it.isNotBlank() }
+                val number = hit.channel.channelNumber?.takeIf { it.isNotBlank() }
+                if (name != null) Text(
+                    text = name,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
+                )
+                if (hit.channel.isRadio) {
+                    if (name != null) Spacer(Modifier.width(if (isTv) 6.dp else 4.dp))
+                    com.aeriotv.android.feature.channels.RadioChannelGlyph(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                    )
+                }
+                if (number != null) Text(
+                    text = if (name != null) " · $number" else number,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = if (hit.channel.isRadio) 4.dp else 0.dp),
                 )
                 if (hit.isAiring(now)) {
                     Spacer(Modifier.width(8.dp))
@@ -263,6 +279,7 @@ internal fun LiveChannelHitRow(
         subtitle = listOf(channel.channelNumber?.takeIf { it.isNotBlank() }, matchLine)
             .filterNotNull().joinToString(" · "),
         live = false,
+        radio = channel.isRadio,
         isTv = isTv,
         modifier = modifier,
         onClick = onClick,
@@ -275,6 +292,7 @@ private fun LiveSearchCard(
     title: String,
     subtitle: String,
     live: Boolean,
+    radio: Boolean,
     isTv: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
@@ -321,13 +339,22 @@ private fun LiveSearchCard(
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (radio) {
+                    Spacer(Modifier.width(if (isTv) 6.dp else 4.dp))
+                    com.aeriotv.android.feature.channels.RadioChannelGlyph(
+                        fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                    )
+                }
+            }
             if (subtitle.isNotEmpty()) Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,

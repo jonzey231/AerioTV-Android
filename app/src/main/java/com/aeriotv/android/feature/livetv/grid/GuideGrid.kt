@@ -87,6 +87,7 @@ import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.M3UChannel
 import com.aeriotv.android.core.ui.epgFlags
 import com.aeriotv.android.core.ui.seasonEpisodeLabel
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.History
@@ -843,6 +844,9 @@ private fun GridRow(
     val shortFmt = remember(clockMode) { ClockFormat.guideShort(clockMode) }
     val catchupPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Outlined.History)
     val starPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Filled.Star)
+    // Radio channel marker after the rail name (Logan 2026-11-05, Apple
+    // parity): its own painter, drawn at the name's font size.
+    val radioPainter = androidx.compose.ui.graphics.vector.rememberVectorPainter(androidx.compose.material.icons.Icons.Filled.Radio)
     // A VectorPainter caches ONE raster at the size of its latest draw. The
     // program strip draws its replay badge at about 0.7 of the title height
     // and the rail band draws the clock at the 8 dp glyph size; sharing one
@@ -994,10 +998,16 @@ private fun GridRow(
         val railContentW = nameW
         // The width the logo and the name actually get.
         val logoColumnW = railContentW
+        // Radio glyph: name-font-sized, one gap after the name text, both
+        // centered together in the name rect, so the name gives up exactly
+        // the glyph's width and still ellipsizes inside the column.
+        val radioIconPx = if (channel.isRadio) railNameStyle.fontSize.toPx() else 0f
+        val radioGapPx = if (channel.isRadio) (if (isTv) 6.dp else 4.dp).toPx() else 0f
         val name = if (rail.names) textCache.getOrPut(RAIL_NAME_KEY) {
             // The star is always the corner glyph now (Logan 2026-09-10: left
             // of the catch-up clock on TV too), never inline in the name.
-            CellText(textMeasurer.measure(channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = logoColumnW)), null)
+            val nameMaxW = (logoColumnW - (radioIconPx + radioGapPx).toInt()).coerceAtLeast(1)
+            CellText(textMeasurer.measure(channel.name, style = railNameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = nameMaxW)), null)
         } else null
         val logo = if (rail.logos && channel.tvgLogo.isNotBlank()) logos.bitmap(channel.tvgLogo) else null
         // SHARED GEOMETRY (core/ui/ChannelBadge.kt). The rail keeps its
@@ -1137,7 +1147,16 @@ private fun GridRow(
         }
         geometry.name?.let { rect ->
             name?.let {
-                drawText(it.title, topLeft = Offset(railContentLeft + rect.left + (rect.width - it.title.size.width) / 2f, bandH + rect.top))
+                val textW = it.title.size.width
+                val pairW = textW + radioGapPx + radioIconPx
+                val left = railContentLeft + rect.left + (rect.width - pairW) / 2f
+                drawText(it.title, topLeft = Offset(left, bandH + rect.top))
+                if (channel.isRadio) {
+                    val iconTop = bandH + rect.top + (it.title.size.height - radioIconPx) / 2f
+                    translate(left = left + textW + radioGapPx, top = iconTop) {
+                        with(radioPainter) { draw(Size(radioIconPx, radioIconPx), colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(tertiary)) }
+                    }
+                }
             }
         }
         // THE BAND on TV: number at the start, glyphs at the end, both

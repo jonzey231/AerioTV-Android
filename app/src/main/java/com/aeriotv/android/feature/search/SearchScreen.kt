@@ -458,14 +458,38 @@ private fun ResultRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = subtitle,
+            val subtitleColor = if (result is SearchViewModel.Result.Epg && result.isLive) {
+                MaterialTheme.colorScheme.textAccent
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            if (display.radio) {
+                // Radio channel (Logan 2026-11-05, Apple parity): the glyph
+                // sits right after the channel name, before the time range.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = subtitleColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    com.aeriotv.android.feature.channels.RadioChannelGlyph(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                    )
+                    if (display.subtitleTail != null) Text(
+                        text = SUBTITLE_SEP + display.subtitleTail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = subtitleColor,
+                        maxLines = 1,
+                    )
+                }
+            } else Text(
+                text = listOfNotNull(subtitle, display.subtitleTail).joinToString(SUBTITLE_SEP),
                 style = MaterialTheme.typography.bodySmall,
-                color = if (result is SearchViewModel.Result.Epg && result.isLive) {
-                    MaterialTheme.colorScheme.textAccent
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                color = subtitleColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -496,7 +520,13 @@ private data class ResultDisplay(
     val programArt: Boolean = false,
     /** Channel logo shown when the program art is missing or fails to load. */
     val fallbackPoster: String? = null,
+    /** EPG rows: the channel is flagged radio, so the radio glyph follows the
+     *  channel name (the end of [subtitle]) and [subtitleTail] comes after. */
+    val radio: Boolean = false,
+    val subtitleTail: String? = null,
 )
+
+private const val SUBTITLE_SEP = "  ·  "
 
 private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when (result) {
     is SearchViewModel.Result.Movie -> ResultDisplay(
@@ -537,8 +567,9 @@ private fun resultDisplay(result: SearchViewModel.Result): ResultDisplay = when 
             subtitle = listOfNotNull(
                 "LIVE".takeIf { result.isLive },
                 result.channelName,
-                range,
-            ).joinToString("  ·  "),
+            ).joinToString(SUBTITLE_SEP),
+            subtitleTail = range,
+            radio = result.channelIsRadio,
             poster = programArt ?: result.channelLogo,
             programArt = programArt != null,
             fallbackPoster = result.channelLogo,

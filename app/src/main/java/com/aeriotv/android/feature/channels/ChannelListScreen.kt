@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapVert
@@ -1383,6 +1384,16 @@ internal fun ChannelRow(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false),
                             )
+                            // Radio channel marker (Logan 2026-11-05, Apple
+                            // parity): the "radio" glyph right after the
+                            // name, name-sized, secondary tint, so the pick
+                            // that opens Radio Mode reads as a radio channel.
+                            if (channel.isRadio) {
+                                Spacer(Modifier.width(if (isTv) 6.dp else 4.dp))
+                                RadioChannelGlyph(
+                                    fontSize = MaterialTheme.typography.bodyLarge.fontSize,
+                                )
+                            }
                         }
                         // Favorite star beside the name, like the guide's
                         // channel column (Logan 2026-09-05, Apple
@@ -2132,6 +2143,27 @@ private fun formatTimeRange(programme: EPGProgramme): String {
  * never drift from the card's (Logan 2026-09-16).
  */
 internal val CHANNEL_ROW_CORNER = 12.dp
+
+/**
+ * Radio channel marker (Logan 2026-11-05, Apple parity with SF Symbol
+ * "radio"): sits right after the channel name in the same row, as tall as the
+ * name's font size, secondary tint. Hidden by the caller when the channel is
+ * not flagged radio ([com.aeriotv.android.core.data.M3UChannel.isRadio]).
+ */
+@Composable
+internal fun RadioChannelGlyph(
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    val size = with(LocalDensity.current) { fontSize.toDp() }
+    Icon(
+        imageVector = Icons.Filled.Radio,
+        contentDescription = "Radio",
+        tint = tint,
+        modifier = modifier.size(size),
+    )
+}
 
 /**
  * Leading column width whenever a logo is shown and the row is not in the
