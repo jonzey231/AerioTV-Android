@@ -912,9 +912,24 @@ fun GuideScreen(
     // chain: the pill row when it is there, otherwise the grid itself.
     val tabEntryFocus = com.aeriotv.android.feature.main.LocalTvTabEntryFocus.current
     val pillsShownForEntry = isTv && !sidebarGroupMode && !favoritesOnly && pillItems.isNotEmpty()
-    androidx.compose.runtime.DisposableEffect(isTv, tabActive, pillsShownForEntry) {
-        if (isTv && tabActive) tabEntryFocus.value = if (pillsShownForEntry) pillsFocus else gridFocus
-        onDispose { if (tabEntryFocus.value === pillsFocus || tabEntryFocus.value === gridFocus) tabEntryFocus.value = null }
+    // Apple TV parity (2026-11-05 regression pass): while the staging banner
+    // (or its background Multiview / Radio Mode dock-card stand-ins) is up,
+    // Down from the tab bar lands on its Play capsule; the geometric default
+    // skipped it and dove into the grid, leaving Clear and Done unreachable.
+    val mvBackground by com.aeriotv.android.feature.multiview.MultiviewBackground.state.collectAsStateWithLifecycle()
+    val radioForBanner by com.aeriotv.android.feature.player.RadioMode.state.collectAsStateWithLifecycle()
+    val stagingBannerShown = isTv && ((stagingOn && stagedMultiview.isNotEmpty()) || mvBackground != null || radioForBanner != null)
+    androidx.compose.runtime.DisposableEffect(isTv, tabActive, pillsShownForEntry, stagingBannerShown) {
+        if (isTv && tabActive) tabEntryFocus.value = when {
+            stagingBannerShown -> stagingPlayFocus
+            pillsShownForEntry -> pillsFocus
+            else -> gridFocus
+        }
+        onDispose {
+            if (tabEntryFocus.value === pillsFocus || tabEntryFocus.value === gridFocus || tabEntryFocus.value === stagingPlayFocus) {
+                tabEntryFocus.value = null
+            }
+        }
     }
 
     // Stranded-focus watchdog (Frankie B. 2026-09-15). A failed hand-off out of
@@ -1471,7 +1486,11 @@ fun GuideScreen(
             selected = state.selectedGroup,
             onSelect = { viewModel.onGroupSelected(it) },
             rowFocus = pillsFocus,
-            onDown = { runCatching { gridFocus.requestFocus() }.getOrDefault(false) },
+            // Pills -> staging banner -> grid, the reverse of the banner's Up.
+            onDown = {
+                (stagingBannerShown && runCatching { stagingPlayFocus.requestFocus() }.getOrDefault(false)) ||
+                    runCatching { gridFocus.requestFocus() }.getOrDefault(false)
+            },
             leadInset = railWidth,
         )
         // Multiview staging banner (iOS EPGGuideView.stagingBanner), shared
