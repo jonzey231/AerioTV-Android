@@ -76,6 +76,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -1972,7 +1973,24 @@ fun MainScaffold(
                     )
                     val density = LocalDensity.current
                     var barSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
-                    Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Box(
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            // While the bar is (or is coming back) out, this
+                            // strip owns every touch in it. During the 420 ms
+                            // restore the bar is still scaled toward the pill,
+                            // and a tap where a tab will be fell through to the
+                            // screen underneath: a Settings tap started a
+                            // channel from the guide (Nothing Phone 2026-11-06).
+                            .then(
+                                if (bottomBarVisible) Modifier.pointerInput(Unit) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            awaitPointerEvent().changes.forEach { it.consume() }
+                                        }
+                                    }
+                                } else Modifier,
+                            ),
+                    ) {
                         if (collapse < 0.999f) {
                             val pillW = with(density) { 64.dp.toPx() }
                             val pillH = with(density) { 52.dp.toPx() }
@@ -2008,7 +2026,11 @@ fun MainScaffold(
                                     },
                             )
                         }
-                        if (collapse > 0.001f) {
+                        // Not while the bar is coming back: the pill sat on
+                        // top of the Live TV tab for the whole restore and
+                        // ate the first tap there (twice on the Nothing Phone,
+                        // 2026-11-06).
+                        if (collapse > 0.001f && !bottomBarVisible) {
                             val reveal = ((collapse - 0.35f) / 0.65f).coerceIn(0f, 1f)
                             MinimizedTabPill(
                                 tab = selectedTab,
