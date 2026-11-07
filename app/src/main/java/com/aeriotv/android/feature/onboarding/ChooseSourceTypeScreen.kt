@@ -67,6 +67,8 @@ fun ChooseSourceTypeScreen(
     onChoose: (SourceType) -> Unit,
     /** Onboarding: step caption and dots; TV footer with the Back hint. */
     onboarding: Boolean = false,
+    /** Settings host: room for the floating tab bar so the last card scrolls clear of it. */
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
     /** "Set up from another device": opens the setup receiver (docs/DeviceSetupHandoff.md). Null hides it. */
     onSetUpFromPhone: (() -> Unit)? = null,
 ) {
@@ -135,7 +137,8 @@ fun ChooseSourceTypeScreen(
                 // Set up from another device card fits the safe area and the
                 // first focus (Continue) never drags the page down (Apple
                 // 256f206, Logan tvOS review 2026-11-06).
-                .padding(horizontal = vp.gutter, vertical = if (isTv) 0.dp else 12.dp),
+                .padding(horizontal = vp.gutter, vertical = if (isTv) 0.dp else 12.dp)
+                .padding(bottom = if (isTv) 0.dp else bottomInset),
             contentAlignment = Alignment.TopCenter,
         ) {
             // TV: one 480 dp column on the 960 dp canvas (Apple e5cb037: the

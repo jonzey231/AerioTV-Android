@@ -108,6 +108,8 @@ fun ConfigureSourceScreen(
     viewModel: PlaylistViewModel = hiltViewModel(),
     /** A setup copied from the device showing a user QR was applied: the Dispatcharr playlist id, or null. */
     onSetupReceived: (String?) -> Unit = {},
+    /** Settings host: room for the floating tab bar so the last field scrolls clear of it. */
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -331,7 +333,7 @@ fun ConfigureSourceScreen(
                     start = vp.gutter,
                     end = vp.gutter,
                     top = if (isTv) 32.dp else 12.dp,
-                    bottom = if (isTv) 64.dp else 32.dp,
+                    bottom = if (isTv) 64.dp else 32.dp + bottomInset,
                 ),
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {

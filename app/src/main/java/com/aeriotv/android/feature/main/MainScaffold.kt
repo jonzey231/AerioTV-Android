@@ -3218,6 +3218,7 @@ private fun SettingsTabContent(
                     nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType))
                 },
                 viewModel = playlistVm,
+                bottomInset = LocalTabBarBottomInset.current,
                 // Copied from the device showing a user QR: same next step as Set up from another device.
                 onSetupReceived = { pid ->
                     if (nav.current != r) Unit
@@ -3245,6 +3246,7 @@ private fun SettingsTabContent(
             )
             is AddPlaylistWizardStep.ChooseType -> ChooseSourceTypeScreen(
                 onBack = { nav.pop() },
+                bottomInset = LocalTabBarBottomInset.current,
                 onSetUpFromPhone = {
                     nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ReceiveSetup))
                 },
