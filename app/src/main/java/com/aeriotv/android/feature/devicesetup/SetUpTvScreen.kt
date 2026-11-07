@@ -76,7 +76,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class SetUpTvViewModel @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
     private val profiles: ProfileManager,
     prefs: AppPreferences,
     private val repository: PlaylistRepository,
@@ -182,11 +182,14 @@ class SetUpTvViewModel @Inject constructor(
         _step.value = Step.Choose(t, c)
     }
 
-    fun send(t: SetupTarget, code: String, profileIds: Set<String>, sync: Boolean) {
+    fun send(target: SetupTarget, code: String, profileIds: Set<String>, sync: Boolean) {
         val id = playlistId ?: return
-        val back = Step.Choose(t, code)
+        val back = Step.Choose(target, code)
         _step.value = Step.Sending
         viewModelScope.launch {
+            // Resolve again right before every send: the device may have started a
+            // new session (new port and key) since the card or list last saw it.
+            val t = SetupDiscovery.fresh(context, target)
             val payload = sender.buildPayload(id, profileIds, sync, userOnly = _userOnly.value)
                 ?: run { _step.value = Step.Error("This playlist could not be read.", back); return@launch }
             _step.value = when (val r = sender.send(t, code, payload)) {
