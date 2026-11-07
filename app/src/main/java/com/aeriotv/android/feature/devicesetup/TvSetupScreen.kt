@@ -400,9 +400,13 @@ private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> 
     val qr = remember(offer.link) { qrCodeBitmap(offer.link, 512)?.asImageBitmap() }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { if (isTv) runCatching { focus.requestFocus() } }
+    // Short windows (the 8 inch tablet in landscape leaves about 570 dp above
+    // the floating tab bar) take a smaller code so Cancel sits clear of the
+    // bar without scrolling; the page still scrolls if it does not fit.
+    val compact = !isTv && androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 800
     val qrBox: @Composable () -> Unit = {
         Box(
-            Modifier.size(if (isTv) 280.dp else 240.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).padding(12.dp),
+            Modifier.size(if (isTv) 280.dp else if (compact) 176.dp else 240.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).padding(12.dp),
             contentAlignment = Alignment.Center,
         ) {
             if (qr != null) Image(bitmap = qr, contentDescription = "Setup QR code", modifier = Modifier.fillMaxSize())
@@ -415,7 +419,7 @@ private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> 
     } else Column(
         Modifier.widthIn(max = 480.dp).fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp),
     ) {
         qrBox()
         OfferingText(offer, focus, onCancel, centered = true)
