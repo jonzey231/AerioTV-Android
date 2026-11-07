@@ -1189,19 +1189,26 @@ private fun GridRow(
             val endInset = bandInset + hairlinePx
             val gap = (if (isTv) GUIDE_TV_BAND_GLYPH_GAP else 4.dp).toPx()
             val glyphTop = ((bandH - iconPx) / 2f).coerceAtLeast(0f)
-            // The clock sits hard at the end. On TV the trailing side carries
-            // THREE fixed-width slots, left to right: favorite star, radio
-            // glyph, catch-up clock, each reserved whether shown or not, so
-            // every mark sits at the same x in every cell whatever the name
-            // length, favorite, or catch-up state (Logan 2026-11-06, Apple
-            // 88ae566: the radio glyph used to follow the name and wandered
-            // with its length). Phone keeps the star one gap before the clock
-            // only when the clock is there, and the radio glyph inline.
+            // The clock sits hard at the end. On TV the trailing glyphs pack
+            // from the corner with no reserved empty slots: clock at the
+            // corner, radio glyph one slot before it, and the star right
+            // before whichever of those are shown (Logan 2026-11-06, Streamer:
+            // a reserved empty radio slot left a visible gap between the star
+            // and the clock on non-radio channels). Phone keeps the star one
+            // gap before the clock only when the clock is there, and the radio
+            // glyph inline.
             val clockLeft = (railWidthPx - iconPx - endInset).coerceAtLeast(0f)
             val slotW = iconPx + gap
-            val radioLeft = (clockLeft - slotW).coerceAtLeast(0f)
+            val tvSlots = railBandSlotLefts(
+                cornerLeft = clockLeft,
+                slotW = slotW,
+                favorite = isFavorite,
+                radio = channel.isRadio,
+                catchup = channel.hasCatchup,
+            )
+            val radioLeft = tvSlots.radio ?: 0f
             val starLeft = if (isTv) {
-                (clockLeft - 2 * slotW).coerceAtLeast(0f)
+                tvSlots.star ?: 0f
             } else {
                 (clockLeft - (if (channel.hasCatchup) iconPx + gap else 0f)).coerceAtLeast(0f)
             }
