@@ -109,6 +109,19 @@ class SetUpTvViewModel @Inject constructor(
     private val _userOnly = MutableStateFlow(false)
     val userOnly: StateFlow<Boolean> = _userOnly.asStateFlow()
 
+    /**
+     * Back to a fresh flow. Called when the sheet leaves (Done, Cancel, or a
+     * swipe): the view model outlives the sheet, so after one successful
+     * send every later entry reopened on the Sent step with only Done and a
+     * second setup could not start (Nothing Phone 2026-11-07). Apple builds
+     * a fresh SetUpTvView state per presentation.
+     */
+    fun reset() {
+        playlistId = null
+        _userOnly.value = false
+        _step.value = Step.Pick
+    }
+
     fun load(pid: String?, link: String?, target: SetupTarget? = null) {
         if (playlistId != null) return
         viewModelScope.launch {
@@ -239,7 +252,7 @@ fun SetUpTvDialog(playlistId: String?, link: String? = null, target: SetupTarget
 @Composable
 fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, target: SetupTarget? = null, inSheet: Boolean = false, vm: SetUpTvViewModel = hiltViewModel()) {
     LaunchedEffect(playlistId, link) { vm.load(playlistId, link, target) }
-    DisposableEffect(Unit) { vm.discovery.start(); onDispose { vm.discovery.stop() } }
+    DisposableEffect(Unit) { vm.discovery.start(); onDispose { vm.discovery.stop(); vm.reset() } }
     val step by vm.step.collectAsStateWithLifecycle()
     val source by vm.source.collectAsStateWithLifecycle()
     val tvs by vm.discovery.tvs.collectAsStateWithLifecycle()
@@ -375,16 +388,29 @@ private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoos
 
 @Composable
 private fun CodeStep(s: SetUpTvViewModel.Step.Code, onSubmit: (SetupTarget, String) -> Unit) {
-    var code by remember(s.target.key) { mutableStateOf("") }
+    // State-based field with an input transformation (2026-11-07): the
+    // value/onValueChange form kept only 3 of 6 digits when they arrived in
+    // one burst (adb typing on the Nothing Phone; a paste takes the same
+    // path), because each filtered write raced the IME's next edit. The
+    // transformation edits the buffer in place, so a 6-digit paste lands
+    // intact.
+    val codeState = remember(s.target.key) { androidx.compose.foundation.text.input.TextFieldState() }
+    val code = codeState.text.toString()
     val prompt = if (LocalSetupSheetStyle.current) "Enter the code shown on the other device." else "Enter the code shown on ${s.target.name}."
     Text(prompt, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
     OutlinedTextField(
-        value = code,
-        onValueChange = { code = it.filter(Char::isDigit).take(6) },
+        state = codeState,
+        inputTransformation = {
+            val digits = asCharSequence().filter(Char::isDigit).take(6).toString()
+            if (digits != asCharSequence().toString()) replace(0, length, digits)
+        },
         label = { Text("6-digit code") },
-        singleLine = true,
+        lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.SingleLine,
         isError = s.error != null,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        // Number, not NumberPassword: a password field made the password
+        // manager offer "Save password" for a one-time pairing code. Apple's
+        // field is a plain number pad with no content type, the same.
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, autoCorrectEnabled = false),
         modifier = Modifier.fillMaxWidth(),
     )
     s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
