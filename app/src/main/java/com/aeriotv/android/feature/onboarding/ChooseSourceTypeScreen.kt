@@ -73,6 +73,12 @@ fun ChooseSourceTypeScreen(
     onSetUpFromPhone: (() -> Unit)? = null,
 ) {
     val isTv = rememberIsTvDevice()
+    // Short tab-hosted windows (the 8 inch tablet in landscape, 727 dp tall):
+    // tighter header and gaps so the page, through the Set up from another
+    // device card, fits above the floating tab bar without a scroll (Logan
+    // 2026-11-07: less room between Add Playlist and Connect a Server).
+    val short = !isTv && bottomInset > 0.dp &&
+        androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 800
     val firstFocus = remember { FocusRequester() }
     val otherFocus = remember { FocusRequester() }
     var showOthers by rememberSaveable { mutableStateOf(false) }
@@ -101,6 +107,7 @@ fun ChooseSourceTypeScreen(
                 // card's bottom edge 9 dp past the screen, measured 16:11 on
                 // the 1080p emulator).
                 if (isTv) { t, n, a, c -> TopAppBar(title = t, navigationIcon = n, actions = a, colors = c, expandedHeight = 56.dp) }
+                else if (short) { t, n, a, c -> androidx.compose.material3.CenterAlignedTopAppBar(title = t, navigationIcon = n, actions = a, colors = c, expandedHeight = 52.dp) }
                 else { t, n, a, c -> androidx.compose.material3.CenterAlignedTopAppBar(title = t, navigationIcon = n, actions = a, colors = c) }
             bar(
                 {
@@ -137,7 +144,7 @@ fun ChooseSourceTypeScreen(
                 // Set up from another device card fits the safe area and the
                 // first focus (Continue) never drags the page down (Apple
                 // 256f206, Logan tvOS review 2026-11-06).
-                .padding(horizontal = vp.gutter, vertical = if (isTv) 0.dp else 12.dp)
+                .padding(horizontal = vp.gutter, vertical = if (isTv) 0.dp else if (short) 4.dp else 12.dp)
                 .padding(bottom = if (isTv) 0.dp else bottomInset),
             contentAlignment = Alignment.TopCenter,
         ) {
@@ -154,7 +161,7 @@ fun ChooseSourceTypeScreen(
                 // 2026-11-06 on the 1080p emulator: 14 dp overflowed by about
                 // 60 dp, 10 dp by 16 dp, and the first Down scrolled the
                 // title away each time). Phones and tablets keep 14 dp.
-                verticalArrangement = Arrangement.spacedBy(if (isTv) 8.dp else 14.dp),
+                verticalArrangement = Arrangement.spacedBy(if (isTv) 8.dp else if (short) 10.dp else 14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (onboarding) StepCaption(1, 3)
