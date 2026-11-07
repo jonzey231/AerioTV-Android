@@ -736,13 +736,18 @@ private fun TimeHeader(
                     // The partial slot's label is pinned to the edge instead, and only
                     // skipped when the next mark is too close for both to fit.
                     val y = (size.height - 16.sp.toPx()) / 2f
+                    // Measure once and draw with an explicit color: the
+                    // measurer's cache ignores color (not layout-affecting),
+                    // so the String overload kept painting a cached layout in
+                    // the old accent after the accent changed (11:30pm stayed
+                    // orange with Custom Accent off, Nothing Phone 2026-11-06).
+                    val layout = textMeasurer.measure(label, style = labelStyle, maxLines = 1)
                     if (x >= -1f) {
-                        drawText(textMeasurer, label, topLeft = Offset(x.coerceAtLeast(0f) + 6f, y), style = labelStyle, maxLines = 1)
+                        drawText(layout, color = labelStyle.color, topLeft = Offset(x.coerceAtLeast(0f) + 6f, y))
                     } else {
-                        val w = textMeasurer.measure(label, style = labelStyle, maxLines = 1).size.width
                         val nextX = (t + slot - vs) * pxPerMs
-                        if (nextX >= w + 12f) {
-                            drawText(textMeasurer, label, topLeft = Offset(6f, y), style = labelStyle, maxLines = 1)
+                        if (nextX >= layout.size.width + 12f) {
+                            drawText(layout, color = labelStyle.color, topLeft = Offset(6f, y))
                         }
                     }
                     t += slot
@@ -1287,7 +1292,10 @@ private fun GridRow(
             // from the visible edge (the clipRect below follows x0). The
             // airing cell clipped at now also keeps a minimum visible width
             // so even a 5-minute sliver shows its title (Logan 2026-10-11);
-            // the next cell starts after it. Plain floats, no allocation.
+            // the next cell starts after it. TV only, as on Apple (the
+            // widening is tvOS-only there): on a phone it pushed every later
+            // cell right of its header mark, so 12:00am sat about 75 dp left
+            // of the 12:00 column (Nothing Phone 2026-11-06). Plain floats, no allocation.
             val airingMinPx = AIRING_MIN_VISIBLE.toPx()
             var drawnRight = 0f
             while (i < cells.size) {
@@ -1304,7 +1312,7 @@ private fun GridRow(
                 val airing = nowMs in cell.startMillis until cell.endMillis
                 val x0 = ((cell.startMillis - vs) * pxPerMs).coerceAtLeast(drawnRight)
                 var x1 = ((cell.endMillis - vs) * pxPerMs).coerceAtMost(stripW)
-                if (airing && cell.startMillis < vs && x1 - x0 < airingMinPx) x1 = (x0 + airingMinPx).coerceAtMost(stripW)
+                if (isTv && airing && cell.startMillis < vs && x1 - x0 < airingMinPx) x1 = (x0 + airingMinPx).coerceAtMost(stripW)
                 if (x1 - x0 < MIN_CELL_PX + seam) { drawnRight = maxOf(drawnRight, x1); if (x1 <= x0) continue }
                 drawnRight = maxOf(drawnRight, x1)
                 val w = (x1 - x0 - seam).coerceAtLeast(MIN_CELL_PX)
