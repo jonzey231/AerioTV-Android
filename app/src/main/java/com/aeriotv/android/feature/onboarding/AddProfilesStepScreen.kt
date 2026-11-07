@@ -433,7 +433,12 @@ fun AddProfilesStepScreen(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(horizontal = vp.gutter, vertical = 24.dp),
+            .padding(horizontal = vp.gutter, vertical = 24.dp)
+            // Opened from Settings the floating tab bar stays up, and on the
+            // onn tablet it covered Continue and the hint under it
+            // (2026-11-07). None during onboarding or on TV, where there
+            // is no tab bar.
+            .padding(bottom = if (onboarding || com.aeriotv.android.ui.settings.rememberIsTvDevice()) 0.dp else com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset.current),
         contentAlignment = Alignment.TopCenter,
     ) {
         if (isTv) {
@@ -624,7 +629,12 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = vp.gutter, vertical = 24.dp),
+            .padding(horizontal = vp.gutter, vertical = 24.dp)
+            // Opened from Settings the floating tab bar stays up, and on the
+            // onn tablet it covered Continue and the hint under it
+            // (2026-11-07). None during onboarding or on TV, where there
+            // is no tab bar.
+            .padding(bottom = if (onboarding || com.aeriotv.android.ui.settings.rememberIsTvDevice()) 0.dp else com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset.current),
         contentAlignment = Alignment.TopCenter,
     ) {
         Column(
