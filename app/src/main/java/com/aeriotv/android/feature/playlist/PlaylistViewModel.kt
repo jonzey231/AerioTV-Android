@@ -1211,14 +1211,18 @@ class PlaylistViewModel @Inject constructor(
      * except the one-shot [sourceConfigured] event: the setup screen drives
      * its own steps and navigates when it is done.
      */
-    suspend fun addFromSetup(request: PlaylistRepository.SaveRequest): Result<PlaylistEntity> {
+    suspend fun addFromSetup(
+        request: PlaylistRepository.SaveRequest,
+        /** Duplicate prompt, Replace: update this row in place (keeps its channels, guide, and favorites). */
+        existingId: String? = null,
+    ): Result<PlaylistEntity> {
         _state.update { it.copy(isLoading = true, error = null, sourceType = request.sourceType) }
         val normalized = request.copy(
             url = normalizeSchemedUrl(request.url),
             lanUrl = request.lanUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { normalizeSchemedUrl(it) },
             epgUrl = request.epgUrl?.trim()?.takeIf { it.isNotEmpty() }?.let { normalizeSchemedUrl(it) },
         )
-        return repository.loadAndPersist(normalized, existingId = null).fold(
+        return repository.loadAndPersist(normalized, existingId = existingId).fold(
             onSuccess = { (entity, channels) ->
                 _state.update {
                     it.copy(

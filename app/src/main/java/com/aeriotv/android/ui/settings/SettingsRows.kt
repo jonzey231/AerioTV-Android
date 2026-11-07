@@ -864,11 +864,14 @@ fun SettingsDialogTextButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     destructive: Boolean = false,
+    modifier: Modifier = Modifier,
+    /** Primary action of the dialog: bold label. */
+    emphasized: Boolean = false,
 ) {
     val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     var focused by remember { mutableStateOf(false) }
     Box(
-        modifier = Modifier
+        modifier = modifier
             .heightIn(min = 36.dp)
             .onFocusChanged { focused = it.isFocused }
             .clip(RoundedCornerShape(50))
@@ -896,7 +899,7 @@ fun SettingsDialogTextButton(
             style = MaterialTheme.typography.labelLarge,
             color = if (enabled) accent
             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            fontWeight = FontWeight.Medium,
+            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Medium,
         )
     }
 }

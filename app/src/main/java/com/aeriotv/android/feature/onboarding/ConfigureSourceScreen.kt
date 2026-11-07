@@ -180,7 +180,7 @@ fun ConfigureSourceScreen(
     }
     userQrRequest?.let { (found, k) ->
         com.aeriotv.android.feature.devicesetup.TvSetupScreen(
-            addPlaylist = { req -> viewModel.addFromSetup(req) },
+            addPlaylist = { req, id -> viewModel.addFromSetup(req, id) },
             onCancel = { userQrRequest = null },
             onDone = { pid -> userQrRequest = null; onSetupReceived(pid) },
             request = com.aeriotv.android.feature.devicesetup.TvSetupViewModel.Request(found, k.apiKey),

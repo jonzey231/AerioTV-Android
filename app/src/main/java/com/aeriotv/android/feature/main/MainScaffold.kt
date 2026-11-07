@@ -3233,7 +3233,7 @@ private fun SettingsTabContent(
                     },
                 )
             is AddPlaylistWizardStep.ReceiveSetup -> com.aeriotv.android.feature.devicesetup.TvSetupScreen(
-                addPlaylist = { req -> playlistVm.addFromSetup(req) },
+                addPlaylist = { req, id -> playlistVm.addFromSetup(req, id) },
                 bottomInset = LocalTabBarBottomInset.current,
                 onCancel = { nav.replaceTop(SettingsRoute.AddPlaylist(AddPlaylistWizardStep.ChooseType)) },
                 onDone = { pid ->

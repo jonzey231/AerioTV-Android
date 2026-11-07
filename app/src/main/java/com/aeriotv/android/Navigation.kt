@@ -1004,7 +1004,7 @@ fun AerioTVNavHost(
                         onboarding = true,
                     )
                 } else com.aeriotv.android.feature.devicesetup.TvSetupScreen(
-                    addPlaylist = { req -> vm.addFromSetup(req) },
+                    addPlaylist = { req, id -> vm.addFromSetup(req, id) },
                     onCancel = { navController.popBackStack() },
                     onDone = { pid -> if (pid != null) addProfilesFor = pid else toMain() },
                 )

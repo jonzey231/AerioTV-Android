@@ -83,6 +83,7 @@ class TvSetupViewModel @Inject constructor(
     private val profiles: ProfileManager,
     private val prefs: AppPreferences,
     private val dsync: DispatcharrSyncManager,
+    private val playlists: PlaylistRepository,
 ) : ViewModel() {
 
     sealed interface Phase {
@@ -94,10 +95,16 @@ class TvSetupViewModel @Inject constructor(
         data class Failed(val message: String) : Phase
         /** [dispatcharrPlaylistId] set = continue into Add Profiles for that playlist. */
         data class Done(val dispatcharrPlaylistId: String?) : Phase
+        /** Duplicate prompt answered Cancel: the screen closes. */
+        data object Cancelled : Phase
         /** User QR request mode: waiting for Send on the showing device. */
         data class Requesting(val sourceName: String) : Phase
         data class RequestFailed(val message: String) : Phase
+        /** The received playlist matches one already here (SetupDuplicateMatch): Cancel, Add Anyway, or Replace. */
+        data class Duplicate(val existingName: String) : Phase
     }
+
+    enum class DuplicateChoice { Cancel, AddAnyway, Replace }
 
     /** User QR request mode: ask the device showing [apiKey]'s code for its setup (no advert, no code shown). */
     data class Request(val source: com.aeriotv.android.core.setup.UserQrRequest.Found, val apiKey: String)
@@ -109,9 +116,32 @@ class TvSetupViewModel @Inject constructor(
     private var receiver: SetupReceiver? = null
     private var timeout: Job? = null
     private var pending: SetupProtocol.Payload? = null
-    private var addPlaylist: (suspend (PlaylistRepository.SaveRequest) -> Result<PlaylistEntity>)? = null
+    /** Second argument: the playlist id to update in place (Replace), or null to add. */
+    private var addPlaylist: (suspend (PlaylistRepository.SaveRequest, String?) -> Result<PlaylistEntity>)? = null
 
-    fun bind(add: suspend (PlaylistRepository.SaveRequest) -> Result<PlaylistEntity>) { addPlaylist = add }
+    fun bind(add: suspend (PlaylistRepository.SaveRequest, String?) -> Result<PlaylistEntity>) { addPlaylist = add }
+
+    /** Set while Phase.Duplicate is showing; null once the user has chosen. */
+    private var duplicateId: String? = null
+    /** The user's answer for [pending]: null = not asked yet. Retry reuses it. */
+    private var resolved: Pair<DuplicateChoice, String?>? = null
+
+    fun resolveDuplicate(choice: DuplicateChoice) {
+        val p = pending ?: return
+        if (_phase.value !is Phase.Duplicate) return
+        Log.i(TAG, "[SETUP] duplicate playlist: user chose $choice")
+        val id = duplicateId
+        duplicateId = null
+        if (choice == DuplicateChoice.Cancel) {
+            // The sender already shows Sent; nothing more goes back to it.
+            pending = null
+            resolved = null
+            _phase.value = Phase.Cancelled
+            return
+        }
+        resolved = choice to id
+        viewModelScope.launch { onPayload(p) }
+    }
 
     private var request: Request? = null
     private var requestJob: Job? = null
@@ -173,7 +203,7 @@ class TvSetupViewModel @Inject constructor(
     }
 
     fun reset() {
-        if (_phase.value !is Phase.Applying) { pending = null; request = null; _phase.value = Phase.Starting }
+        if (_phase.value !is Phase.Applying) { pending = null; resolved = null; duplicateId = null; request = null; _phase.value = Phase.Starting }
     }
 
     fun retry() {
@@ -182,6 +212,7 @@ class TvSetupViewModel @Inject constructor(
     }
 
     private suspend fun onPayload(p: SetupProtocol.Payload) {
+        if (pending !== p) resolved = null
         pending = p
         timeout?.cancel()
         receiver?.stop()
@@ -196,6 +227,19 @@ class TvSetupViewModel @Inject constructor(
             else -> SourceType.M3uUrl
         }
         val isDispatcharr = type == SourceType.DispatcharrApiKey || type == SourceType.DispatcharrUserPass
+        if (resolved == null) {
+            val match = com.aeriotv.android.core.setup.SetupDuplicateMatch.find(
+                type, pl.url, cred?.apiKey, cred?.username, runCatching { playlists.allOnce() }.getOrDefault(emptyList()),
+            )
+            if (match != null) {
+                Log.i(TAG, "[SETUP] received playlist matches an existing one; asking")
+                duplicateId = match.id
+                _phase.value = Phase.Duplicate(match.name)
+                return
+            }
+        }
+        val replaceId = resolved?.takeIf { it.first == DuplicateChoice.Replace }?.second
+        if (replaceId != null) _phase.value = Phase.Applying("Updating your playlist")
         val entity = add(
             PlaylistRepository.SaveRequest(
                 sourceType = type,
@@ -211,6 +255,7 @@ class TvSetupViewModel @Inject constructor(
                 epgRetentionDays = pl.guideDays,
                 customUserAgent = pl.userAgent?.takeIf { isDispatcharr },
             ),
+            replaceId,
         ).getOrElse {
             Log.w(TAG, "[SETUP] playlist add failed: ${it.message}")
             _phase.value = Phase.Failed(it.message ?: "Could not connect to your server.")
@@ -252,6 +297,7 @@ class TvSetupViewModel @Inject constructor(
             dsync.awaitFirstPull()
         }
         pending = null
+        resolved = null
         if (problems.isNotEmpty()) Log.w(TAG, "[SETUP] finished; not added: ${problems.size}")
         Log.i(TAG, "[SETUP] applied (${p.profiles.size - problems.size} profiles)")
         _phase.value = Phase.Done(entity.id.takeIf { isDispatcharr })
@@ -266,7 +312,8 @@ class TvSetupViewModel @Inject constructor(
 
 @Composable
 fun TvSetupScreen(
-    addPlaylist: suspend (PlaylistRepository.SaveRequest) -> Result<PlaylistEntity>,
+    /** Second argument: an existing playlist id to update in place (duplicate prompt, Replace), or null to add. */
+    addPlaylist: suspend (PlaylistRepository.SaveRequest, String?) -> Result<PlaylistEntity>,
     onCancel: () -> Unit,
     /** Gets the Dispatcharr playlist id (null otherwise) so the caller opens Add Profiles next. */
     onDone: (String?) -> Unit,
@@ -284,6 +331,7 @@ fun TvSetupScreen(
     DisposableEffect(Unit) { onDispose { vm.stop(); vm.reset() } }
     LaunchedEffect(phase) { (phase as? TvSetupViewModel.Phase.Done)?.let { onDone(it.dispatcharrPlaylistId) } }
     val cancel = { vm.stop(); onCancel() }
+    LaunchedEffect(phase) { if (phase is TvSetupViewModel.Phase.Cancelled) cancel() }
     BackHandler(enabled = phase !is TvSetupViewModel.Phase.Applying) { cancel() }
 
     val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
@@ -323,6 +371,11 @@ fun TvSetupScreen(
                 onCancel = cancel,
             )
             is TvSetupViewModel.Phase.Done -> CircularProgressIndicator()
+            TvSetupViewModel.Phase.Cancelled -> CircularProgressIndicator()
+            is TvSetupViewModel.Phase.Duplicate -> {
+                CircularProgressIndicator()
+                DuplicatePlaylistDialog(p.existingName, vm::resolveDuplicate)
+            }
             is TvSetupViewModel.Phase.Requesting -> Column(Modifier.widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator()
                 Spacer(Modifier.height(20.dp))
@@ -421,6 +474,34 @@ private fun Message(title: String, body: String, primary: Pair<String, () -> Uni
             OutlinedButton(onClick = onCancel, modifier = Modifier.secondaryButtonFrame()) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
         }
     }
+}
+
+/**
+ * A received setup matches a playlist already on this device. Same wording
+ * as iOS. Buttons in order Cancel, Add Anyway, Replace; Replace is the
+ * primary and takes D-pad focus on TV. Nothing here is ever disabled.
+ */
+@Composable
+private fun DuplicatePlaylistDialog(existingName: String, onChoice: (TvSetupViewModel.DuplicateChoice) -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        onDismissRequest = { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) },
+        title = { Text("This playlist already exists") },
+        text = { Text("$existingName uses the same server and account. Replace it with the incoming setup, or add it as a second playlist?") },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                com.aeriotv.android.ui.settings.SettingsDialogTextButton("Cancel", { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) })
+                com.aeriotv.android.ui.settings.SettingsDialogTextButton("Add Anyway", { onChoice(TvSetupViewModel.DuplicateChoice.AddAnyway) })
+                com.aeriotv.android.ui.settings.SettingsDialogTextButton(
+                    "Replace",
+                    { onChoice(TvSetupViewModel.DuplicateChoice.Replace) },
+                    modifier = Modifier.focusRequester(focus),
+                    emphasized = true,
+                )
+            }
+        },
+    )
 }
 
 /**
