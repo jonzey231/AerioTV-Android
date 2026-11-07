@@ -44,6 +44,20 @@ class SetupReceiver(
      */
     private val advertise: Boolean = true,
 ) {
+    companion object {
+        /**
+         * Public keys this device is offering right now (Apple
+         * SetupReceiver.ownPk). Discovery drops any advert carrying one, so
+         * a device never offers to set up itself: the phone and tablet each
+         * showed their own "Waiting for setup" dock card over their own
+         * receiver screen, covering its Cancel button (2026-11-07).
+         */
+        private val ownPks = java.util.concurrent.ConcurrentHashMap<SetupReceiver, ByteArray>()
+        fun isOwnPk(pk: ByteArray): Boolean = ownPks.values.any { it.contentEquals(pk) }
+        private const val TAG = "AerioSetup"
+        private const val MAX_BODY = 256L * 1024L
+    }
+
     data class Offer(val code: String, val link: String, val deviceName: String, val ip: String, val port: Int, val fingerprint: String)
 
     private val _offer = MutableStateFlow<Offer?>(null)
@@ -84,6 +98,7 @@ class SetupReceiver(
         multicastLock?.let { l -> runCatching { if (l.isHeld) l.release() } }
         multicastLock = null
         _offer.value = null
+        ownPks.remove(this)
     }
 
     /** New code and key pair (after 3 failures, or a manual refresh). */
@@ -96,6 +111,7 @@ class SetupReceiver(
     }
 
     private fun publish() {
+        ownPks[this] = keys.publicKey
         val lan = ip ?: return
         val name = deviceName()
         _offer.value = Offer(code, SetupProtocol.buildLink(lan, port, code, keys.publicKey, name), name, lan, port, SetupCrypto.keyFingerprint(keys.publicKey))
@@ -178,10 +194,6 @@ class SetupReceiver(
     private fun deviceName(): String = setupDeviceName(context)
     private fun lanIpv4(): String? = setupLanIpv4()
 
-    private companion object {
-        const val TAG = "AerioSetup"
-        const val MAX_BODY = 256L * 1024L
-    }
 }
 
 /** phone, tablet, or tv for the TXT `kind` key, so senders show the right icon. */
