@@ -92,7 +92,12 @@ fun WelcomeScreen(
 ) {
     val config = LocalConfiguration.current
     val isTv = com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor().isTv
-    val twoColumn = !isTv && config.screenWidthDp >= 720 && config.screenHeightDp < 720
+    // Two columns whenever a wide window is wider than tall, as on iPad
+    // (WelcomeView.swift: width > height). The old height < 720 test missed
+    // the 8 inch tablet in landscape (w1108dp h727dp, edge to edge): it fell
+    // to the single column, whose fixed-height layout collapsed the logo and
+    // clipped the Skip footnote under the gesture bar.
+    val twoColumn = !isTv && config.screenWidthDp >= 720 && config.screenWidthDp > config.screenHeightDp
     val content = WelcomeContent(
         isTv = isTv,
         onConnectServer = onConnectServer,
