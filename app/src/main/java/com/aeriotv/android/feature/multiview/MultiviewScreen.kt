@@ -268,6 +268,12 @@ fun MultiviewScreen(
     val backgroundRequest = remember { mutableStateOf<MultiviewBackground.State?>(null) }
     val backgroundPositions = remember { mutableMapOf<Int, Long>() }
     val latestHeaders by rememberUpdatedState(httpHeaders)
+    // Background sweeps (EPG, VOD, DVR) hold while Multiview is up: their GC
+    // and Room churn dropped frames on every tile at once (EpgSweepGate).
+    DisposableEffect(Unit) {
+        com.aeriotv.android.core.data.repository.EpgSweepGate.onMultiviewShown()
+        onDispose { com.aeriotv.android.core.data.repository.EpgSweepGate.onMultiviewHidden() }
+    }
     DisposableEffect(Unit) {
         onDispose {
             val req = backgroundRequest.value

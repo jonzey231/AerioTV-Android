@@ -12,9 +12,9 @@ import kotlinx.coroutines.flow.SharedFlow
  * the quiet EPG sweep in [PlaylistRepository.startEpgBackgroundSweep]
  * (Logan 2026-09-12).
  *
- * The sweep must be invisible: it pauses while the app is backgrounded and
- * while a tune is still waiting on its first frame, and resumes at the chunk
- * it stopped on. Two volatile flags polled by the sweep, deliberately not a
+ * The sweep must be invisible: it pauses while the app is backgrounded,
+ * while a tune is still waiting on its first frame, and while Multiview is
+ * on screen, and resumes at the chunk it stopped on. Two volatile flags polled by the sweep, deliberately not a
  * flow: nothing here should cost a subscription or a recomposition.
  */
 object EpgSweepGate {
@@ -87,9 +87,38 @@ object EpgSweepGate {
             return started != 0L && SystemClock.elapsedRealtime() - started < TUNE_MAX_MS
         }
 
+    /**
+     * Local Multiview screens on screen right now. Measured 2026-11-06 on the
+     * Google TV Streamer (two tiles, 4K HEVC plus 1080p): while the launch EPG
+     * sweep walked its 38 day chunks (grid JSON parse plus a Room merge per
+     * chunk, about 6.5 minutes), the app ran a concurrent GC every 2 to 3 s
+     * freeing up to 1 million objects (35 MB) with 10 to 22 ms pauses, the
+     * four cores sat at 2 to 20 percent idle, and BOTH tiles dropped 5 to 84
+     * frames per 10 s in step with each other. Once the sweep finished, with
+     * the same tiles and channels: one GC a minute and 0 to 4 drops per 10 s
+     * on the 4K tile. A guide refresh is never worth a frame of playback, so
+     * every sweep holds while Multiview is up and resumes at the chunk it
+     * stopped on.
+     */
+    private val multiviewScreens = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Multiview screen entered composition. Pair with [onMultiviewHidden]. */
+    fun onMultiviewShown() {
+        multiviewScreens.incrementAndGet()
+    }
+
+    /** Multiview screen left composition. */
+    fun onMultiviewHidden() {
+        multiviewScreens.updateAndGet { if (it > 0) it - 1 else 0 }
+    }
+
+    /** True while at least one local Multiview screen is up. */
+    val multiviewActive: Boolean
+        get() = multiviewScreens.get() > 0
+
     /** The one question the sweep asks between chunks. */
     val sweepAllowed: Boolean
-        get() = appInForeground && !tuneInProgress
+        get() = appInForeground && !tuneInProgress && !multiviewActive
 
     private const val TUNE_MAX_MS = 30_000L
 }
