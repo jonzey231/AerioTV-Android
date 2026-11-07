@@ -1930,36 +1930,6 @@ private fun Tile(
                 compact = true,
             )
         }
-        // Video parked by the hardware decode budget (a second 4K tile on a
-        // one-4K-stream decoder): the stream stays open, the card says why.
-        val parkedNames by MultiviewDecodeBudget.parkedNames
-            .collectAsState()
-        if (!tileAudioOnly && tile.displayName in parkedNames) {
-            Box(
-                modifier = Modifier.matchParentSize().background(Color.Black),
-                contentAlignment = Alignment.Center,
-            ) {
-                androidx.compose.foundation.layout.Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(12.dp),
-                ) {
-                    Text(
-                        text = tile.displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
-                    Text(
-                        text = "Video paused: this device decodes one 4K stream at a time. Select this tile to watch it.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.85f),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
-            }
-        }
         if (showLogos && !singleTile && tile.logoUrl.isNotBlank()) {
             TileChannelLogo(
                 url = tile.logoUrl,
@@ -2599,9 +2569,6 @@ private fun ExoTile(
             playerRef.value = player
             onPlayer(player)
             MultiviewTilePlayers.register(player)
-            // Hardware decode budget: a second 4K tile parks its video
-            // (see MultiviewDecodeBudget, Streamer measurements 2026-11-06).
-            MultiviewDecodeBudget.register(player, channelNameNow.value, isAudioFocused)
             com.aeriotv.android.core.playback.PlaybackActivityTracker.playerCreated()
 
             // ---- Live tile stream walk and 503 handling (Apple tile parity) ----
@@ -3129,7 +3096,6 @@ private fun ExoTile(
             // a disabled audio track (sink failure) is re-enabled when it gains
             // focus so the focused tile is always audible.
             val strategy = tileAudioStrategy()
-            MultiviewDecodeBudget.setFocused(player, isAudioFocused)
             audioGateRef.value?.muted = !isAudioFocused
             player.volume = if (strategy == "pcm" && !isAudioFocused) 0f else 1f
             if (strategy == "track") {
@@ -3156,7 +3122,6 @@ private fun ExoTile(
             tracer.tracedPlayer = null
             playerRef.value?.let {
                 MultiviewTilePlayers.unregister(it)
-                MultiviewDecodeBudget.unregister(it)
                 it.removeAnalyticsListener(tracer.analyticsListener)
                 // Releases, then closes any live socket still parked in a read.
                 liveCalls.release(it)
