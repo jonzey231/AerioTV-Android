@@ -1398,9 +1398,13 @@ class MainActivity : ComponentActivity() {
             val customThemeHex by appPreferences.customThemeHex.collectAsState(
                 initial = com.aeriotv.android.ui.theme.CustomThemePalette.DEFAULT_HEX,
             )
-            androidx.compose.runtime.SideEffect {
-                com.aeriotv.android.ui.theme.CustomThemeState.setBaseHex(customThemeHex)
-            }
+            // Written during composition, BEFORE AerioTVTheme reads the
+            // palette below. A SideEffect ran after this pass had already
+            // built the color scheme from the old palette, so a new Custom
+            // color showed only after the next unrelated recomposition
+            // (measured 2026-11-07: 7C3AED stayed green until another
+            // appearance change). setBaseHex is a no-op when unchanged.
+            com.aeriotv.android.ui.theme.CustomThemeState.setBaseHex(customThemeHex)
             val customAccent = if (useCustomAccent && customAccentHex.length == 6) {
                 runCatching {
                     val n = customAccentHex.toLong(16)
