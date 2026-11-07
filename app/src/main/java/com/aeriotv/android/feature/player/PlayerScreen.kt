@@ -2111,7 +2111,9 @@ fun PlayerScreen(
         pauseLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 val p = exoHolder.player
-                livePaused = p != null && !p.playWhenReady &&
+                // wantsToPlay: a resume gate hold drops playWhenReady only to
+                // fill the buffer; it is not a pause and must not pin the chrome.
+                livePaused = p != null && !exoHolder.wantsToPlay() &&
                     p.playbackState != androidx.media3.common.Player.STATE_IDLE
                 delay(200)
             }

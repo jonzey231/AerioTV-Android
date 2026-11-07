@@ -1116,14 +1116,21 @@ class AerioExoPlayerHolder @Inject constructor(
         // A feed gaining media time slower than the wall clock is starved
         // upstream, not bursty: there is no burst coming to refill the cushion,
         // so a gate would just sit there until the fuse blows.
+        // The repeat-stall path used to skip this check (skipRateCheck), and
+        // held 15.5 s on a 0.68x feed (Streamer, 2026-11-07). It now goes
+        // through the same check; the flag only tags the log line.
         val ratio = tracer.feedMediaRatio()
-        if (!skipRateCheck && ratio != null && ratio < HOLDBACK_MEDIA_RATIO_MIN) {
-            Log.i(TAG, "[HOLDBACK] resume gate skipped: upstream rate ${"%.2f".format(ratio)}")
-            return
-        }
         val target = resumeGateTargetMs()
         val ahead = bufferedAheadMs(p)
-        if (target <= 0L || ahead >= target) return
+        if (ratio != null && ratio < ResumeGatePolicy.MEDIA_RATIO_MIN && target > 0L && ahead < target) {
+            Log.i(
+                TAG,
+                "[HOLDBACK] resume gate skipped: upstream rate ${"%.2f".format(ratio)} " +
+                    "below ${ResumeGatePolicy.MEDIA_RATIO_MIN} (${if (skipRateCheck) "repeat" else "first"} stall, $reason)",
+            )
+            return
+        }
+        if (!ResumeGatePolicy.shouldArm(ahead, target, ratio, repeat = skipRateCheck)) return
         resumeGateActive = true
         resumeGateArmedAtMs = SystemClock.elapsedRealtime()
         resumeGateLoggedTargetMs = target
@@ -1175,16 +1182,41 @@ class AerioExoPlayerHolder @Inject constructor(
             )
             resumeGateLoggedTargetMs = target
         }
+        checkResumeGateRelease(p, now, target)
+    }
+
+    /** Release the gate the moment the policy says so: target reached, feed
+     *  starved, or hard timeout. Runs on every 1 s watchdog tick, which is not
+     *  gated by the switch window, so a hold also ends mid-switch. */
+    private fun checkResumeGateRelease(p: ExoPlayer, now: Long, target: Long = resumeGateTargetMs()) {
+        if (!resumeGateActive) return
         val ahead = bufferedAheadMs(p)
         val heldMs = now - resumeGateArmedAtMs
-        when {
-            ahead >= target -> releaseResumeGate("buffered ${ahead}ms >= target ${target}ms after ${heldMs}ms")
-            heldMs >= RESUME_GATE_TIMEOUT_MS ->
+        val ratio = tracer.feedMediaRatio()
+        when (ResumeGatePolicy.releaseOnTick(ahead, target, ratio, heldMs, RESUME_GATE_TIMEOUT_MS)) {
+            ResumeGatePolicy.Release.TARGET_REACHED ->
+                releaseResumeGate("buffered ${ahead}ms >= target ${target}ms after ${heldMs}ms")
+            ResumeGatePolicy.Release.FEED_STARVED ->
+                releaseResumeGate(
+                    "upstream rate ${"%.2f".format(ratio)} below ${ResumeGatePolicy.MEDIA_RATIO_MIN} " +
+                        "after ${heldMs}ms (${ahead}ms of ${target}ms); a starved feed cannot refill, resuming",
+                )
+            ResumeGatePolicy.Release.TIMEOUT ->
                 releaseResumeGate(
                     "hard timeout ${RESUME_GATE_TIMEOUT_MS}ms reached with only ${ahead}ms " +
                         "of ${target}ms buffered; resuming anyway",
                 )
+            null -> Unit
         }
+    }
+
+    /** Drop the gate without touching playWhenReady (viewer pause). */
+    private fun clearResumeGateSilently() {
+        Log.i(TAG, "[HOLDBACK] resume gate cleared: viewer pause ch=$currentChannelId")
+        resumeGateActive = false
+        resumeGateArmedAtMs = 0L
+        resumeGateLoggedTargetMs = 0L
+        repeatHoldTargetMs = 0L
     }
 
     private val watchdogScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
@@ -4425,10 +4457,29 @@ class AerioExoPlayerHolder @Inject constructor(
     }
 
     fun setPaused(paused: Boolean) {
+        // A viewer pause during a gate or audio-only hold ends the hold
+        // silently, so the hold's release can never undo the viewer's pause.
+        if (paused) {
+            if (resumeGateActive) clearResumeGateSilently()
+            if (audioOnlyHoldActive) endAudioOnlyHold("viewer pause", resume = false)
+        }
         player?.playWhenReady = !paused
     }
 
-    fun isPaused(): Boolean = player?.playWhenReady?.not() ?: true
+    /** Paused as the viewer sees it: a resume gate or audio-only hold is a
+     *  buffering wait, not a pause, so it reads as playing (wantsToPlay). */
+    fun isPaused(): Boolean = !wantsToPlay()
+
+    /** True when the viewer wants playback running: playWhenReady, or a hold
+     *  that drops playWhenReady only to fill the buffer. The chrome and the
+     *  media session read this so a hold shows buffering, never Play. */
+    fun wantsToPlay(): Boolean {
+        val p = player ?: return false
+        return ResumeGatePolicy.wantsToPlay(p.playWhenReady, resumeGateActive, audioOnlyHoldActive)
+    }
+
+    /** True while a hold (resume gate or audio-only) is dropping playWhenReady. */
+    fun isHoldingForBuffer(): Boolean = player != null && (resumeGateActive || audioOnlyHoldActive)
 
     /**
      * Enable / disable the video track on the shared player. Android Auto plays

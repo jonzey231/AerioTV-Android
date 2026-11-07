@@ -88,7 +88,7 @@ class AerioMediaPlaybackService : MediaLibraryService() {
         // SkipIntervalsPlayer: seek back / forward from the notification, lock
         // screen, and Bluetooth follow Settings > Skip Intervals live (an
         // ExoPlayer's own increments are fixed when it is built).
-        mediaSession = MediaLibrarySession.Builder(this, SkipIntervalsPlayer(player), LibraryCallback())
+        mediaSession = MediaLibrarySession.Builder(this, SkipIntervalsPlayer(player) { exoHolder.isHoldingForBuffer() }, LibraryCallback())
             .setSessionActivity(launchPi)
             .build()
 

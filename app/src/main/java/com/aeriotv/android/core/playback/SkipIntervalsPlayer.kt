@@ -10,13 +10,28 @@ import com.aeriotv.android.core.ui.SkipIntervals
  * commands (notification, lock screen, Bluetooth, Android Auto) move by the
  * CURRENT Settings > Skip Intervals values. ExoPlayer fixes its increments at
  * build time, so without this a changed setting would only apply after the
- * holder next rebuilds the player. Everything else passes straight through.
+ * holder next rebuilds the player.
+ *
+ * [isHoldingForBuffer] reports a resume gate or audio-only hold, which drops
+ * playWhenReady only to fill the buffer. The session then sees playWhenReady
+ * true and STATE_BUFFERING, so Cast senders, the notification, and the system
+ * media controls show buffering, not paused. Everything else passes through.
  */
-class SkipIntervalsPlayer(player: Player) : ForwardingPlayer(player) {
+class SkipIntervalsPlayer(
+    player: Player,
+    private val isHoldingForBuffer: () -> Boolean = { false },
+) : ForwardingPlayer(player) {
 
     override fun getSeekBackIncrement(): Long = SkipIntervals.backMs
 
     override fun getSeekForwardIncrement(): Long = SkipIntervals.forwardMs
+
+    override fun getPlayWhenReady(): Boolean = super.getPlayWhenReady() || isHoldingForBuffer()
+
+    override fun getPlaybackState(): Int {
+        val state = super.getPlaybackState()
+        return if (state == Player.STATE_READY && isHoldingForBuffer()) Player.STATE_BUFFERING else state
+    }
 
     override fun seekBack() {
         seekTo((currentPosition - SkipIntervals.backMs).coerceAtLeast(0L))
