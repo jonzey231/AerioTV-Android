@@ -3070,6 +3070,10 @@ private fun LiveRewindChromeSection(
         // playFile on, leaving subsequent channels permanently
         // stuck.
         onClose = {
+            // Measures the "X did nothing on two taps" report (Nothing Phone
+            // 2026-11-06): no line here on a tap means the tap never reached
+            // the button.
+            android.util.Log.i("AerioChrome", "[CHROME] close tapped")
             PlayerDoubleBack.clear()
             miniPlayerVm.dismiss()
             exoWindowState.hide()
