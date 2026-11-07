@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -352,22 +353,33 @@ private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> 
     // Phones and tablets stack the QR above the text; TVs keep the side-by-side layout.
     if (isTv) Row(horizontalArrangement = Arrangement.spacedBy(48.dp), verticalAlignment = Alignment.CenterVertically) {
         qrBox()
-        OfferingText(offer, focus, onCancel)
-    } else Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        OfferingText(offer, focus, onCancel, centered = false)
+    } else Column(
+        Modifier.widthIn(max = 480.dp).fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
         qrBox()
-        OfferingText(offer, focus, onCancel)
+        OfferingText(offer, focus, onCancel, centered = true)
     }
 }
 
 @Composable
-private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCancel: () -> Unit) {
-        Column(Modifier.widthIn(max = 460.dp)) {
-            Text("Set up from another device", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCancel: () -> Unit, centered: Boolean) {
+        // Phones and tablets: one centered column on the QR's axis (matches iPhone and iPad).
+        // TV: leading-aligned text beside the QR.
+        val align = if (centered) TextAlign.Center else TextAlign.Start
+        Column(
+            if (centered) Modifier.fillMaxWidth() else Modifier.widthIn(max = 460.dp),
+            horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start,
+        ) {
+            Text("Set up from another device", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = align)
             Spacer(Modifier.height(12.dp))
             Text(
                 "Open AerioTV on your other device, then Settings > Playlists > open your playlist > Set up another device, or scan this code.",
                 style = MaterialTheme.typography.bodyLarge.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = align,
             )
             Spacer(Modifier.height(20.dp))
             Text(
@@ -376,11 +388,12 @@ private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCa
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
+                textAlign = align,
             )
             Spacer(Modifier.height(4.dp))
-            Text("Key ${offer.fingerprint}", fontSize = 22.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            Text("Key ${offer.fingerprint}", fontSize = 22.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, textAlign = align)
             Spacer(Modifier.height(4.dp))
-            Text(offer.deviceName, style = MaterialTheme.typography.bodyMedium.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(offer.deviceName, style = MaterialTheme.typography.bodyMedium.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = align)
             Spacer(Modifier.height(24.dp))
             OutlinedButton(
                 onClick = onCancel,
