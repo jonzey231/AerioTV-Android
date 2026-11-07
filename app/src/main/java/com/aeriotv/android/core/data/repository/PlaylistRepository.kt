@@ -2084,20 +2084,39 @@ class PlaylistRepository @Inject constructor(
     private val epgSweepJobs = ConcurrentHashMap<String, Job>()
 
     /**
-     * Read the server's EPG sources list and compare it against the
-     * fingerprint the cached guide was built from.
+     * What a background sweep has to do: the server state to remember once it
+     * completes, and which channels it may write.
      *
-     * Returns the new fingerprint when it DIFFERS (so the caller can store it
-     * once its sweep finishes), null when it is identical or the list could not
-     * be read. Read-only on purpose: nothing here drops the cache. Logan
-     * 2026-09-12 refreshes EPG in Dispatcharr every few hours, so a stamp
-     * change must never make the user wait for a download; it only decides
-     * whether the quiet background sweep below is worth running at all.
+     * [changedSourceIds] are the EPG sources whose (id, last refresh) pair is
+     * not in the stored fingerprint. [allChannels] is true when the grid
+     * decoder revision moved (every row may decode differently) or when no
+     * fingerprint was ever stored (first sweep for this playlist).
      */
-    private suspend fun changedEpgSourcesFingerprint(
+    private class EpgSweepPlan(
+        val fingerprint: String,
+        val changedSourceIds: Set<Int>,
+        val allChannels: Boolean,
+    )
+
+    /**
+     * Read the server's EPG sources list and compare it against the
+     * fingerprint the cached guide was built from, PER SOURCE.
+     *
+     * Returns the plan when something DIFFERS, null when it is identical or the
+     * list could not be read. Read-only on purpose: nothing here drops the
+     * cache. Logan 2026-09-12 refreshes EPG in Dispatcharr every few hours, so
+     * a stamp change must never make the user wait for a download; it only
+     * decides whether the quiet background sweep below is worth running and
+     * which channels it covers.
+     *
+     * Dev hook for measurement: `adb shell setprop debug.aerio.epg_force_source
+     * <source id>` treats that one source as refreshed even when its stamp did
+     * not move.
+     */
+    private suspend fun epgSweepPlan(
         playlist: PlaylistEntity,
         base: String,
-    ): String? {
+    ): EpgSweepPlan? {
         val sources = runCatching {
             dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
                 dispatcharrClient.listEpgSources(base, key)
@@ -2117,19 +2136,127 @@ class PlaylistRepository @Inject constructor(
             return null
         }
         val fingerprint = epgSourcesFingerprint(sources)
-        if (fingerprint == playlist.dispatcharrEpgSourceFingerprint) {
+        val stored = playlist.dispatcharrEpgSourceFingerprint
+        val storedPairs = stored?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+        val newPairs = fingerprint.split(",").filter { it.isNotBlank() && it !in storedPairs }
+        val forced = forcedEpgSweepSourceId()
+        val changedIds = newPairs.mapNotNull { it.substringBefore(':').toIntOrNull() }.toMutableSet()
+        if (forced != null) changedIds.add(forced)
+        val allChannels = stored.isNullOrBlank() || newPairs.any { it.startsWith("grid-decoder:") }
+        if (changedIds.isEmpty() && !allChannels) {
             Log.i("PlaylistRepo", "[EPG] sources unchanged, background sweep skipped")
-            Log.i("PlaylistRepo", "[EPG] sources fingerprint unchanged (${sources.size} sources)")
+            Log.i("PlaylistRepo", "[EPG] sources fingerprint unchanged (${sources.size} sources, ids ${sources.map { it.id }.sorted()})")
             return null
         }
-        val storedPairs = playlist.dispatcharrEpgSourceFingerprint
-            ?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
-        val refreshed = fingerprint.split(",").count { it.isNotBlank() && it !in storedPairs }
         Log.i(
             "PlaylistRepo",
-            "[EPG] sources changed ($refreshed refreshed since cache): background sweep queued",
+            "[EPG] sources changed (${changedIds.size} of ${sources.size} refreshed since cache" +
+                (if (forced != null) ", source $forced forced" else "") +
+                (if (allChannels) ", all channels" else "") +
+                "): background sweep queued",
         )
-        return fingerprint
+        return EpgSweepPlan(fingerprint, changedIds, allChannels)
+    }
+
+    private fun forcedEpgSweepSourceId(): Int? = runCatching {
+        java.io.BufferedReader(java.io.InputStreamReader(
+            Runtime.getRuntime().exec(arrayOf("getprop", "debug.aerio.epg_force_source")).inputStream,
+        )).use { it.readLine()?.trim()?.toIntOrNull() }
+    }.getOrNull()
+
+    /**
+     * Guide keys (lowercased tvg-ids) fed by [sourceIds], from
+     * /api/epg/epgdata/. Null when the list could not be read; the caller
+     * stops rather than widening the sweep to every channel.
+     */
+    private suspend fun epgKeysForSources(playlist: PlaylistEntity, base: String, sourceIds: Set<Int>): Set<String>? {
+        val rows = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key -> dispatcharrClient.listEpgData(base, key) }
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            Log.w("PlaylistRepo", "[EPG] epgdata unreadable; sweep waits for the next gate: $it")
+            return null
+        }
+        val keys = HashSet<String>()
+        for (r in rows) {
+            val src = r.epgSourceId ?: continue
+            if (src !in sourceIds) continue
+            r.tvgId?.trim()?.lowercase()?.takeIf { it.isNotBlank() }?.let(keys::add)
+        }
+        Log.i("PlaylistRepo", "[EPG] sweep scope: ${keys.size} channel key(s) fed by source(s) ${sourceIds.sorted()}")
+        return keys
+    }
+
+    /** Days a sweep toward [fingerprint] already applied, so an interrupted
+     *  sweep resumes at the next day instead of day 1. */
+    private fun epgSweepProgress(playlistId: String, fingerprint: String): MutableSet<Long> {
+        val raw = epgSweepPrefs.getString(playlistId, null) ?: return mutableSetOf()
+        val fp = raw.substringBefore('\n')
+        if (fp != fingerprint) return mutableSetOf()
+        return raw.substringAfter('\n', "").split(',').mapNotNull { it.toLongOrNull() }.toMutableSet()
+    }
+
+    private fun saveEpgSweepProgress(playlistId: String, fingerprint: String, days: Set<Long>) {
+        epgSweepPrefs.edit().putString(playlistId, fingerprint + "\n" + days.joinToString(",")).apply()
+    }
+
+    private fun clearEpgSweepProgress(playlistId: String) {
+        epgSweepPrefs.edit().remove(playlistId).apply()
+    }
+
+    private val epgSweepPrefs by lazy {
+        context.getSharedPreferences("epg_sweep_progress", Context.MODE_PRIVATE)
+    }
+
+    /**
+     * One sweep day: fetch the grid for [start]..[end], diff it against the
+     * cached rows of the same span, and write ONLY the additions, removals,
+     * and changes (EpgDayDiff). Unchanged programs are never rewritten. Null
+     * when the fetch or the write failed (the sweep stops and resumes here).
+     */
+    private suspend fun sweepGridDay(
+        playlist: PlaylistEntity,
+        base: String,
+        start: Long,
+        end: Long,
+        inScope: ((String) -> Boolean)?,
+    ): Int? {
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val programmes = runCatching {
+            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+            }
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            Log.w("PlaylistRepo", "[EPG] sweep day fetch failed; stopping: $it")
+            return null
+        }
+        val tFetch = android.os.SystemClock.elapsedRealtime()
+        DeletedPlaylists.ensureAlive(playlist.id, "EPG sweep")
+        val result = runCatching {
+            com.aeriotv.android.core.app.BackgroundSweep.serial {
+                val now = System.currentTimeMillis()
+                val fetched = programmes.map { it.toCacheEntity(playlist.id, now) }
+                val cached = epgProgrammeDao.rowsInSpanBlocking(playlist.id, start, end)
+                val diff = EpgDayDiff.compute(fetched, cached, inScope, now)
+                if (diff.writes > 0 || diff.remapped > 0) epgProgrammeDao.applySweepDayBlocking(diff.deleteIds, diff.upserts, diff.programIdUpdates)
+                diff
+            }
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            Log.w("PlaylistRepo", "[EPG] sweep day write failed; stopping", it)
+            return null
+        }
+        val tEnd = android.os.SystemClock.elapsedRealtime()
+        Log.i(
+            "PlaylistRepo",
+            "[EPG] sweep day=${java.time.Instant.ofEpochMilli(start).toString().take(10)} " +
+                "fetched=${programmes.size} inScope=${result.fetchedInScope} " +
+                "unchanged=${result.unchanged} added=${result.added} removed=${result.removed} " +
+                "changed=${result.changed} writes=${result.writes} idOnly=${result.remapped} " +
+                "fetchMs=${tFetch - t0} diffMs=${tEnd - tFetch} ms=${tEnd - t0}",
+        )
+        return programmes.size
     }
 
     /**
@@ -2167,16 +2294,21 @@ class PlaylistRepository @Inject constructor(
      * from cache, a tune (if any) is past its first frame, and
      * [EPG_SWEEP_SETTLE_MS] has passed -- this walks the day chunks one at a
      * time, [EPG_SWEEP_CHUNK_GAP_MS] apart, on the background-priority EPG
-     * dispatcher. Each chunk REPLACES the cached programs for its day as it
-     * lands (authoritative merge), so the open guide corrects itself quietly
-     * and a sporting event the provider moved to another day cannot keep
-     * showing its old time.
+     * dispatcher. Each day is DIFFED against the cached programs and only the
+     * additions, removals, and changes are written (EpgDayDiff), and only for
+     * channels fed by the sources that refreshed, so the open guide corrects
+     * itself quietly, a sporting event the provider moved or dropped cannot
+     * keep showing its old slot, and an unchanged day costs zero writes.
+     * Measured 2026-11-06 on the Streamer: the old authoritative merge
+     * rewrote every program of all 38 days on any one source refresh.
      *
      * Pauses while a tune is in flight (before first frame) and while the app
      * is backgrounded, resuming at the chunk it stopped on: a guide refresh is
      * never worth a frame of playback. The sources fingerprint is stored only
      * when the sweep COMPLETES, so an interrupted sweep is retried rather than
-     * being remembered as done.
+     * being remembered as done; the days it already applied are remembered
+     * per target fingerprint, so the retry resumes at the next day instead of
+     * day 1. It also holds while Multiview is on screen (EpgSweepGate).
      *
      * Note on request priority: okhttp exposes no per-request network priority
      * here, so "low resource" is the dispatcher (THREAD_PRIORITY_BACKGROUND,
@@ -2198,24 +2330,47 @@ class PlaylistRepository @Inject constructor(
                 if (!playlist.dispatcharrVersionAtLeast("0.30.0")) return@launch
                 val base = effectiveBaseUrl(playlist)
                 // The GATE: no server-side re-ingest, no sweep at all.
-                val fingerprint = changedEpgSourcesFingerprint(playlist, base) ?: return@launch
-                val now = System.currentTimeMillis()
-                val chunks = sweepChunkOrder(playlist, now)
-                var refreshed = 0
-                for ((start, end) in chunks) {
-                    awaitSweepWindow()
-                    // One chunk at a time on the background serial lane, so
-                    // it never runs beside the VOD sweep or the EPG compare.
-                    val n = com.aeriotv.android.core.app.BackgroundSweep.serial {
-                        fetchGridChunk(playlist, base, start, end, authoritative = true)
-                    }
-                    if (n == null) {
-                        // A failed chunk stops the sweep exactly like the
-                        // incremental walk stops: the fingerprint is NOT
-                        // stored, so the next 15 min gate retries from the top.
-                        Log.w("PlaylistRepo", "[EPG] background sweep stopped after $refreshed chunk(s)")
+                val plan = epgSweepPlan(playlist, base) ?: return@launch
+                val fingerprint = plan.fingerprint
+                // Only the channels the refreshed sources feed. The grid has no
+                // per-source filter, so every day is still one request, but
+                // rows of channels whose source did not change are never
+                // written.
+                val inScope: ((String) -> Boolean)? = if (plan.allChannels) {
+                    null
+                } else {
+                    val keys = epgKeysForSources(playlist, base, plan.changedSourceIds) ?: return@launch
+                    if (keys.isEmpty()) {
+                        Log.i("PlaylistRepo", "[EPG] refreshed sources feed no channels here; nothing to sweep")
+                        runCatching { dao.updateEpgSourceFingerprint(playlistId, fingerprint) }
                         return@launch
                     }
+                    { ch: String -> ch.lowercase() in keys }
+                }
+                val now = System.currentTimeMillis()
+                val chunks = sweepChunkOrder(playlist, now)
+                // Resume: a day applied toward this same server state is not
+                // fetched again after an interruption.
+                val progressKey = fingerprint + (forcedEpgSweepSourceId()?.let { "|force:$it" } ?: "")
+                val done = epgSweepProgress(playlistId, progressKey)
+                if (done.isNotEmpty()) {
+                    Log.i("PlaylistRepo", "[EPG] background sweep resuming: ${done.size} of ${chunks.size} day(s) already applied")
+                }
+                val sweepStartedAt = android.os.SystemClock.elapsedRealtime()
+                var refreshed = done.size
+                for ((start, end) in chunks) {
+                    if (start in done) continue
+                    awaitSweepWindow()
+                    val n = sweepGridDay(playlist, base, start, end, inScope)
+                    if (n == null) {
+                        // A failed day stops the sweep: the fingerprint is NOT
+                        // stored, and the days already applied are remembered,
+                        // so the next gate resumes at this day, not day 1.
+                        Log.w("PlaylistRepo", "[EPG] background sweep stopped after $refreshed of ${chunks.size} day(s)")
+                        return@launch
+                    }
+                    done.add(start)
+                    saveEpgSweepProgress(playlistId, progressKey, done)
                     // Keep the coverage map honest: this day was just
                     // re-fetched, so its TTL clock restarts here.
                     runCatching {
@@ -2236,9 +2391,11 @@ class PlaylistRepository @Inject constructor(
                 // sweep until Dispatcharr re-ingests again.
                 runCatching { dao.updateEpgSourceFingerprint(playlistId, fingerprint) }
                     .onFailure { Log.w("PlaylistRepo", "[EPG] sources fingerprint persist failed", it) }
+                clearEpgSweepProgress(playlistId)
                 Log.i(
                     "PlaylistRepo",
-                    "[EPG] background sweep complete: $refreshed of ${chunks.size} chunk(s) refreshed",
+                    "[EPG] background sweep complete: $refreshed of ${chunks.size} day(s) applied in " +
+                        "${android.os.SystemClock.elapsedRealtime() - sweepStartedAt} ms",
                 )
                 // End of every sweep: drop the history that is no longer
                 // reachable for catch-up, including the coverage rows for those

@@ -237,6 +237,14 @@ interface EpgProgrammeDao {
     )
     fun keysInSpanBlocking(playlistId: String, fromMs: Long, toMs: Long): List<EpgKeyRow>
 
+    /** Full cached rows overlapping [fromMs]..[toMs], for the background
+     *  sweep's per-day diff (EpgDayDiff). Background serial lane only. */
+    @Query(
+        "SELECT * FROM epg_programme " +
+            "WHERE playlistId = :playlistId AND endMillis > :fromMs AND startMillis < :toMs",
+    )
+    fun rowsInSpanBlocking(playlistId: String, fromMs: Long, toMs: Long): List<com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity>
+
     @Query("UPDATE epg_programme SET category = :category WHERE playlistId = :playlistId AND channelId = :channelId AND startMillis = :startMillis")
     fun updateCategoryBlocking(playlistId: String, channelId: String, startMillis: Long, category: String): Int
 
@@ -262,6 +270,19 @@ interface EpgProgrammeDao {
     fun applyDeltaBlocking(deleteIds: List<Long>, rows: List<EpgProgrammeEntity>) {
         deleteIds.chunked(900).forEach { deleteByIdsBlocking(it) }
         if (rows.isNotEmpty()) insertAllBlocking(rows)
+    }
+
+    @Query("UPDATE epg_programme SET dispatcharrProgramId = :programId WHERE id = :id")
+    fun updateProgramIdBlocking(id: Long, programId: Int?): Int
+
+    /** Background sweep day (EpgDayDiff): removals, additions and changes,
+     *  plus in-place program id updates for otherwise unchanged rows, in one
+     *  transaction. Unchanged rows are not touched. */
+    @Transaction
+    fun applySweepDayBlocking(deleteIds: List<Long>, rows: List<EpgProgrammeEntity>, programIdUpdates: List<Pair<Long, Int?>>) {
+        deleteIds.chunked(900).forEach { deleteByIdsBlocking(it) }
+        if (rows.isNotEmpty()) insertAllBlocking(rows)
+        for ((id, pid) in programIdUpdates) updateProgramIdBlocking(id, pid)
     }
 
     @Transaction
