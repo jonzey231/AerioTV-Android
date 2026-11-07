@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -208,16 +209,35 @@ class SetUpTvViewModel @Inject constructor(
     override fun onCleared() { discovery.stop() }
 }
 
-/** Full-screen "Set up another device" flow. [playlistId] null = the active playlist; [link] = a scanned aeriotv://setup URL. */
+/**
+ * "Set up another device" flow. [playlistId] null = the active playlist; [link] = a scanned aeriotv://setup URL.
+ * Phones and tablets: a bottom sheet that hugs its content (iOS: medium detent). TV: full screen.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun SetUpTvDialog(playlistId: String?, link: String? = null, target: SetupTarget? = null, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        SetUpTvScreen(playlistId, link, onDismiss, target = target)
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val isTv = androidx.compose.runtime.remember {
+        ctx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+    }
+    if (isTv) {
+        Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            SetUpTvScreen(playlistId, link, onDismiss, target = target)
+        }
+    } else {
+        val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.background,
+        ) {
+            SetUpTvScreen(playlistId, link, onDismiss, target = target, inSheet = true)
+        }
     }
 }
 
 @Composable
-fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, target: SetupTarget? = null, vm: SetUpTvViewModel = hiltViewModel()) {
+fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, target: SetupTarget? = null, inSheet: Boolean = false, vm: SetUpTvViewModel = hiltViewModel()) {
     LaunchedEffect(playlistId, link) { vm.load(playlistId, link, target) }
     DisposableEffect(Unit) { vm.discovery.start(); onDispose { vm.discovery.stop() } }
     val step by vm.step.collectAsStateWithLifecycle()
@@ -225,8 +245,8 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
     val tvs by vm.discovery.tvs.collectAsStateWithLifecycle()
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.safeDrawing)
+        (if (inSheet) Modifier.fillMaxWidth().imePadding()
+        else Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing))
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -249,7 +269,7 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                 is SetUpTvViewModel.Step.Code -> CodeStep(s, vm::submitCode)
                 is SetUpTvViewModel.Step.Choose -> ChooseStep(s, source, vm.userOnly.collectAsStateWithLifecycle().value, vm::send)
                 SetUpTvViewModel.Step.Sending -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(Modifier.size(24.dp)); Text("Sending to the device", color = MaterialTheme.colorScheme.onBackground)
+                    CircularProgressIndicator(Modifier.size(24.dp)); Text("Sending to the other device", color = MaterialTheme.colorScheme.onBackground)
                 }
                 SetUpTvViewModel.Step.Sent -> {
                     Text("Sent. The device is finishing setup now.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
