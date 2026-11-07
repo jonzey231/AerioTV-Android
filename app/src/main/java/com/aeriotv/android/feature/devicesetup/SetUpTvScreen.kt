@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -211,7 +213,7 @@ class SetUpTvViewModel @Inject constructor(
 
 /**
  * "Set up another device" flow. [playlistId] null = the active playlist; [link] = a scanned aeriotv://setup URL.
- * Phones and tablets: a bottom sheet that hugs its content (iOS: medium detent). TV: full screen.
+ * Phones and tablets: styled as the remote-session (Cast) sheet, hugging its content. TV: full screen.
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -225,13 +227,11 @@ fun SetUpTvDialog(playlistId: String?, link: String? = null, target: SetupTarget
             SetUpTvScreen(playlistId, link, onDismiss, target = target)
         }
     } else {
-        val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = onDismiss,
-            sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.background,
-        ) {
-            SetUpTvScreen(playlistId, link, onDismiss, target = target, inSheet = true)
+        // The remote-session (Cast) sheet's container: black, drag handle, hugs its content.
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss, sheetContainerColor = androidx.compose.ui.graphics.Color.Black) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalSetupSheetStyle provides true) {
+                SetUpTvScreen(playlistId, link, onDismiss, target = target, inSheet = true)
+            }
         }
     }
 }
@@ -248,11 +248,23 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
         (if (inSheet) Modifier.fillMaxWidth().imePadding()
         else Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing))
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 20.dp),
+            .then(if (inSheet) Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 18.dp) else Modifier.padding(horizontal = 16.dp, vertical = 20.dp)),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Set up another device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+        Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(if (inSheet) 14.dp else 12.dp)) {
+            if (inSheet) {
+                // Remote-session sheet header: accent glyph, bold title, accent device line.
+                val t = step.setupTarget()
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    androidx.compose.foundation.layout.Box(Modifier.height(56.dp), contentAlignment = Alignment.Center) {
+                        Icon(t?.let { setupKindIcon(it.kind) } ?: Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp))
+                    }
+                    Text("Set up another device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color.White, maxLines = 1)
+                    if (t != null) Text(t.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+            } else {
+                Text("Set up another device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            }
             when (val s = step) {
                 SetUpTvViewModel.Step.Pick -> PickStep(tvs, vm::pick, vm::useLink)
                 is SetUpTvViewModel.Step.Scope -> ScopeStep(s, vm.userOnly.collectAsStateWithLifecycle().value, vm::chooseScope)
@@ -273,17 +285,17 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                 }
                 SetUpTvViewModel.Step.Sent -> {
                     Text("Sent. The device is finishing setup now.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                    Button(onClick = onClose, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text("Done") }
+                    SetupPrimaryButton("Done", onClick = onClose)
                 }
                 is SetUpTvViewModel.Step.Error -> {
                     Text(s.message, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
-                    Button(onClick = vm::back, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text("Try Again") }
+                    SetupPrimaryButton("Try Again", onClick = vm::back)
                 }
             }
             if (step !is SetUpTvViewModel.Step.Sent && step !is SetUpTvViewModel.Step.Sending) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (step !is SetUpTvViewModel.Step.Pick) OutlinedButton(onClick = vm::back, modifier = Modifier.weight(1f)) { Text("Back") }
-                    OutlinedButton(onClick = onClose, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                    if (step !is SetUpTvViewModel.Step.Pick) SetupSecondaryButton("Back", onClick = vm::back, modifier = Modifier.weight(1f))
+                    SetupSecondaryButton("Cancel", onClick = onClose, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -305,8 +317,8 @@ private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit, onLi
     }
     tvs.forEach { t ->
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(setupRowRadius()))
+                .background(setupRowBackground())
                 .clickable { onPick(t) }.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -337,8 +349,8 @@ private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoos
     var pickedUserOnly by remember(s.target.key) { mutableStateOf(userOnly) }
     Text("Set up ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(setupRowRadius()))
+            .background(setupRowBackground())
             .selectableGroup(),
     ) {
         listOf(false to "Copy entire setup from this device", true to "Import this user only").forEach { (value, label) ->
@@ -353,7 +365,7 @@ private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoos
             }
         }
     }
-    Button(onClick = { onChoose(s.target, pickedUserOnly) }, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text("Continue") }
+    SetupPrimaryButton("Continue", onClick = { onChoose(s.target, pickedUserOnly) })
 }
 
 @Composable
@@ -370,7 +382,7 @@ private fun CodeStep(s: SetUpTvViewModel.Step.Code, onSubmit: (SetupTarget, Stri
         modifier = Modifier.fillMaxWidth(),
     )
     s.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-    Button(onClick = { onSubmit(s.target, code) }, enabled = code.length == 6, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text("Continue") }
+    SetupPrimaryButton("Continue", onClick = { onSubmit(s.target, code) }, enabled = code.length == 6)
 }
 
 @Composable
@@ -426,10 +438,60 @@ private fun ChooseStep(
         }
     }
     Spacer(Modifier.heightIn(min = 4.dp))
-    Button(onClick = { onSend(s.target, s.code, picked.toSet(), sync) }, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text("Send") }
+    SetupPrimaryButton("Send", onClick = { onSend(s.target, s.code, picked.toSet(), sync) })
     Text(
         "Sent only to this device over your network, encrypted with its code. Nothing goes through your server.",
         style = MaterialTheme.typography.bodySmall.subtext(),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/** True inside the phone/tablet sheet: the remote-session (Cast) sheet's styling. */
+private val LocalSetupSheetStyle = androidx.compose.runtime.staticCompositionLocalOf { false }
+
+@Composable
+private fun setupRowBackground(): androidx.compose.ui.graphics.Color =
+    if (LocalSetupSheetStyle.current) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
+    else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+
+@Composable
+private fun setupRowRadius() = if (LocalSetupSheetStyle.current) 14.dp else 12.dp
+
+private fun SetUpTvViewModel.Step.setupTarget(): SetupTarget? = when (this) {
+    is SetUpTvViewModel.Step.Scope -> target
+    is SetUpTvViewModel.Step.Credential -> target
+    is SetUpTvViewModel.Step.Code -> target
+    is SetUpTvViewModel.Step.Choose -> target
+    else -> null
+}
+
+/** Primary action: the remote-session sheet's wide button (14 dp corners, accent fill) in the sheet, a Material button on TV. */
+@Composable
+private fun SetupPrimaryButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
+    if (LocalSetupSheetStyle.current) {
+        SetupWideButton(label, MaterialTheme.colorScheme.onPrimary, MaterialTheme.colorScheme.primary, onClick, enabled, Modifier.fillMaxWidth())
+    } else {
+        Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)) { Text(label) }
+    }
+}
+
+/** Secondary action: the remote-session sheet's 12% white wide button in the sheet, an outlined button on TV. */
+@Composable
+private fun SetupSecondaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    if (LocalSetupSheetStyle.current) {
+        SetupWideButton(label, androidx.compose.ui.graphics.Color.White, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.12f), onClick, true, modifier)
+    } else {
+        OutlinedButton(onClick = onClick, modifier = modifier) { Text(label) }
+    }
+}
+
+@Composable
+private fun SetupWideButton(label: String, content: androidx.compose.ui.graphics.Color, background: androidx.compose.ui.graphics.Color, onClick: () -> Unit, enabled: Boolean, modifier: Modifier) {
+    androidx.compose.foundation.layout.Box(
+        modifier.alpha(if (enabled) 1f else 0.4f).clip(RoundedCornerShape(14.dp)).background(background)
+            .clickable(enabled = enabled, onClick = onClick).padding(vertical = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = content)
+    }
 }
