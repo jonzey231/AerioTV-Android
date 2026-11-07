@@ -13,7 +13,7 @@ object ColorPickerMath {
     const val GRID_ROWS = 10
 
     /** Hue of each grid column, matching the order of the Apple grid. */
-    private val GRID_HUES = floatArrayOf(196f, 218f, 252f, 276f, 312f, 356f, 14f, 28f, 40f, 52f, 66f, 92f)
+    private val GRID_HUES = floatArrayOf(196f, 218f, 252f, 280f, 340f, 6f, 14f, 28f, 40f, 52f, 66f, 92f)
 
     /**
      * Strips anything that is not a hex digit, uppercases, and caps at six,
@@ -83,8 +83,8 @@ object ColorPickerMath {
             rgb(v, v, v)
         }
         for (row in 0 until GRID_ROWS - 1) {
-            val l = 0.14f + row * (0.86f - 0.14f) / (GRID_ROWS - 2)
-            rows += GRID_HUES.map { h -> hsl(h, 1f, l) }
+            val l = 0.12f + row * (0.92f - 0.12f) / (GRID_ROWS - 2)
+            rows += GRID_HUES.map { h -> hsl(h, 0.88f, l) }
         }
         return rows
     }

@@ -120,7 +120,7 @@ fun HexColorPickerSheet(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .clip(RoundedCornerShape(50))
-                        .background(accent.copy(alpha = 0.15f))
+                        .background(muted.copy(alpha = 0.22f))
                         .clickable(onClick = onDismiss)
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
