@@ -347,7 +347,12 @@ private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit, onLi
 @Composable
 private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoose: (SetupTarget, Boolean) -> Unit) {
     var pickedUserOnly by remember(s.target.key) { mutableStateOf(userOnly) }
-    Text("Set up ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+    if (LocalSetupSheetStyle.current) {
+        // The sheet header already names the device; match the iPhone sheet.
+        Text("What to send", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        Text("Send to ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+    }
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(setupRowRadius()))
             .background(setupRowBackground())
@@ -371,7 +376,8 @@ private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoos
 @Composable
 private fun CodeStep(s: SetUpTvViewModel.Step.Code, onSubmit: (SetupTarget, String) -> Unit) {
     var code by remember(s.target.key) { mutableStateOf("") }
-    Text("Enter the code shown on ${s.target.name}.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+    val prompt = if (LocalSetupSheetStyle.current) "Enter the code shown on the other device." else "Enter the code shown on ${s.target.name}."
+    Text(prompt, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
     OutlinedTextField(
         value = code,
         onValueChange = { code = it.filter(Char::isDigit).take(6) },
@@ -403,7 +409,9 @@ private fun ChooseStep(
         }
     }
     var sync by remember(source, userOnly) { mutableStateOf(source.isDispatcharr && !userOnly) }
-    Text("Send to ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+    if (!LocalSetupSheetStyle.current) {
+        Text("Send to ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+    }
     Text("Playlist: ${source.playlist.name}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
     if (source.isDispatcharr && source.choices.isNotEmpty() && !userOnly) {
         Text("Profiles", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
