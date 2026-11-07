@@ -190,7 +190,11 @@ class SetUpTvViewModel @Inject constructor(
             val payload = sender.buildPayload(id, profileIds, sync, userOnly = _userOnly.value)
                 ?: run { _step.value = Step.Error("This playlist could not be read.", back); return@launch }
             _step.value = when (val r = sender.send(t, code, payload)) {
-                SetupSender.SendResult.Ok -> Step.Sent
+                SetupSender.SendResult.Ok -> {
+                    // Never offered again under this key, even if the advert goodbye is lost.
+                    SetupDockDismissals.dismiss(t)
+                    Step.Sent
+                }
                 SetupSender.SendResult.WrongCode -> Step.Code(t.copy(code = null), "The device did not accept that code. Check the code on the device and try again.")
                 SetupSender.SendResult.Refused -> Step.Error("The device is no longer waiting. Start setup on the device again.", Step.Pick)
                 is SetupSender.SendResult.Failed -> Step.Error(r.message, back)
