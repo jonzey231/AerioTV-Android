@@ -1113,6 +1113,22 @@ class AerioExoPlayerHolder @Inject constructor(
         if (resumeGateActive) return
         if (!resumeGateEligible()) return
         val p = player ?: return
+        if (inSwitchWindow()) {
+            // The next switch drops whatever this hold would release onto
+            // (ResumeGatePolicy switch window rule). Defer one full hold to
+            // the moment the window closes.
+            resumeGatePeakTargetMs = ResumeGatePolicy.effectiveTarget(resumeGateTargetMs(), resumeGatePeakTargetMs)
+            if (!postSwitchHoldPending) {
+                Log.i(
+                    TAG,
+                    "[HOLDBACK] resume gate deferred ch=$currentChannelId reason=$reason: switch window open " +
+                        "for ${switchWindowUntilMs - SystemClock.elapsedRealtime()}ms; one hold to " +
+                        "${resumeGatePeakTargetMs}ms when it closes",
+                )
+            }
+            postSwitchHoldPending = true
+            return
+        }
         // A feed gaining media time slower than the wall clock is starved
         // upstream, not bursty: there is no burst coming to refill the cushion,
         // so a gate would just sit there until the fuse blows.
@@ -1120,9 +1136,10 @@ class AerioExoPlayerHolder @Inject constructor(
         // held 15.5 s on a 0.68x feed (Streamer, 2026-11-07). It now goes
         // through the same check; the flag only tags the log line.
         val ratio = tracer.feedMediaRatio()
-        val target = resumeGateTargetMs()
+        val target = ResumeGatePolicy.effectiveTarget(resumeGateTargetMs(), resumeGatePeakTargetMs)
         val ahead = bufferedAheadMs(p)
         if (ratio != null && ratio < ResumeGatePolicy.MEDIA_RATIO_MIN && target > 0L && ahead < target) {
+            resumeGatePeakTargetMs = 0L
             Log.i(
                 TAG,
                 "[HOLDBACK] resume gate skipped: upstream rate ${"%.2f".format(ratio)} " +
@@ -1130,8 +1147,12 @@ class AerioExoPlayerHolder @Inject constructor(
             )
             return
         }
-        if (!ResumeGatePolicy.shouldArm(ahead, target, ratio, repeat = skipRateCheck)) return
+        if (!ResumeGatePolicy.shouldArm(ahead, target, ratio, repeat = skipRateCheck)) {
+            resumeGatePeakTargetMs = 0L
+            return
+        }
         resumeGateActive = true
+        resumeGatePeakTargetMs = target
         resumeGateArmedAtMs = SystemClock.elapsedRealtime()
         resumeGateLoggedTargetMs = target
         Log.i(
@@ -1145,9 +1166,28 @@ class AerioExoPlayerHolder @Inject constructor(
         p.playWhenReady = false
     }
 
+    /** A running hold met a switch start: keep holding (ResumeGatePolicy
+     *  switch window rule) instead of releasing onto a buffer the switch is
+     *  about to drop. Release then waits for the window to close and the
+     *  target to be met, bounded by the hard timeout from the original arm. */
+    private fun extendResumeGateForSwitch(reason: String) {
+        if (!resumeGateActive) return
+        Log.i(
+            TAG,
+            "[HOLDBACK] resume gate extended ch=$currentChannelId: $reason; holding until the switch " +
+                "window closes and ${resumeGatePeakTargetMs}ms is buffered " +
+                "(held ${SystemClock.elapsedRealtime() - resumeGateArmedAtMs}ms of ${RESUME_GATE_TIMEOUT_MS}ms)",
+        )
+        player?.playWhenReady = false
+    }
+
     /** Release the gate and let playback run. */
     private fun releaseResumeGate(reason: String) {
-        if (!resumeGateActive) return
+        postSwitchHoldPending = false
+        if (!resumeGateActive) {
+            resumeGatePeakTargetMs = 0L
+            return
+        }
         val p = player
         Log.i(TAG, "[HOLDBACK] resume gate released ch=$currentChannelId: $reason")
         // Flag stays true across the assignment so onPlayWhenReadyChanged still
@@ -1156,6 +1196,7 @@ class AerioExoPlayerHolder @Inject constructor(
         resumeGateActive = false
         resumeGateArmedAtMs = 0L
         resumeGateLoggedTargetMs = 0L
+        resumeGatePeakTargetMs = 0L
         repeatHoldTargetMs = 0L
     }
 
@@ -1168,12 +1209,27 @@ class AerioExoPlayerHolder @Inject constructor(
 
     /** Drive the armed gate from the 1 s watchdog poll. */
     private fun tickResumeGate(p: ExoPlayer, now: Long) {
-        if (!resumeGateActive) return
+        val windowOpen = inSwitchWindow()
+        if (!resumeGateActive) {
+            if (postSwitchHoldPending && windowOpen) {
+                resumeGatePeakTargetMs = ResumeGatePolicy.effectiveTarget(resumeGateTargetMs(), resumeGatePeakTargetMs)
+            } else if (ResumeGatePolicy.shouldArmAfterSwitch(postSwitchHoldPending, windowOpen, resumeGateActive)) {
+                postSwitchHoldPending = false
+                if (resumeGateEligible()) {
+                    Log.i(TAG, "[HOLDBACK] switch window closed ch=$currentChannelId; arming the deferred hold")
+                    armResumeGate("post-switch")
+                } else {
+                    resumeGatePeakTargetMs = 0L
+                }
+            }
+            return
+        }
         if (!resumeGateEligible()) {
             releaseResumeGate("session changed")
             return
         }
-        val target = resumeGateTargetMs()
+        val target = ResumeGatePolicy.effectiveTarget(resumeGateTargetMs(), resumeGatePeakTargetMs)
+        resumeGatePeakTargetMs = target
         if (target > resumeGateLoggedTargetMs) {
             Log.i(
                 TAG,
@@ -1188,12 +1244,18 @@ class AerioExoPlayerHolder @Inject constructor(
     /** Release the gate the moment the policy says so: target reached, feed
      *  starved, or hard timeout. Runs on every 1 s watchdog tick, which is not
      *  gated by the switch window, so a hold also ends mid-switch. */
-    private fun checkResumeGateRelease(p: ExoPlayer, now: Long, target: Long = resumeGateTargetMs()) {
+    private fun checkResumeGateRelease(
+        p: ExoPlayer,
+        now: Long,
+        target: Long = ResumeGatePolicy.effectiveTarget(resumeGateTargetMs(), resumeGatePeakTargetMs),
+    ) {
         if (!resumeGateActive) return
         val ahead = bufferedAheadMs(p)
         val heldMs = now - resumeGateArmedAtMs
         val ratio = tracer.feedMediaRatio()
-        when (ResumeGatePolicy.releaseOnTick(ahead, target, ratio, heldMs, RESUME_GATE_TIMEOUT_MS)) {
+        when (ResumeGatePolicy.releaseOnTick(
+            ahead, target, ratio, heldMs, RESUME_GATE_TIMEOUT_MS, inSwitchWindow = inSwitchWindow(),
+        )) {
             ResumeGatePolicy.Release.TARGET_REACHED ->
                 releaseResumeGate("buffered ${ahead}ms >= target ${target}ms after ${heldMs}ms")
             ResumeGatePolicy.Release.FEED_STARVED ->
@@ -1216,6 +1278,8 @@ class AerioExoPlayerHolder @Inject constructor(
         resumeGateActive = false
         resumeGateArmedAtMs = 0L
         resumeGateLoggedTargetMs = 0L
+        resumeGatePeakTargetMs = 0L
+        postSwitchHoldPending = false
         repeatHoldTargetMs = 0L
     }
 
@@ -1249,6 +1313,11 @@ class AerioExoPlayerHolder @Inject constructor(
     private var resumeGateArmedAtMs = 0L
     /** Last target logged, so a rising target logs once instead of every tick. */
     private var resumeGateLoggedTargetMs = 0L
+    /** Highest target seen for the running or deferred hold; never shrinks
+     *  until the hold ends (ResumeGatePolicy switch window rule). */
+    private var resumeGatePeakTargetMs = 0L
+    /** A hold was wanted inside a switch window; arm it once the window closes. */
+    private var postSwitchHoldPending = false
     /** maxBufferMs the live LoadControl was built with. The gate can never wait
      *  for more media than the load control is willing to hold, so the target is
      *  clamped to just under it (a raised hold-back past this bound only takes
@@ -1680,8 +1749,8 @@ class AerioExoPlayerHolder @Inject constructor(
                 )
                 switchJumpGraceUntilMs = SystemClock.elapsedRealtime() + SWITCH_JUMP_GRACE_MS
                 holdAudioForFirstVideoFrame()
-                // Resume on what is loaded; never hold for a full gate here.
-                releaseResumeGate("stream switch jump")
+                // A running hold rides through the switch window (ResumeGatePolicy).
+                extendResumeGateForSwitch("stream switch jump")
                 lastPositionAdvanceAtMs = SystemClock.elapsedRealtime()
             }
             SwitchSkipMediaSource.Result.AlreadyPast ->
@@ -3279,7 +3348,7 @@ class AerioExoPlayerHolder @Inject constructor(
             val startAt = SystemClock.elapsedRealtime()
             switchWatchJob?.cancel()
             switchWatchJob = null
-            releaseResumeGate("server-side switch (reason=$reason); re-priming from zero")
+            extendResumeGateForSwitch("server-side switch (reason=$reason)")
             lastBufferAdvanceAtMs = startAt
             switchWindowUntilMs = startAt + SWITCH_WINDOW_MS
             val startPos = p.currentPosition
