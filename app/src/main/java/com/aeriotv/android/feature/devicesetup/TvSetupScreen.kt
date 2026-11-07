@@ -274,6 +274,8 @@ fun TvSetupScreen(
     request: TvSetupViewModel.Request? = null,
     /** Request mode failure: "Import this user only" applies the scanned user key. */
     onImportUserOnly: () -> Unit = {},
+    /** Room for the floating tab bar when shown inside the main tabs (Settings). */
+    bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
     vm: TvSetupViewModel = hiltViewModel(),
 ) {
     val phase by vm.phase.collectAsStateWithLifecycle()
@@ -288,7 +290,10 @@ fun TvSetupScreen(
     Box(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .then(if (isTv) Modifier else Modifier.systemBarsPadding().verticalScroll(rememberScrollState()))
-            .padding(horizontal = if (isTv) 48.dp else 20.dp, vertical = 32.dp),
+            .padding(horizontal = if (isTv) 48.dp else 20.dp, vertical = 32.dp)
+            // From Settings on the onn tablet the tab bar covered Cancel
+            // (2026-11-07).
+            .padding(bottom = if (isTv) 0.dp else bottomInset),
         contentAlignment = Alignment.Center,
     ) {
         when (val p = phase) {
