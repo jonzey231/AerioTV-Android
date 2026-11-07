@@ -320,6 +320,12 @@ fun AppearanceSettingsScreen(
                             onToggle = viewModel::setUseCustomAccent,
                             onPick = { accentPickerOpen = true },
                         )
+                        // Apple: a separate Accent Color row (hex and swatch)
+                        // under the toggle opens the color sheet.
+                        if (useCustomAccent) {
+                            DividerRow(startInset = 52.dp)
+                            ColorSheetRow(title = "Accent Color", hex = customAccentHex, onPick = { accentPickerOpen = true })
+                        }
                     }
                 }
 
@@ -432,7 +438,14 @@ fun AppearanceSettingsScreen(
     }
     }
 
-    if (themeColorPickerOpen) {
+    if (themeColorPickerOpen && !isTv) {
+        com.aeriotv.android.ui.settings.HexColorPickerSheet(
+            title = "Theme Color",
+            initialHex = customThemeHex,
+            onColor = viewModel::setCustomThemeHex,
+            onDismiss = { themeColorPickerOpen = false },
+        )
+    } else if (themeColorPickerOpen) {
         ColorPickerDialog(
             title = "Theme Color",
             initialHex = customThemeHex,
@@ -441,7 +454,18 @@ fun AppearanceSettingsScreen(
         )
     }
 
-    if (accentPickerOpen) {
+    if (accentPickerOpen && !isTv) {
+        com.aeriotv.android.ui.settings.HexColorPickerSheet(
+            title = "Accent Color",
+            initialHex = customAccentHex.takeIf { it.length == 6 }
+                ?: com.aeriotv.android.ui.theme.CustomThemePalette.hexString(currentTheme.accentPrimary.toArgb()),
+            onColor = { hex ->
+                viewModel.setCustomAccentHex(hex)
+                viewModel.setUseCustomAccent(true)
+            },
+            onDismiss = { accentPickerOpen = false },
+        )
+    } else if (accentPickerOpen) {
         ColorPickerDialog(
             title = "Accent Color",
             initialHex = customAccentHex.takeIf { it.length == 6 }
@@ -572,6 +596,10 @@ private const val CUSTOM_THEME_FOOTER =
 @Composable
 private fun ThemeColorRow(hex: String, onPick: () -> Unit) {
     val isTv = rememberIsTvDevice()
+    if (!isTv) {
+        ColorSheetRow(title = "Theme Color", hex = hex, onPick = onPick)
+        return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -603,6 +631,42 @@ private fun ThemeColorRow(hex: String, onPick: () -> Unit) {
             text = "#" + hex.uppercase(),
             style = MaterialTheme.typography.bodySmall.subtext(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Phone and tablet color row (Apple colorSheetRow): title, the hex value,
+ * and a circle swatch; tap opens the color sheet.
+ */
+@Composable
+private fun ColorSheetRow(title: String, hex: String, onPick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "#" + hex.uppercase(),
+            style = MaterialTheme.typography.bodySmall.subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.size(14.dp))
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(if (hex.length == 6) parseHex(hex) else MaterialTheme.colorScheme.primary)
+                .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), CircleShape),
         )
     }
 }
@@ -695,7 +759,7 @@ private fun CustomAccentRow(
                 )
             }
         }
-        if (enabled) {
+        if (enabled && isTv) {
             Box(
                 modifier = Modifier
                     .size(32.dp)
