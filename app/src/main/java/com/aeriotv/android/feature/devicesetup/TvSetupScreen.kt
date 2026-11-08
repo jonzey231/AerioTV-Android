@@ -57,6 +57,7 @@ import com.aeriotv.android.core.setup.SetupProtocol
 import com.aeriotv.android.core.setup.SetupReceiver
 import com.aeriotv.android.core.sync.DriveSyncWorker
 import com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
+import com.aeriotv.android.core.sync.dsync.DsyncUpgradeOffer
 import com.aeriotv.android.core.sync.dsync.ProfileRow
 import com.aeriotv.android.core.tv.qrCodeBitmap
 import com.aeriotv.android.ui.scale.subtext
@@ -291,10 +292,9 @@ class TvSetupViewModel @Inject constructor(
             }
         }
         if (isDispatcharr && p.sync?.enabled == true && p.sync.provider == DispatcharrSyncManager.PROVIDER) {
-            _phase.value = Phase.Applying("Syncing")
-            prefs.setDispatcharrSyncEnabled(true)
-            Log.i(TAG, "[DSYNC] enabled from phone setup")
-            dsync.awaitFirstPull()
+            // Never on silently: the main screen asks with the opt-in dialog (DsyncUpgradeOfferHost).
+            DsyncUpgradeOffer.setupOptIn.value = entity.id
+            Log.i(TAG, "[DSYNC] phone setup carries sync: opt-in dialog queued")
         }
         pending = null
         resolved = null

@@ -75,6 +75,17 @@ class DsyncUpgradeOfferViewModel @Inject constructor(
         return Offer(active.id, decision, prefs.syncMasterEnabled.first())
     }
 
+    /** A received setup asked for Dispatcharr Sync: the opt-in dialog, unless declined before or already on. */
+    suspend fun setupOptIn(playlistId: String): Offer? {
+        DsyncUpgradeOffer.setupOptIn.value = null
+        if (prefs.dispatcharrSyncEnabledOnce() || prefs.dsyncUpgradeDeclinedOnce()) {
+            Log.i(TAG, "[DSYNC] setup opt-in: not shown (already on or declined before)")
+            return null
+        }
+        Log.i(TAG, "[DSYNC] setup opt-in: shown")
+        return Offer(playlistId, DsyncUpgradeOffer.Decision.ShowOptIn, prefs.syncMasterEnabled.first())
+    }
+
     suspend fun decline() {
         prefs.setDsyncUpgradeDeclined()
         Log.i(TAG, "[DSYNC] upgrade offer: not now")
@@ -103,6 +114,13 @@ fun DsyncUpgradeOfferHost(
     var ask by remember { mutableStateOf<SetupSourceChoiceAsk?>(null) }
     val scope = rememberCoroutineScope()
     val dsyncUi by vm.dsync.ui.collectAsStateWithLifecycle()
+    val setupPending by DsyncUpgradeOffer.setupOptIn.collectAsStateWithLifecycle()
+
+    LaunchedEffect(idle, setupPending) {
+        val id = setupPending ?: return@LaunchedEffect
+        if (!idle || offer != null) return@LaunchedEffect
+        vm.setupOptIn(id)?.let { offer = it }
+    }
 
     LaunchedEffect(idle) {
         if (!idle || offer != null || DsyncUpgradeOffer.evaluatedThisLaunch) return@LaunchedEffect

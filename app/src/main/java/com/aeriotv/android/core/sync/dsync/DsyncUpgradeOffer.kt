@@ -72,6 +72,12 @@ object DsyncUpgradeOffer {
         "Dispatcharr server under each profile and follow you to every device. " +
         "Admins on the server can view this data."
 
+    /**
+     * Playlist id of a received setup that carried sync=true. The host shows
+     * the opt-in dialog for it instead of the setup turning sync on silently.
+     */
+    val setupOptIn = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
     /** Once per process: at most one offer per launch, never in a launch that ran onboarding. */
     @Volatile var evaluatedThisLaunch = false
     @Volatile var onboardedThisLaunch = false
