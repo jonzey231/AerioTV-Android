@@ -211,7 +211,9 @@ private fun WelcomeTv(c: WelcomeContent) {
             Spacer(Modifier.height(4.dp))
             SyncSection(
                 c,
-                sideBySide = true,
+                // Stacked full width like the Apple TV: side by side truncated
+                // the titles and squeezed the body to four lines at 1080p.
+                sideBySide = false,
                 skipLine = "Look around first. You can connect a server any time from Settings.",
                 skipCentered = false,
             )
