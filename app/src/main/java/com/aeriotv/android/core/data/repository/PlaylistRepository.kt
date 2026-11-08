@@ -129,7 +129,12 @@ private const val UPSTREAM_EPG_TOTAL_BUDGET_MS = 12L * 60L * 1000L
  *  download (force-stop while "syncing", low-memory kill) skips that entirely,
  *  and each orphan is the full size of whatever was being fetched. The Discord
  *  report of a 4GB app cache was exactly this, repeated. */
-private const val ORPHAN_TEMP_MAX_AGE_MS = 60L * 60L * 1000L
+/** Wall time this process started (from the kernel's process start, not
+ *  class load); temp files older than this were written by an earlier
+ *  process. */
+private val PROCESS_START_MS: Long
+    get() = System.currentTimeMillis() -
+        (android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
 
 /**
  * Quiet EPG sweep pacing (Logan 2026-09-12). The sweep exists to correct a
@@ -4186,31 +4191,27 @@ class PlaylistRepository @Inject constructor(
      * Delete download temp files left behind by a process that died mid
      * fetch. [fetchViaTempFile] removes its own temp in a `finally`, but that
      * never runs when the app is force-stopped or killed for memory while a
-     * download is in flight -- and each orphan is the full size of the payload
-     * (a large XMLTV or a 100MB+ M3U). Repeated over a wedged EPG load this is
-     * what grew one reporter's app cache past 4GB.
+     * download is in flight, and each orphan is the full size of the payload
+     * (a large XMLTV or a 100MB+ M3U).
      *
-     * Age-gated so a download running RIGHT NOW in another coroutine is never
-     * pulled out from under itself.
+     * 2026-11-08: no age gate. Any temp whose mtime predates this process
+     * cannot belong to a download running now, so it goes at once.
      */
     fun sweepOrphanedDownloads() {
         runCatching {
-            val cutoff = System.currentTimeMillis() - ORPHAN_TEMP_MAX_AGE_MS
             var freed = 0L
             var count = 0
-            context.cacheDir.listFiles { f -> f.isFile && f.name.startsWith("aerio_dl") }
-                ?.forEach { f ->
-                    if (f.lastModified() < cutoff) {
-                        val size = f.length()
-                        if (f.delete()) {
-                            freed += size
-                            count++
-                        }
-                    }
+            context.cacheDir.listFiles { f ->
+                f.isFile && com.aeriotv.android.core.timeshift.RewindStoragePolicy
+                    .isOrphanTemp(f.name, f.lastModified(), PROCESS_START_MS)
+            }?.forEach { f ->
+                val size = f.length()
+                if (f.delete()) {
+                    freed += size
+                    count++
                 }
-            if (count > 0) {
-                Log.i("PlaylistRepo", "swept $count orphaned download temp file(s), freed ${freed / 1024 / 1024}MB")
             }
+            Log.i("AerioTV", "[REWIND] cache temp sweep: removed $count file(s), freed ${freed / 1024 / 1024} MB ($freed bytes)")
         }
     }
 

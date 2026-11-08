@@ -697,7 +697,7 @@ class MainActivity : ComponentActivity() {
         // takes its sockets with it, and a frozen process's connection ends
         // server side, which the kept filler logs as its release reason.
         if (!isChangingConfigurations && isFinishing) {
-            runCatching { timeshiftController.stopAllRetained("app exit") }
+            runCatching { timeshiftController.shutdown("app exit") }
         }
         // GH #40: never leave the launcher/home screen on a content-matched
         // resolution; onResume re-applies if a live player is still up.
@@ -797,6 +797,7 @@ class MainActivity : ComponentActivity() {
             runCatching { miniPlayerSession.dismiss() }
             runCatching { exoWindowState.hide() }
             runCatching { exoHolder.destroy() }
+            runCatching { timeshiftController.shutdown("activity destroy") }
             AerioMediaPlaybackService.stop(this)
         }
         super.onDestroy()

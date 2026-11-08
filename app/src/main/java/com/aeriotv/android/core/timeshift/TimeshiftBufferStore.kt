@@ -43,13 +43,16 @@ class TimeshiftBufferStore @Inject constructor(
 ) {
     companion object {
         private const val TAG = "TimeshiftBuffer"
+        private const val APP_TAG = "AerioTV"
+        /** Throttle for the cross-session cap pass run from segment rolls. */
+        private const val ENFORCE_INTERVAL_MS = 30_000L
         const val SEGMENT_MS = 6_000L
         const val TS_PACKET = 188
         private const val META_FILE = "meta.json"
 
         /** Free-space seatbelt: the buffer may grow until the volume
          *  would drop below this much free space. */
-        const val FREE_SPACE_FLOOR_BYTES = 2L * 1024 * 1024 * 1024
+        const val FREE_SPACE_FLOOR_BYTES = RewindStoragePolicy.FREE_SPACE_FLOOR_BYTES
 
         /** Directory name pattern: sess_<startEpochMs>. */
         fun sessionDirName(startedAtMs: Long) = "sess_$startedAtMs"
@@ -58,25 +61,44 @@ class TimeshiftBufferStore @Inject constructor(
     val rootDir: File
         get() = File(context.getExternalFilesDir(null) ?: context.filesDir, "LiveRewind")
 
+    /** Live writers this process owns, by session dir. Everything else
+     *  under [rootDir] is an orphan (2026-11-08 storage fix). */
+    private val owned = java.util.concurrent.ConcurrentHashMap<File, TimeshiftWriter>()
+
+    /** The foreground session, trimmed last by [enforceCap]. Set by
+     *  TimeshiftController whenever its active writer changes. */
+    @Volatile var activeSessionDir: File? = null
+
+    /** Depth of the newest session; drives [capBytes] for mid-roll passes. */
+    @Volatile private var lastDepthMs: Long = 30 * 60_000L
+    private val lastEnforceMs = java.util.concurrent.atomic.AtomicLong(0L)
+
+    private val isTv: Boolean by lazy {
+        runCatching {
+            context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+        }.getOrDefault(false)
+    }
+
+    private fun ownedDirs(): Set<File> = owned.filterValues { !it.closed }.keys
+
     /**
-     * Start a new buffer session for [channelId]. Prunes expired and
-     * over-budget data first so a long-running box converges instead
-     * of only growing.
+     * Start a new buffer session for [channelId]. Sweeps orphans and
+     * enforces the hard cap first so a long-running box converges
+     * instead of only growing.
      */
     fun startSession(
         channelId: String,
         channelName: String,
         depthMs: Long,
-        retentionMs: Long,
+        @Suppress("UNUSED_PARAMETER") retentionMs: Long,
         budgetBytes: Long,
-        /** Session dirs the sweeps must not touch: live retained-channel
-         *  buffers (Keep Recent Channels Live). Without this, the LRU
-         *  budget pass eats the oldest retained channel's tail and the
-         *  retention pruner can delete a quiet-but-live buffer outright. */
-        protectedDirs: Set<File> = emptySet(),
+        /** Kept for call-site compatibility; ownership now comes from
+         *  the live-writer registry, which covers retained sessions. */
+        @Suppress("UNUSED_PARAMETER") protectedDirs: Set<File> = emptySet(),
     ): TimeshiftWriter {
-        pruneExpired(retentionMs, protectedDirs)
-        enforceBudget(budgetBytes, protectedDirs)
+        lastDepthMs = depthMs
+        sweepOrphans("session start")
+        enforceCap()
         val startedAt = System.currentTimeMillis()
         val dir = File(rootDir, sessionDirName(startedAt))
         dir.mkdirs()
@@ -85,50 +107,92 @@ class TimeshiftBufferStore @Inject constructor(
             .put("channelName", channelName)
             .put("startedAtMs", startedAt)
         File(dir, META_FILE).writeText(meta.toString())
-        Log.i(TAG, "session start dir=${dir.name} channel=$channelName depthMs=$depthMs")
-        return TimeshiftWriter(dir, startedAt, depthMs, budgetBytes)
+        val cap = minOf(budgetBytes, capBytes())
+        Log.i(TAG, "session start dir=${dir.name} channel=$channelName depthMs=$depthMs capBytes=$cap")
+        val writer = TimeshiftWriter(dir, startedAt, depthMs, cap, onRolled = ::onWriterRolled)
+        owned[dir] = writer
+        return writer
     }
 
-    /** Delete whole sessions whose newest data is older than [retentionMs]. */
-    fun pruneExpired(retentionMs: Long, protectedDirs: Set<File> = emptySet()) {
-        val cutoff = System.currentTimeMillis() - retentionMs
-        rootDir.listFiles()?.forEach { dir ->
-            if (!dir.isDirectory || dir in protectedDirs) return@forEach
-            val newest = dir.listFiles()?.maxOfOrNull { it.lastModified() } ?: dir.lastModified()
-            if (newest < cutoff) {
-                Log.i(TAG, "retention prune ${dir.name}")
-                dir.deleteRecursively()
-            }
-        }
+    /** Hard cap on all rewind bytes (see [RewindStoragePolicy.capBytes]). */
+    fun capBytes(): Long {
+        val usable = runCatching { rootDir.apply { mkdirs() }.usableSpace }.getOrDefault(0L)
+        return RewindStoragePolicy.capBytes(lastDepthMs, isTv, totalBytes(), usable)
     }
 
-    /** Evict oldest segments across sessions until total <= [budgetBytes].
-     *  [protectedDirs] segments still COUNT toward the total (they are real
-     *  bytes on the volume) but are never deleted here; each live writer's
-     *  own depth ring and session budget bound their growth. */
-    fun enforceBudget(budgetBytes: Long, protectedDirs: Set<File> = emptySet()) {
-        if (budgetBytes <= 0) return
-        val segs = rootDir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.flatMap { d -> d.listFiles()?.filter { it.name.endsWith(".ts") }.orEmpty() }
-            ?.sortedBy { it.lastModified() }
-            ?: return
-        var total = segs.sumOf { it.length() }
-        for (f in segs) {
-            if (total <= budgetBytes) break
-            if (f.parentFile in protectedDirs) continue
-            total -= f.length()
-            f.delete()
-        }
-        // Drop session dirs that lost all their segments.
-        rootDir.listFiles()?.forEach { dir ->
-            if (dir.isDirectory && dir !in protectedDirs &&
-                dir.listFiles()?.none { it.name.endsWith(".ts") } != false
-            ) {
-                dir.deleteRecursively()
-            }
-        }
+    private fun onWriterRolled() {
+        val now = System.currentTimeMillis()
+        val last = lastEnforceMs.get()
+        if (now - last < ENFORCE_INTERVAL_MS || !lastEnforceMs.compareAndSet(last, now)) return
+        runCatching { enforceCap() }.onFailure { Log.w(TAG, "cap pass failed: $it") }
     }
+
+    /**
+     * Delete every session directory (and stray file) under [rootDir] that
+     * no live writer in this process owns, regardless of age. At launch
+     * nothing is owned, so this removes everything a force stop, crash, or
+     * process death left behind.
+     */
+    @Synchronized
+    fun sweepOrphans(reason: String): Pair<Int, Long> {
+        val entries = rootDir.listFiles().orEmpty()
+        val ownedNames = ownedDirs().map { it.name }.toSet()
+        val orphanNames = RewindStoragePolicy.selectOrphans(entries.map { it.name }, ownedNames).toSet()
+        var count = 0
+        var bytes = 0L
+        entries.filter { it.name in orphanNames }.forEach { f ->
+            val size = f.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+            if (f.deleteRecursively()) { count++; bytes += size }
+        }
+        owned.entries.removeIf { it.value.closed && !it.key.exists() }
+        Log.i(APP_TAG, "[REWIND] orphan sweep ($reason): removed $count session dir(s), freed ${bytes / 1024 / 1024} MB ($bytes bytes)")
+        return count to bytes
+    }
+
+    /** Pre-2026-11-08 entry point; age no longer matters, orphans go. */
+    fun pruneExpired(@Suppress("UNUSED_PARAMETER") retentionMs: Long, @Suppress("UNUSED_PARAMETER") protectedDirs: Set<File> = emptySet()) {
+        sweepOrphans("prune")
+    }
+
+    /** Pre-2026-11-08 entry point; now the hard cap pass. */
+    fun enforceBudget(@Suppress("UNUSED_PARAMETER") budgetBytes: Long, @Suppress("UNUSED_PARAMETER") protectedDirs: Set<File> = emptySet()) {
+        enforceCap()
+    }
+
+    /** Trim across sessions until the total fits the hard cap: oldest
+     *  non-active session first, then the active one. */
+    @Synchronized
+    fun enforceCap() {
+        val cap = capBytes()
+        val ownedSet = ownedDirs()
+        val active = activeSessionDir
+        val dirs = rootDir.listFiles()?.filter { it.isDirectory }.orEmpty()
+        val sessions = dirs.map { d ->
+            val segs = d.listFiles()
+                ?.filter { it.name.endsWith(".ts") || it.name.endsWith(".m4s") }
+                ?.map { RewindStoragePolicy.Segment(it.name, segStart(it), it.length()) }
+                .orEmpty()
+            RewindStoragePolicy.Session(
+                name = d.name,
+                startedAtMs = d.name.substringAfter('_').toLongOrNull() ?: d.lastModified(),
+                active = d == active,
+                owned = d in ownedSet,
+                segments = segs,
+            )
+        }
+        val trims = RewindStoragePolicy.selectTrim(sessions, cap)
+        if (trims.isEmpty()) return
+        var freed = 0L
+        trims.forEach { t -> if (File(File(rootDir, t.session), t.segment).delete()) freed += t.bytes }
+        // Unowned dirs that lost all their segments go entirely.
+        dirs.forEach { d ->
+            if (d !in ownedSet && d.listFiles()?.none { it.name.endsWith(".ts") } != false) d.deleteRecursively()
+        }
+        Log.i(APP_TAG, "[REWIND] cap trim: ${trims.size} segment(s), freed ${freed / 1024 / 1024} MB, cap ${cap / 1024 / 1024} MB")
+    }
+
+    private fun segStart(f: File): Long =
+        f.name.removePrefix("seg_").substringBefore('.').toLongOrNull() ?: f.lastModified()
 
     fun totalBytes(): Long =
         rootDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
@@ -263,6 +327,9 @@ class TimeshiftWriter(
     val sessionStartMs: Long,
     private val depthMs: Long,
     private val budgetBytes: Long = Long.MAX_VALUE,
+    /** Called on the writer thread after each segment roll; the store
+     *  runs its (throttled) cross-session cap pass from here. */
+    private val onRolled: (() -> Unit)? = null,
 ) {
     /** Running byte total of on-disk segments this session; maintained
      *  by [rollSegment]'s eviction pass so the budget can be enforced
@@ -857,6 +924,7 @@ class TimeshiftWriter(
         }
         sessionBytes = total
         tailWallMs = segments().firstOrNull()?.startWallMs ?: now
+        onRolled?.invoke()
     }
 
     /** Snapshot of on-disk segments, oldest first. */

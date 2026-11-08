@@ -210,10 +210,12 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // would otherwise leave yesterday's buffers on disk.
         appScope.launch {
             runCatching {
-                timeshiftStore.pruneExpired(
-                    com.aeriotv.android.core.timeshift.TimeshiftController.FIXED_RETENTION_MS,
-                )
-                timeshiftStore.enforceBudget(timeshiftStore.freeSpaceBudgetBytes())
+                // 2026-11-08: delete every rewind session dir this process
+                // does not own, regardless of age (a 43 GB container was
+                // orphaned sessions waiting on a 1 h age gate), then the cap.
+                timeshiftStore.sweepOrphans("launch")
+                timeshiftStore.enforceCap()
+                playlistRepository.sweepOrphanedDownloads()
             }
         }
         // libmpv is gone (task #67). Media3's ExoPlayer + MediaCodec

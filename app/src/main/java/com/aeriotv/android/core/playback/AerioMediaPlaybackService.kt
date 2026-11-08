@@ -58,6 +58,7 @@ import javax.inject.Inject
 class AerioMediaPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var exoHolder: AerioExoPlayerHolder
+    @Inject lateinit var timeshiftController: com.aeriotv.android.core.timeshift.TimeshiftController
     @Inject lateinit var browseTree: AutoBrowseTree
     @Inject lateinit var profileManager: com.aeriotv.android.core.profiles.ProfileManager
     @Inject lateinit var castReceiver: com.aeriotv.android.core.cast.AerioCastReceiverController
@@ -212,12 +213,18 @@ class AerioMediaPlaybackService : MediaLibraryService() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaSession?.player
         if (player != null && !player.playWhenReady) {
+            runCatching { timeshiftController.shutdown("task removed") }
             stopSelf()
         }
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        // Service teardown with no live player left: end any rewind session
+        // and delete its directory (no-op while the activity still plays).
+        if (exoHolder.let { runCatching { it.player?.isPlaying }.getOrNull() } != true) {
+            runCatching { timeshiftController.shutdown("service destroy") }
+        }
         scope.cancel()
         mediaSession?.run {
             // Do NOT release the player here -- it's owned by

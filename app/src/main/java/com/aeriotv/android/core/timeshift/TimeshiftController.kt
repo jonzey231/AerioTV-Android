@@ -87,17 +87,20 @@ class TimeshiftController @Inject constructor(
         // stranded old buffers on disk until app data was cleared.
         scope.launch {
             runCatching {
-                store.pruneExpired(FIXED_RETENTION_MS)
-                // Storage Limit setting removed: depth is the knob; the
-                // free-space floor is the invisible seatbelt.
-                store.enforceBudget(store.freeSpaceBudgetBytes())
+                // 2026-11-08: every dir no live writer owns is an orphan
+                // (none are owned yet), then the hard cap.
+                store.sweepOrphans("controller init")
+                store.enforceCap()
             }.onFailure { Log.w(TAG, "startup reaper failed: $it") }
         }
     }
 
     @Volatile
     var activeWriter: TimeshiftWriter? = null
-        private set
+        private set(value) {
+            field = value
+            store.activeSessionDir = value?.sessionDir
+        }
 
     /** Live stream URL + headers of the current session, captured at
      *  start so the independent filler can reconnect on its own. */
@@ -561,6 +564,24 @@ class TimeshiftController @Inject constructor(
             retained.values.forEach { releaseRetained(it, "released by user (Stop All)") }
             retained.clear()
             publishRetained()
+        }
+    }
+
+    /**
+     * App exit (finishing activity, playback service torn down): end the
+     * active session and every retained one and delete their directories,
+     * so nothing waits for the next launch sweep. Process death cannot run
+     * this; the launch sweep covers that path.
+     */
+    fun shutdown(reason: String) {
+        scope.launch {
+            retained.values.forEach { releaseRetained(it, reason) }
+            retained.clear()
+            publishRetained()
+            if (activeWriter != null) {
+                Log.i(APP_TAG, "[REWIND] session ended on $reason")
+                stopSessionInternal()
+            }
         }
     }
 
