@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RadioButtonChecked
@@ -428,11 +429,46 @@ private fun PlaylistsSection(
     val tvGuard = com.aeriotv.android.core.tv.rememberTvMenuGuard()
     var menuFor by remember { mutableStateOf<PlaylistEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var showSetUpTv by remember { mutableStateOf(false) }
+    val setupPm = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext, SetupEntryPoint::class.java,
+        ).profileManager()
+    }
+    val canSetUpTv = !isTv && activeId != null && setupPm.canSetUpTv(activeId)
+    if (showSetUpTv && activeId != null) {
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = activeId, onDismiss = { showSetUpTv = false })
+    }
     Column {
         if (showHeader) {
             SectionHeader("Playlists")
         }
         com.aeriotv.android.ui.settings.SettingsCard {
+            // Set up another device: first row of Playlists on phones and
+            // tablets, matching Apple's SetUpTvSettingsRow and the same row on
+            // PlaylistsScreen (same gate, wording, and icon). TV has no sender.
+            if (canSetUpTv) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showSetUpTv = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        Text("Set up another device", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Send the active playlist to AerioTV on another device. Nothing to type there.",
+                            style = MaterialTheme.typography.bodySmall.subtext(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                RowDivider()
+            }
             if (playlists.isEmpty()) {
                 Box(
                     modifier = Modifier
