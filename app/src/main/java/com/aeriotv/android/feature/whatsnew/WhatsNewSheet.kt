@@ -295,28 +295,32 @@ object WhatsNewContent {
      *  versionName in build.gradle.kts to surface a new sheet on next launch. */
     val CURRENT = listOf(
         WhatsNewItem(
-            title = "Radio channels",
-            body = "Channels Dispatcharr marks as radio start as audio and open Radio Mode. Admins can Mark or Unmark a Radio Channel from the long-press menu.",
+            title = "Profiles",
+            body = "Profiles for Dispatcharr playlists: one Dispatcharr user per profile, with Admin, Standard, and Child roles, optional PINs, and a launch picker.",
         ),
         WhatsNewItem(
-            title = "Radio Mode by Default",
-            body = "A new Player setting opens every channel in Radio Mode. Watch in the long-press menu plays video instead.",
+            title = "Dispatcharr Sync",
+            body = "Settings, favorites, Watchlist, and progress sync to your Dispatcharr account. After an update AerioTV offers it once, and it asks before uploading a missing record again.",
         ),
         WhatsNewItem(
-            title = "Faster audio-only start",
-            body = "Audio-only channels start and join faster, and Dispatcharr HLS output mode no longer fails every tune.",
+            title = "Set up another device",
+            body = "Any phone, tablet, or TV can receive a setup from another device on the same network, or sign in by scanning a Dispatcharr user QR code.",
         ),
         WhatsNewItem(
-            title = "Android TV",
-            body = "Back twice stops Radio Mode, Back and Hold Back are mappable guide keys, Radio Mode keeps your guide focus, and Multiview from the staging banner keeps tile focus.",
+            title = "Program search",
+            body = "Search lists matching programs from the whole loaded guide, with full-size program cards and Record.",
         ),
         WhatsNewItem(
-            title = "Exit AerioTV?",
-            body = "Back that would leave the app now asks first on phones, tablets, and TV.",
+            title = "Custom color theme",
+            body = "Build a whole theme from one Theme Color, True Black joins Mode, and the Light preset is now named Slate.",
+        ),
+        WhatsNewItem(
+            title = "Player",
+            body = "Playback Speed for movies, episodes, recordings, and Catch-Up, and pausing a live channel holds the controls until you resume.",
         ),
         WhatsNewItem(
             title = "Fixes",
-            body = "Radio Mode shows Channel Unavailable and recovers, ended programs inside the lead are not drawn, Dispatcharr re-login is rate limited, and List view Back scrolls to the top.",
+            body = "Live playback rides out server-side stream switches, the cached guide paints faster at launch, the background guide refresh is far lighter, and playlist edits keep watch progress.",
         ),
     )
 }
