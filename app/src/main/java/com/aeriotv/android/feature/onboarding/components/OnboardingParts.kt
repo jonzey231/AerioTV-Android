@@ -98,6 +98,59 @@ fun OnboardingCard(
     )
 }
 
+/**
+ * The onboarding capsule pill, filled (primary) or outlined, sized by the
+ * caller. Matches tvOS SyncStepPrimaryButton / SyncStepSecondaryButton under
+ * TVNoHighlightButtonStyle, measured from the Apple TV frame (3840x2160):
+ * the focus ring sits flush on the pill edge (strokeBorder, no gap), 3 pt
+ * wide on the filled pill (white) and 2.5 pt on the outlined one (accent);
+ * at rest the outlined pill has a 1.5 pt accent-at-10% hairline; both labels
+ * are white. [ringWidth] is the 3 pt ring in this screen's dp; the outlined
+ * ring and hairline derive from it. Material's 48 dp minimum touch size is
+ * turned off here: on a 1080p TV a 66 point pill is 33 dp, and the padding
+ * Material added put the ring about 15 px outside the pill.
+ */
+@Composable
+fun OnboardingPill(
+    filled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    ringWidth: androidx.compose.ui.unit.Dp = 2.dp,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(50)
+    val colors = MaterialTheme.colorScheme
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides androidx.compose.ui.unit.Dp.Unspecified,
+    ) {
+        if (filled) {
+            androidx.compose.material3.Button(
+                onClick = onClick,
+                modifier = modifier.dpadFocusRing(shape, onFilled = true, ringWidth = ringWidth),
+                shape = shape,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = colors.primary,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                ),
+                content = content,
+            )
+        } else {
+            OutlinedButton(
+                onClick = onClick,
+                modifier = modifier.dpadFocusRing(shape, ringWidth = ringWidth * (2.5f / 3f)),
+                shape = shape,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                border = androidx.compose.foundation.BorderStroke(ringWidth * 0.5f, colors.primary.copy(alpha = 0.10f)),
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                ),
+                content = content,
+            )
+        }
+    }
+}
+
 /** "Skip for now" outlined pill with its explanation line, directly under the sync rows. */
 @Composable
 fun SkipPill(line: String, onSkip: () -> Unit, modifier: Modifier = Modifier, centered: Boolean = true) {

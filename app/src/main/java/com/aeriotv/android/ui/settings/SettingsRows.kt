@@ -820,6 +820,7 @@ fun Modifier.dpadFocusRing(
     // primary Button, a selected pill). An accent ring on an accent fill is
     // invisible, so focus then draws a white ring plus a slight scale.
     onFilled: Boolean = false,
+    ringWidth: androidx.compose.ui.unit.Dp = SettingsFocusRingWidth,
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
     return this
@@ -843,7 +844,7 @@ fun Modifier.dpadFocusRing(
             },
         )
         .border(
-            width = SettingsFocusRingWidth,
+            width = ringWidth,
             color = if (!focused) androidx.compose.ui.graphics.Color.Transparent
             else if (onFilled) androidx.compose.ui.graphics.Color.White
             else MaterialTheme.colorScheme.primary,

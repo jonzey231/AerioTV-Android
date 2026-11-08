@@ -372,30 +372,25 @@ private fun TvSyncPromptLayout(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
-                Button(
+                // Shared onboarding pill; ring 3 Apple TV points (3 px at 1080p).
+                com.aeriotv.android.feature.onboarding.components.OnboardingPill(
+                    filled = true,
                     onClick = onPrimary,
+                    ringWidth = u * 3f,
                     modifier = Modifier.padding(top = u * 8f).fillMaxWidth().height(u * 66f)
                         .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$primaryLabel") }
-                        .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
-                    shape = RoundedCornerShape(50),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
+                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$primaryLabel") },
                 ) {
                     if (busy) CircularProgressIndicator(Modifier.size(u * 30f), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = u * 3f)
-                    else Text(primaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold)
+                    else Text(primaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.Bold)
                 }
-                OutlinedButton(
+                com.aeriotv.android.feature.onboarding.components.OnboardingPill(
+                    filled = false,
                     onClick = onSecondary,
+                    ringWidth = u * 3f,
                     modifier = Modifier.fillMaxWidth().height(u * 66f)
-                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$secondaryLabel") }
-                        .dpadFocusRing(RoundedCornerShape(50)),
-                    shape = RoundedCornerShape(50),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                ) { Text(secondaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.Medium) }
+                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$secondaryLabel") },
+                ) { Text(secondaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold) }
                 if (footer != null) {
                     Text(
                         footer,
