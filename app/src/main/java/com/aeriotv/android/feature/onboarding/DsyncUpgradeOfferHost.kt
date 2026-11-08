@@ -84,6 +84,12 @@ class DsyncUpgradeOfferViewModel @Inject constructor(
         return Offer(playlistId, DsyncUpgradeOffer.Decision.ShowOptIn, prefs.syncMasterEnabled.first())
     }
 
+    /** Back without choosing (Apple swipe-away): store the offered version, no decline. */
+    suspend fun dismiss() {
+        prefs.setDsyncUpgradeEvaluatedVersion(BuildConfig.VERSION_CODE)
+        Log.i(TAG, "[DSYNC] upgrade offer: dismissed")
+    }
+
     suspend fun decline() {
         prefs.setDsyncUpgradeDeclined()
         Log.i(TAG, "[DSYNC] upgrade offer: not now")
@@ -177,7 +183,12 @@ fun DsyncUpgradeOfferHost(
         Unit
     }
     // Apple: the first-device offer says Skip; the record-found and received-setup opt-ins say Not Now.
-    PromptSurface(onBack = notNow) {
+    val dismiss = {
+        offer = null
+        scope.launch { vm.dismiss() }
+        Unit
+    }
+    PromptSurface(onBack = dismiss) {
         SyncPromptLayout(
             title = if (optIn) DsyncUpgradeOffer.OPT_IN_TITLE else DsyncUpgradeOffer.MIGRATE_TITLE,
             body = if (optIn) DsyncUpgradeOffer.optInBody(o.driveOn) else DsyncUpgradeOffer.MIGRATE_BODY,
