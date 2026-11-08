@@ -100,4 +100,50 @@ class SetupProtocolTest {
     fun newCodeIsSixDigits() {
         assertTrue(SetupCrypto.newCode().matches(Regex("\\d{6}")))
     }
+
+    @Test
+    fun envelopeVersionMustBeTheNumberOne() {
+        val tv = SetupCrypto.newKeyPair()
+        val env = SetupProtocol.sealForTv(payload, tv.publicKey, "042917")
+        val body = SetupProtocol.json.encodeToString(SetupProtocol.Envelope.serializer(), env)
+        assertTrue(body.contains("\"v\":1"))
+        val asString = body.replace("\"v\":1", "\"v\":\"1\"")
+        val missing = body.replace("\"v\":1,", "")
+        assertEquals(SetupProtocol.OpenResult.BadRequest, SetupProtocol.openOnTv(asString, tv, "042917"))
+        assertEquals(SetupProtocol.OpenResult.BadRequest, SetupProtocol.openOnTv(missing, tv, "042917"))
+        assertEquals(SetupProtocol.OpenResult.BadRequest, SetupProtocol.openOnTv(body.replace("\"v\":1", "\"v\":2"), tv, "042917"))
+        assertTrue(SetupProtocol.openOnTv(body, tv, "042917") is SetupProtocol.OpenResult.Ok)
+    }
+
+    @Test
+    fun linkAcceptsEveryBase64Variant() {
+        // 0xfb 0xff gives "+/" in standard base64 and "-_" in base64url.
+        val pk = ByteArray(32) { if (it % 2 == 0) 0xfb.toByte() else 0xff.toByte() }
+        val std = java.util.Base64.getEncoder().encodeToString(pk)
+        assertTrue(std.contains('+') && std.contains('/') && std.endsWith("="))
+        val url = java.util.Base64.getUrlEncoder().encodeToString(pk)
+        for (v in listOf(std, std.trimEnd('='), url, url.trimEnd('='))) {
+            val link = SetupProtocol.parseLink("aeriotv://setup?v=1&ip=192.168.1.20&port=41234&code=000123&pk=$v&name=TV")
+            assertNotNull(v, link)
+            assertArrayEquals(pk, link!!.pk)
+        }
+    }
+
+    @Test
+    fun bodyWithoutLengthIsCapped() = kotlinx.coroutines.runBlocking {
+        val max = SetupReceiver.MAX_BODY
+        val ok = ByteArray(max.toInt()) { 'a'.code.toByte() }
+        assertEquals(max.toInt(), SetupReceiver.readCapped(io.ktor.utils.io.ByteReadChannel(ok), max)!!.size)
+        assertNull(SetupReceiver.readCapped(io.ktor.utils.io.ByteReadChannel(ByteArray(max.toInt() + 1)), max))
+    }
+
+    @Test
+    fun userOnlyCredentialKeepsUsernameBesideApiKey() {
+        val c = userOnlyCredential("key123", "alex", null)!!
+        assertEquals("key123", c.apiKey)
+        assertEquals("alex", c.username)
+        assertNull(c.password)
+        assertEquals("alex", userOnlyCredential(null, "alex", "pw")!!.username)
+        assertNull(userOnlyCredential(null, "alex", null))
+    }
 }

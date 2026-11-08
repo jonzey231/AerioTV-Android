@@ -13,7 +13,10 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.request.receiveText
+import io.ktor.server.request.receiveChannel
+import io.ktor.server.routing.route
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -55,7 +58,21 @@ class SetupReceiver(
         private val ownPks = java.util.concurrent.ConcurrentHashMap<SetupReceiver, ByteArray>()
         fun isOwnPk(pk: ByteArray): Boolean = ownPks.values.any { it.contentEquals(pk) }
         private const val TAG = "AerioSetup"
-        private const val MAX_BODY = 256L * 1024L
+        internal const val MAX_BODY = 256L * 1024L
+
+        /** Reads the whole body, or returns null once it passes [max] bytes. */
+        internal suspend fun readCapped(ch: ByteReadChannel, max: Long): ByteArray? {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            while (true) {
+                val n = ch.readAvailable(buf, 0, buf.size)
+                if (n < 0) break
+                if (n == 0) { if (ch.isClosedForRead) break else continue }
+                out.write(buf, 0, n)
+                if (out.size() > max) return null
+            }
+            return out.toByteArray()
+        }
     }
 
     data class Offer(val code: String, val link: String, val deviceName: String, val ip: String, val port: Int, val fingerprint: String)
@@ -81,6 +98,12 @@ class SetupReceiver(
         val srv = embeddedServer(CIO, port = 0, host = "0.0.0.0") {
             routing {
                 post(SetupProtocol.PATH) { handle(call) }
+                // Any other method or path: 404 with the JSON error body, like Apple.
+                route("{...}") {
+                    handle {
+                        call.respondText("""{"ok":false,"error":"bad_request"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+                    }
+                }
             }
         }
         runCatching { srv.start(wait = false) }.onFailure { Log.w(TAG, "[SETUP] server start failed", it); return false }
@@ -125,12 +148,18 @@ class SetupReceiver(
             call.respondText("""{"ok":false,"error":"forbidden"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
             return
         }
-        val len = call.request.headers["Content-Length"]?.toLongOrNull() ?: 0L
-        if (len > MAX_BODY) {
+        val len = call.request.headers["Content-Length"]?.toLongOrNull()
+        if (len != null && len > MAX_BODY) {
             call.respondText("""{"ok":false,"error":"too_large"}""", ContentType.Application.Json, HttpStatusCode.PayloadTooLarge)
             return
         }
-        val body = runCatching { call.receiveText() }.getOrDefault("")
+        // A body without Content-Length (chunked) is read up to the cap, like Apple.
+        val bytes = runCatching { readCapped(call.receiveChannel(), MAX_BODY) }.getOrDefault(ByteArray(0))
+        if (bytes == null) {
+            call.respondText("""{"ok":false,"error":"too_large"}""", ContentType.Application.Json, HttpStatusCode.PayloadTooLarge)
+            return
+        }
+        val body = bytes.toString(Charsets.UTF_8)
         when (val r = synchronized(this) { if (used) null else SetupProtocol.openOnTv(body, keys, code) }) {
             null -> call.respondText("""{"ok":false,"error":"forbidden"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
             is SetupProtocol.OpenResult.Ok -> {

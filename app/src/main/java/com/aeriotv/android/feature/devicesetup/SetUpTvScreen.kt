@@ -337,7 +337,9 @@ private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit, onLi
         ) {
             Icon(setupKindIcon(t.kind), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(t.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+                // Two devices with the same name stay separate rows; the address tells them apart.
+                val shared = tvs.count { it.name == t.name } > 1
+                Text(if (shared) "${t.name} (${t.host})" else t.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
                 Text("Check that the device shows ${t.fingerprint}", style = MaterialTheme.typography.bodySmall.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)

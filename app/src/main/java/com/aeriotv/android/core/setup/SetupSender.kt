@@ -31,6 +31,8 @@ data class SetupTarget(
     val code: String? = null,
     /** [SetupProtocol.KIND_PHONE], [SetupProtocol.KIND_TABLET], or [SetupProtocol.KIND_TV]. */
     val kind: String = SetupProtocol.KIND_TV,
+    /** DNS-SD instance name: the identity of a discovered device (two can share a friendly name). */
+    val service: String? = null,
 ) {
     val key: String get() = "$host:$port"
     /** Matches the 4 characters the TV shows next to its code. */
@@ -70,7 +72,7 @@ class SetupDiscovery(private val context: Context) {
             override fun onServiceFound(info: NsdServiceInfo) { enqueue(info) }
             override fun onServiceLost(info: NsdServiceInfo) {
                 val k = synchronized(this@SetupDiscovery) { keysByService.remove(info.serviceName) }
-                _tvs.value = _tvs.value.filterNot { it.key == k || it.name == info.serviceName }
+                _tvs.value = _tvs.value.filterNot { it.key == k || it.service == info.serviceName }
             }
         }
         listener = l
@@ -116,9 +118,10 @@ class SetupDiscovery(private val context: Context) {
                         port = info.port,
                         pk = pk,
                         kind = SetupProtocol.normalizeKind(attr(SetupProtocol.TXT_KIND)),
+                        service = info.serviceName,
                     )
                     info.serviceName?.let { synchronized(this@SetupDiscovery) { keysByService[it] = t.key } }
-                    _tvs.value = (_tvs.value.filterNot { it.name == t.name || it.key == t.key } + t).sortedBy { it.name.lowercase() }
+                    _tvs.value = (_tvs.value.filterNot { (t.service != null && it.service == t.service) || it.key == t.key } + t).sortedBy { it.name.lowercase() }
                 }
                 done()
             }
@@ -145,7 +148,8 @@ class SetupDiscovery(private val context: Context) {
             d.start()
             return try {
                 val live = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
-                    d.tvs.first { list -> list.any { it.name == t.name } }.first { it.name == t.name }
+                    val same: (SetupTarget) -> Boolean = { if (t.service != null) it.service == t.service else it.name == t.name }
+                    d.tvs.first { list -> list.any(same) }.first(same)
                 }
                 when {
                     live == null -> { Log.i(TAG, "[SETUP] send target not re-resolved, using last advert key=${t.fingerprint}"); t }
@@ -271,11 +275,7 @@ class SetupSender(
         val src = profiles.setupSources(playlistId).firstOrNull { it.profile.id == activeId }
             ?: profiles.setupSources(playlistId).firstOrNull { it.profile.isDefault } ?: return full
         val p = src.profile
-        val cred = if (p.isDefault) full.playlist.credential else SetupProtocol.Credential(
-            apiKey = p.apiKey?.takeIf { it.isNotBlank() },
-            username = p.username.takeIf { it.isNotBlank() && !p.password.isNullOrBlank() },
-            password = p.password?.takeIf { it.isNotBlank() },
-        ).takeIf { it.apiKey != null || it.password != null } ?: return null
+        val cred = if (p.isDefault) full.playlist.credential else userOnlyCredential(p.apiKey, p.username, p.password) ?: return null
         val pin = src.pin
         return full.copy(
             playlist = full.playlist.copy(credential = cred),
@@ -335,3 +335,14 @@ class SetupSender(
 
     private companion object { const val TAG = "AerioSetup" }
 }
+
+/**
+ * The sign-in for "Import this user only": `username` always rides beside the
+ * API key or password, like Apple. Null when there is neither.
+ */
+internal fun userOnlyCredential(apiKey: String?, username: String?, password: String?): SetupProtocol.Credential? =
+    SetupProtocol.Credential(
+        apiKey = apiKey?.takeIf { it.isNotBlank() },
+        username = username?.takeIf { it.isNotBlank() },
+        password = password?.takeIf { it.isNotBlank() },
+    ).takeIf { it.apiKey != null || it.password != null }

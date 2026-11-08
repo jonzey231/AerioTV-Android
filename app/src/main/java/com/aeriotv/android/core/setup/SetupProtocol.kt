@@ -55,7 +55,8 @@ object SetupProtocol {
         if (!uri.scheme.equals("aeriotv", true) || !uri.host.equals("setup", true)) return null
         val q = uri.rawQuery.orEmpty().split('&').mapNotNull {
             val i = it.indexOf('=')
-            if (i <= 0) null else it.substring(0, i) to URLDecoder.decode(it.substring(i + 1), "UTF-8")
+            if (i <= 0) null else // Percent-decode only: a raw `+` stays `+` (standard base64 in `pk`), as on Apple.
+            it.substring(0, i) to URLDecoder.decode(it.substring(i + 1).replace("+", "%2B"), "UTF-8")
         }.toMap()
         if (q["v"]?.toIntOrNull() != VERSION) return null
         val code = q["code"]?.takeIf { it.length == 6 && it.all(Char::isDigit) } ?: return null
@@ -68,7 +69,7 @@ object SetupProtocol {
     // ---- envelope (the POST body) ----
 
     @Serializable
-    data class Envelope(val v: Int = VERSION, val phonePk: String, val nonce: String, val ciphertext: String)
+    data class Envelope(val v: Int, val phonePk: String, val nonce: String, val ciphertext: String)
 
     @Serializable
     data class Reply(val ok: Boolean, val error: String? = null)
@@ -139,6 +140,7 @@ object SetupProtocol {
         val key = SetupCrypto.deriveKey(phone.privateKey, tvPk, code, phone.publicKey, tvPk)
         val sealed = SetupCrypto.seal(key, encodePayload(payload), random)
         return Envelope(
+            v = VERSION,
             phonePk = SetupCrypto.b64(phone.publicKey),
             nonce = SetupCrypto.b64(sealed.nonce),
             ciphertext = SetupCrypto.b64(sealed.ciphertext),
@@ -155,6 +157,7 @@ object SetupProtocol {
 
     /** TV side: open an envelope with the TV key pair and the code on screen. */
     fun openOnTv(body: String, tv: SetupCrypto.KeyPair, code: String): OpenResult {
+        if (!hasStrictVersion(body)) return OpenResult.BadRequest
         val env = runCatching { json.decodeFromString(Envelope.serializer(), body) }.getOrNull()
             ?: return OpenResult.BadRequest
         if (env.v != VERSION) return OpenResult.BadRequest
@@ -166,4 +169,15 @@ object SetupProtocol {
         val plain = SetupCrypto.open(key, nonce, ct) ?: return OpenResult.WrongCode
         return decodePayload(plain)?.let { OpenResult.Ok(it) } ?: OpenResult.BadRequest
     }
+
+    /**
+     * `v` must be present and a JSON number equal to 1. kotlinx would coerce a
+     * string "1" to an Int, and Apple's Decodable rejects both a string and a
+     * missing `v`, so this check runs before decoding.
+     */
+    internal fun hasStrictVersion(body: String): Boolean = runCatching {
+        val v = (json.parseToJsonElement(body) as? kotlinx.serialization.json.JsonObject)?.get("v")
+            as? kotlinx.serialization.json.JsonPrimitive ?: return false
+        !v.isString && v.content == VERSION.toString()
+    }.getOrDefault(false)
 }
