@@ -185,9 +185,48 @@ fun DispatcharrSyncStepScreen(
         return
     }
 
+    SyncPromptLayout(
+        title = "Turn on Dispatcharr Sync?",
+        lead = if (restore) QR_RESTORE_COPY else null,
+        body = "Your favorites, watch progress, reminders, and preferences are stored on your " +
+            "Dispatcharr server under each profile and follow you to every device. " +
+            "Admins on the server can view this data.",
+        primaryLabel = "Turn On",
+        secondaryLabel = "Skip",
+        busy = busy,
+        primaryFocus = turnOnFocus,
+        onPrimary = {
+            if (!busy) {
+                busy = true
+                scope.launch { runTurnOn(false) }
+            }
+        },
+        onSecondary = { if (!busy) scope.launch { vm.releaseHeld(); onDone() } },
+    )
+}
+
+/**
+ * Full-screen Dispatcharr Sync prompt layout shared by the onboarding step and
+ * the main-screen offers (matches the Apple prompts): centered title, body, a
+ * filled accent pill, an outlined pill, and an optional footer.
+ */
+@Composable
+fun SyncPromptLayout(
+    title: String,
+    body: String,
+    primaryLabel: String,
+    secondaryLabel: String,
+    onPrimary: () -> Unit,
+    onSecondary: () -> Unit,
+    modifier: Modifier = Modifier,
+    lead: String? = null,
+    busy: Boolean = false,
+    primaryFocus: androidx.compose.ui.focus.FocusRequester? = null,
+    footer: String? = "You can change this later in Settings > Sync.",
+) {
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
@@ -203,24 +242,22 @@ fun DispatcharrSyncStepScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "Turn on Dispatcharr Sync?",
+                title,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center,
             )
-            if (restore) {
+            if (lead != null) {
                 Text(
-                    QR_RESTORE_COPY,
+                    lead,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                     textAlign = TextAlign.Center,
                 )
             }
             Text(
-                "Your favorites, watch progress, reminders, and preferences are stored on your " +
-                    "Dispatcharr server under each profile and follow you to every device. " +
-                    "Admins on the server can view this data.",
+                body,
                 style = MaterialTheme.typography.bodyMedium.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -229,13 +266,9 @@ fun DispatcharrSyncStepScreen(
             // Buttons are never disabled mid-flow (TV focus would fall away);
             // taps are ignored while busy instead.
             Button(
-                onClick = {
-                    if (busy) return@Button
-                    busy = true
-                    scope.launch { runTurnOn(false) }
-                },
+                onClick = onPrimary,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
-                    .focusRequester(turnOnFocus)
+                    .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
                     .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -243,18 +276,20 @@ fun DispatcharrSyncStepScreen(
                 ),
             ) {
                 if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                else Text("Turn On", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                else Text(primaryLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
             OutlinedButton(
-                onClick = { if (!busy) scope.launch { vm.releaseHeld(); onDone() } },
+                onClick = onSecondary,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
-            ) { Text("Skip", style = MaterialTheme.typography.titleMedium) }
-            Text(
-                "You can change this later in Settings > Sync.",
-                style = MaterialTheme.typography.bodySmall.subtext(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
+            ) { Text(secondaryLabel, style = MaterialTheme.typography.titleMedium) }
+            if (footer != null) {
+                Text(
+                    footer,
+                    style = MaterialTheme.typography.bodySmall.subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }

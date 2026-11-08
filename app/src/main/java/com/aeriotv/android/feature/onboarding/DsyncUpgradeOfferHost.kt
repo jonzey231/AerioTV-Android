@@ -1,7 +1,7 @@
 package com.aeriotv.android.feature.onboarding
 
 import android.util.Log
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,8 +28,6 @@ import com.aeriotv.android.core.sync.dsync.DsyncMissingRecord
 import com.aeriotv.android.core.sync.dsync.DsyncUpgradeOffer
 import com.aeriotv.android.feature.player.ExoWindowState
 import com.aeriotv.android.feature.settings.SyncSettingsViewModel
-import com.aeriotv.android.ui.settings.SettingsAlertDialog
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -152,19 +150,18 @@ fun DsyncUpgradeOfferHost(
             vm.dsync.answerMissingRecord(upload = false)
             syncVm.setDispatcharrSyncEnabled(false)
         }
-        SettingsAlertDialog(
-            onDismissRequest = {},
-            title = { Text(DsyncMissingRecord.TITLE) },
-            text = { Text(DsyncMissingRecord.BODY) },
-            confirmButton = {
-                Box(Modifier.focusRequester(upFocus)) {
-                    SettingsDialogTextButton(label = "Upload Again", emphasized = true, onClick = {
-                        vm.dsync.answerMissingRecord(upload = true)
-                    })
-                }
-            },
-            dismissButton = { SettingsDialogTextButton(label = "Turn Off", onClick = turnOff) },
-        )
+        PromptSurface(onBack = {}) {
+            SyncPromptLayout(
+                title = DsyncMissingRecord.TITLE,
+                body = DsyncMissingRecord.BODY,
+                primaryLabel = "Upload Again",
+                secondaryLabel = "Turn Off",
+                primaryFocus = upFocus,
+                footer = null,
+                onPrimary = { vm.dsync.answerMissingRecord(upload = true) },
+                onSecondary = { turnOff() },
+            )
+        }
         return
     }
 
@@ -179,17 +176,16 @@ fun DsyncUpgradeOfferHost(
         scope.launch { vm.decline() }
         Unit
     }
-    SettingsAlertDialog(
-        onDismissRequest = notNow,
-        title = { Text(if (optIn) DsyncUpgradeOffer.OPT_IN_TITLE else DsyncUpgradeOffer.MIGRATE_TITLE) },
-        text = {
-            Text(
-                if (optIn) DsyncUpgradeOffer.optInBody(o.driveOn) else DsyncUpgradeOffer.MIGRATE_BODY,
-            )
-        },
-        confirmButton = {
-            Box(Modifier.focusRequester(focus)) {
-                SettingsDialogTextButton(label = "Turn On", emphasized = true, onClick = {
+    // Apple: the first-device offer says Skip; the record-found and received-setup opt-ins say Not Now.
+    PromptSurface(onBack = notNow) {
+        SyncPromptLayout(
+            title = if (optIn) DsyncUpgradeOffer.OPT_IN_TITLE else DsyncUpgradeOffer.MIGRATE_TITLE,
+            body = if (optIn) DsyncUpgradeOffer.optInBody(o.driveOn) else DsyncUpgradeOffer.MIGRATE_BODY,
+            primaryLabel = "Turn On",
+            secondaryLabel = if (optIn) "Not Now" else "Skip",
+            primaryFocus = focus,
+            onSecondary = notNow,
+            onPrimary = {
                     offer = null
                     scope.launch {
                         when {
@@ -214,11 +210,30 @@ fun DsyncUpgradeOfferHost(
                         }
                         Log.i("AerioSync", "[DSYNC] enabled from upgrade offer")
                     }
-                })
-            }
-        },
-        dismissButton = { SettingsDialogTextButton(label = "Not Now", onClick = notNow) },
-    )
+            },
+        )
+    }
+}
+
+/**
+ * Full-screen themed surface above the main screen (the host composes before
+ * the main content, so a window keeps it on top). Back runs [onBack].
+ */
+@Composable
+private fun PromptSurface(onBack: () -> Unit, content: @Composable () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onBack,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = androidx.compose.material3.MaterialTheme.colorScheme.background,
+        ) { content() }
+    }
 }
 
 private data class SetupSourceChoiceAsk(val probe: com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe)
