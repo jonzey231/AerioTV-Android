@@ -584,6 +584,8 @@ fun AerioTVNavHost(
             }
 
             composable(Routes.WELCOME) { entry ->
+                // Onboarding asks about sync itself: no upgrade offer in this launch.
+                remember { com.aeriotv.android.core.sync.dsync.DsyncUpgradeOffer.onboardedThisLaunch = true }
                 val parent = remember(entry) {
                     navController.getBackStackEntry(Routes.PLAYLIST_GRAPH)
                 }
@@ -1258,6 +1260,10 @@ fun AerioTVNavHost(
                 val state by vm.state.collectAsStateWithLifecycle()
                 // One-time "Keep your devices in sync" offer after onboarding's first restore or pull.
                 com.aeriotv.android.feature.onboarding.SyncProvidersOfferHost(
+                    syncVm = hiltViewModel(parent),
+                )
+                // One-time Dispatcharr Sync offer on the first launch after an update.
+                com.aeriotv.android.feature.onboarding.DsyncUpgradeOfferHost(
                     syncVm = hiltViewModel(parent),
                 )
                 // Capability gates read the LIVE active row: the UiState snapshot

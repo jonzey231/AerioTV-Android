@@ -2434,6 +2434,13 @@ class AppPreferences @Inject constructor(
         store.edit { it[k] = value }
     }
 
+    // Dispatcharr Sync upgrade offer (DsyncUpgradeOffer): device-local, never
+    // profile scoped, never synced. The versionCode last evaluated and Not Now.
+    suspend fun dsyncUpgradeEvaluatedVersionOnce(): Int = store.data.first()[KEY_DSYNC_UPGRADE_EVALUATED_VC] ?: 0
+    suspend fun setDsyncUpgradeEvaluatedVersion(value: Int) { store.edit { it[KEY_DSYNC_UPGRADE_EVALUATED_VC] = value } }
+    suspend fun dsyncUpgradeDeclinedOnce(): Boolean = store.data.first()[KEY_DSYNC_UPGRADE_DECLINED] ?: false
+    suspend fun setDsyncUpgradeDeclined() { store.edit { it[KEY_DSYNC_UPGRADE_DECLINED] = true } }
+
     // ── In-app updater (github flavor) ───────────────────────────────────
     // Device-local bookkeeping for the GitHub-releases self-updater. NONE of
     // these belong in snapshotSyncablePreferences (per-device state).
@@ -2989,6 +2996,8 @@ class AppPreferences @Inject constructor(
         val KEY_SYNC_INITIAL_PULL_DONE = booleanPreferencesKey("sync_initial_pull_done")
         // In-app updater (github flavor); device-local, never synced.
         val KEY_UPDATE_LAST_CHECK_AT = longPreferencesKey("update_last_check_at")
+        val KEY_DSYNC_UPGRADE_EVALUATED_VC = intPreferencesKey("dsync_upgrade_offer_evaluated_vc")
+        val KEY_DSYNC_UPGRADE_DECLINED = booleanPreferencesKey("dsync_upgrade_offer_declined")
         val KEY_UPDATE_SKIPPED_VERSION = stringPreferencesKey("update_skipped_version")
         val KEY_UPDATE_PENDING = stringPreferencesKey("update_pending")
         val KEY_UPDATE_COMPLETED_VERSION = stringPreferencesKey("update_completed_version")

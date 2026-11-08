@@ -115,6 +115,8 @@ fun DispatcharrSyncStepScreen(
     onCancel: (() -> Unit)? = null,
     vm: DispatcharrSyncStepViewModel = hiltViewModel(),
 ) {
+    // This launch already asked about Dispatcharr Sync: no upgrade offer on top.
+    remember { com.aeriotv.android.core.sync.dsync.DsyncUpgradeOffer.onboardedThisLaunch = true }
     var ready by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     // Rule 4: both sides hold differing data; the prompt decides before Turn On.

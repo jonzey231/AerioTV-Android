@@ -811,6 +811,27 @@ class DispatcharrSyncManager @Inject constructor(
             out
         }
 
+    /**
+     * Upgrade offer (read only): does this account already hold a Dispatcharr
+     * Sync record, under `<username>.aeriotv` or the legacy key? Same reads as
+     * [serverSummary]; nothing is written or moved.
+     */
+    suspend fun upgradeRecordState(playlistId: String): DsyncUpgradeOffer.Record =
+        kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) {
+            val err = DsyncUpgradeOffer.Record.Error
+            val row = playlistDao.byId(playlistId) ?: return@withContext err
+            val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext err
+            val base = repository.get().effectiveBaseUrl(row)
+            val name = runCatching { client.fetchMe(base, apiKey) }.getOrNull()?.username.orEmpty()
+            val main = DsyncKeyName.main(name) ?: return@withContext err
+            for (key in listOf(main, DsyncKeyName.LEGACY_MAIN)) {
+                val r = runCatching { client.appDataGet(base, apiKey, key) }.getOrNull() ?: return@withContext err
+                if (r.status == 404) continue
+                return@withContext if (r.ok) DsyncUpgradeOffer.Record.Found else err
+            }
+            DsyncUpgradeOffer.Record.Missing
+        }
+
     // ---- Rule 5: convergence with Google Drive ----
 
     /**
