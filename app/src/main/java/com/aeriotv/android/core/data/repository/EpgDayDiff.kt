@@ -18,7 +18,9 @@ import com.aeriotv.android.core.data.db.entity.EpgProgrammeEntity
  * is not played anymore.
  *
  * Rows outside [inScope] (channels fed by EPG sources that did not change)
- * are never written. An unchanged day costs zero writes.
+ * are never written, and neither are fetched rows that end before the
+ * channel's [EpgHistoryWindow] floor: the catch-up reach prune would only
+ * delete them again. An unchanged day costs zero writes.
  *
  * Pure: no Room, no clock, so the rules are unit tested
  * (EpgDayDiffTest).
@@ -55,12 +57,14 @@ internal object EpgDayDiff {
      * @param cached the cached rows overlapping the same day.
      * @param inScope channels this sweep may write; null means every channel.
      * @param nowMillis removals never reach back before this instant.
+     * @param history the shared history floor; null when the reach is unknown.
      */
     fun compute(
         fetched: List<EpgProgrammeEntity>,
         cached: List<EpgProgrammeEntity>,
         inScope: ((String) -> Boolean)?,
         nowMillis: Long,
+        history: EpgHistoryWindow? = null,
     ): Result {
         val cachedByKey = HashMap<Key, EpgProgrammeEntity>(cached.size * 2)
         for (c in cached) cachedByKey[Key(c.channelId, c.startMillis)] = c
@@ -71,6 +75,7 @@ internal object EpgDayDiff {
         for (f in fetched) {
             if (f.endMillis - f.startMillis < MIN_DRAWABLE_MS) continue
             if (inScope != null && !inScope(f.channelId)) continue
+            if (history != null && !history.keeps(f.channelId, f.endMillis)) continue
             fetchedByKey[Key(f.channelId, f.startMillis)] = f
             val span = spanByChannel[f.channelId]
             if (span == null) {

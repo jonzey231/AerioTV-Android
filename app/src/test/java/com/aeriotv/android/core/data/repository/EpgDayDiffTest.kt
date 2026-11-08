@@ -100,4 +100,39 @@ class EpgDayDiffTest {
         assertEquals(1, d.unchanged)
         assertEquals(listOf(1L to 77), d.programIdUpdates)
     }
+
+    // Apple e9192a3 parity: the sweep and the catch-up prune share one floor.
+    @Test fun sweepSkipsAiredRowsTheHistoryFloorWouldPrune() {
+        // Sweep "now" is three days after the fixture day: channel "a" has
+        // no catch-up (24 h floor), "b" has 7 days, "x" is unknown (widest).
+        val sweepNow = day + 3 * 24 * h
+        val w = EpgHistoryWindow(mapOf("a" to 0, "b" to 7, "c" to 1), sweepNow)
+        val fetched = listOf(row(0, "a", 0, 2, "Old News"), row(0, "b", 0, 2, "Old Game"), row(0, "x", 0, 2, "Orphan"))
+        val d = EpgDayDiff.compute(fetched, emptyList(), null, sweepNow, w)
+        assertEquals(listOf("Old Game", "Orphan"), d.upserts.map { it.title })
+        assertEquals(2, d.added)
+        // The prune deletes exactly what the sweep skipped: end < floor.
+        assertTrue(fetched[0].endMillis < w.floor("a"))
+        assertTrue(fetched[1].endMillis >= w.floor("b"))
+        assertEquals(sweepNow - 7 * 24 * h, w.floor("x"))
+    }
+
+    @Test fun repeatSweepAfterPruneWritesNothing() {
+        val sweepNow = day + 3 * 24 * h
+        val w = EpgHistoryWindow(mapOf("a" to 0, "b" to 7), sweepNow)
+        val fetched = listOf(row(0, "a", 0, 2, "Old News"), row(0, "b", 0, 2, "Old Game"))
+        val first = EpgDayDiff.compute(fetched, emptyList(), null, sweepNow, w)
+        // Cache after the write plus a prune at the same floor.
+        val stored = first.upserts.mapIndexed { i, r -> r.copy(id = i + 1L) }
+            .filter { w.keeps(it.channelId, it.endMillis) }
+        assertEquals(first.upserts.size, stored.size)
+        val second = EpgDayDiff.compute(fetched.map(::fresh), stored, null, sweepNow, w)
+        assertEquals(0, second.writes)
+    }
+
+    @Test fun unknownReachFiltersNothing() {
+        val fetched = listOf(row(0, "a", 0, 2, "Old News"))
+        val d = EpgDayDiff.compute(fetched, emptyList(), null, day + 30 * 24 * h, null)
+        assertEquals(1, d.added)
+    }
 }

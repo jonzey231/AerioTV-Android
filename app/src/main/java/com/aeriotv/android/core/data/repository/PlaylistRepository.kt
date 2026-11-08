@@ -1925,14 +1925,49 @@ class PlaylistRepository @Inject constructor(
      * The 24 h floor is the no-catch-up case: a playlist whose channels have
      * no archive at all still keeps the last day of history, which is what
      * feeds "what was just on" in the guide.
+     *
+     * An UNKNOWN reach (no channel snapshot yet, or unreadable) is not zero:
+     * it returns the full 30-day bound so the callers' Guide Days clamp
+     * decides, instead of shrinking history to 24 h before channels load.
      */
     private suspend fun maxCatchupReachMs(playlistId: String): Long {
         // Server-wide (every profile's snapshot): the EPG rows are shared, so
         // one profile's narrower archive must not bound another's history.
         val days = runCatching { channelSnapshotDao.maxCatchupDaysAllProfiles(playlistId) }
-            .getOrNull() ?: 0
+            .getOrNull() ?: GUIDE_DAYS_ALL_MAX_BACK
         return maxOf(1, minOf(days, GUIDE_DAYS_ALL_MAX_BACK)) * 86_400_000L
     }
+
+    /**
+     * The shared per-channel history floor ([EpgHistoryWindow]) from every
+     * profile's channel snapshot, or null when the reach is unknown (no
+     * snapshot yet). The catch-up reach prune, the sweep, and every cache
+     * save use this one rule, so nothing is written that the prune deletes.
+     */
+    private suspend fun epgHistoryWindow(playlistId: String, now: Long): EpgHistoryWindow? {
+        val snapshot = runCatching { channelSnapshotDao.forPlaylistAllProfiles(playlistId) }
+            .getOrElse {
+                Log.w("PlaylistRepo", "[EPG] history window: channel snapshot unreadable", it)
+                return null
+            }
+        if (snapshot.isEmpty()) return null
+        // A key seen in several profiles takes the widest window any has.
+        val daysByKey = HashMap<String, Int>()
+        for (row in snapshot) {
+            val days = minOf(maxOf(row.catchupDays, 0), GUIDE_DAYS_ALL_MAX_BACK)
+            val key = row.toChannel().guideChannelId().value
+            val prior = daysByKey[key]
+            if (prior == null || days > prior) daysByKey[key] = days
+        }
+        return EpgHistoryWindow(daysByKey, now)
+    }
+
+    /** Drop aired rows the shared history floor would prune right back out. */
+    private fun <T> List<T>.insideHistory(
+        window: EpgHistoryWindow?,
+        channel: (T) -> String,
+        end: (T) -> Long,
+    ): List<T> = if (window == null) this else filter { window.keeps(channel(it), end(it)) }
 
     /**
      * Delete the EPG history that is no longer reachable for catch-up
@@ -1962,30 +1997,18 @@ class PlaylistRepository @Inject constructor(
         val dayMs = 86_400_000L
         // Every profile's snapshot of this playlist: the programme rows are
         // the SERVER's, so a channel only one profile sees, or a wider archive
-        // on another profile, must keep its history (2026-10-27).
-        val snapshot = runCatching { channelSnapshotDao.forPlaylistAllProfiles(playlistId) }
-            .getOrElse {
-                Log.w("PlaylistRepo", "[EPG] catch-up reach prune: channel snapshot unreadable", it)
-                return@serial
-            }
-        if (snapshot.isEmpty()) return@serial
+        // on another profile, must keep its history (2026-10-27). Unknown
+        // reach (no snapshot yet) prunes nothing.
+        val window = epgHistoryWindow(playlistId, now) ?: return@serial
         // Bucket the guide keys by the retention that applies to them. The key
         // is the canonical guide channel id, which is what cached programmes
-        // carry after the ingest bridge rewrote their channelId. A key seen in
-        // several profiles takes the widest window any of them has.
-        val daysByKey = HashMap<String, Int>()
-        for (row in snapshot) {
-            val days = minOf(maxOf(row.catchupDays, 0), GUIDE_DAYS_ALL_MAX_BACK)
-            val key = row.toChannel().guideChannelId().value
-            val prior = daysByKey[key]
-            if (prior == null || days > prior) daysByKey[key] = days
-        }
+        // carry after the ingest bridge rewrote their channelId.
         val keysByDays = HashMap<Int, MutableList<String>>()
-        for ((key, days) in daysByKey) keysByDays.getOrPut(days) { mutableListOf() }.add(key)
+        for ((key, days) in window.daysByKey) keysByDays.getOrPut(days) { mutableListOf() }.add(key)
         var deleted = 0
         for ((days, keys) in keysByDays) {
-            // days == 0 means no archive: keep only the last 24 h.
-            val cutoff = now - maxOf(days, 1) * dayMs
+            // Same floor every writer skips below (EpgHistoryWindow).
+            val cutoff = window.floor(keys.first())
             keys.chunked(900).forEach { chunk ->
                 deleted += runCatching {
                     epgProgrammeDao.deleteEndedBeforeForChannels(playlistId, cutoff, chunk)
@@ -1995,7 +2018,7 @@ class PlaylistRepository @Inject constructor(
                 }
             }
         }
-        val reachMs = maxOf(1, keysByDays.keys.maxOrNull() ?: 0) * dayMs
+        val reachMs = window.maxReachDays * dayMs
         // Orphan rows: no cached channel claims their key, so no bucket above
         // could name them. Bounded by the widest reach on the playlist.
         deleted += runCatching {
@@ -2233,12 +2256,13 @@ class PlaylistRepository @Inject constructor(
         }
         val tFetch = android.os.SystemClock.elapsedRealtime()
         DeletedPlaylists.ensureAlive(playlist.id, "EPG sweep")
+        val history = epgHistoryWindow(playlist.id, System.currentTimeMillis())
         val result = runCatching {
             com.aeriotv.android.core.app.BackgroundSweep.serial {
                 val now = System.currentTimeMillis()
                 val fetched = programmes.map { it.toCacheEntity(playlist.id, now) }
                 val cached = epgProgrammeDao.rowsInSpanBlocking(playlist.id, start, end)
-                val diff = EpgDayDiff.compute(fetched, cached, inScope, now)
+                val diff = EpgDayDiff.compute(fetched, cached, inScope, now, history)
                 if (diff.writes > 0 || diff.remapped > 0) epgProgrammeDao.applySweepDayBlocking(diff.deleteIds, diff.upserts, diff.programIdUpdates)
                 diff
             }
@@ -3232,8 +3256,10 @@ class PlaylistRepository @Inject constructor(
         authoritative: Boolean = true,
     ) {
         val now = System.currentTimeMillis()
+        val history = epgHistoryWindow(playlistId, now)
         val entities = withContext(layeringDispatcher) {
             programmes.map { it.toCacheEntity(playlistId, now) }
+                .insideHistory(history, { it.channelId }, { it.endMillis })
         }
         DeletedPlaylists.ensureAlive(playlistId, "EPG cache")
         // Catch-up (task #135): MERGE the feed instead of replacing the whole
@@ -3282,10 +3308,11 @@ class PlaylistRepository @Inject constructor(
         if (deleteIds.isEmpty() && programmes.isEmpty()) return
         val now = System.currentTimeMillis()
         DeletedPlaylists.ensureAlive(playlistId, "EPG delta")
+        val history = epgHistoryWindow(playlistId, now)
         com.aeriotv.android.core.app.BackgroundSweep.serial {
             val rows = programmes.mapNotNull { p ->
                 if (p.endMillis - p.startMillis < 30_000L) null else p.toCacheEntity(playlistId, now)
-            }
+            }.insideHistory(history, { it.channelId }, { it.endMillis })
             epgProgrammeDao.applyDeltaBlocking(deleteIds, rows)
         }
     }
