@@ -24,6 +24,7 @@ import com.aeriotv.android.core.profiles.ProfileManager
 import com.aeriotv.android.core.profiles.ProfileScope
 import com.aeriotv.android.core.sync.SetupSourceChoice
 import com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
+import com.aeriotv.android.core.sync.dsync.DsyncMissingRecord
 import com.aeriotv.android.core.sync.dsync.DsyncUpgradeOffer
 import com.aeriotv.android.feature.player.ExoWindowState
 import com.aeriotv.android.feature.settings.SyncSettingsViewModel
@@ -41,7 +42,7 @@ import kotlinx.coroutines.launch
 class DsyncUpgradeOfferViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val playlistDao: PlaylistDao,
-    private val dsync: DispatcharrSyncManager,
+    val dsync: DispatcharrSyncManager,
     val profiles: ProfileManager,
     val exoWindow: ExoWindowState,
 ) : ViewModel() {
@@ -101,6 +102,7 @@ fun DsyncUpgradeOfferHost(
     var offer by remember { mutableStateOf<DsyncUpgradeOfferViewModel.Offer?>(null) }
     var ask by remember { mutableStateOf<SetupSourceChoiceAsk?>(null) }
     val scope = rememberCoroutineScope()
+    val dsyncUi by vm.dsync.ui.collectAsStateWithLifecycle()
 
     LaunchedEffect(idle) {
         if (!idle || offer != null || DsyncUpgradeOffer.evaluatedThisLaunch) return@LaunchedEffect
@@ -122,6 +124,30 @@ fun DsyncUpgradeOfferHost(
             },
             onCancel = { ask = null },
         )
+    }
+
+    // Record missing after the first read (DsyncMissingRecord): no writes until answered.
+    if (dsyncUi.recordMissing && idle) {
+        val upFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { runCatching { upFocus.requestFocus() } }
+        val turnOff = {
+            vm.dsync.answerMissingRecord(upload = false)
+            syncVm.setDispatcharrSyncEnabled(false)
+        }
+        SettingsAlertDialog(
+            onDismissRequest = {},
+            title = { Text(DsyncMissingRecord.TITLE) },
+            text = { Text(DsyncMissingRecord.BODY) },
+            confirmButton = {
+                Box(Modifier.focusRequester(upFocus)) {
+                    SettingsDialogTextButton(label = "Upload Again", emphasized = true, onClick = {
+                        vm.dsync.answerMissingRecord(upload = true)
+                    })
+                }
+            },
+            dismissButton = { SettingsDialogTextButton(label = "Turn Off", onClick = turnOff) },
+        )
+        return
     }
 
     val o = offer ?: return
