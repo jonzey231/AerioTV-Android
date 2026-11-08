@@ -86,4 +86,59 @@ class ResumeGatePolicyTest {
         assertFalse(ResumeGatePolicy.shouldArmAfterSwitch(pending = false, inSwitchWindow = false, gateActive = false))
         assertFalse(ResumeGatePolicy.shouldArmAfterSwitch(pending = true, inSwitchWindow = false, gateActive = true))
     }
+
+    @Test fun windowHeldOpenByAnUnrenderedSource() {
+        val w = ResumeGatePolicy.SwitchWindow()
+        assertTrue(w.noteSwitch(1_000, boundaryMs = 50_000))
+        // Old buffer playing out below the boundary is not the first frame.
+        assertFalse(w.noteTick(3_000, positionMs = 49_000, advanced = true))
+        // At the boundary but not advancing: not rendered.
+        assertFalse(w.noteTick(4_000, positionMs = 50_000, advanced = false))
+        assertTrue(w.isOpen(20_000))
+    }
+
+    @Test fun firstFrameThenSettleClosesTheWindow() {
+        val w = ResumeGatePolicy.SwitchWindow()
+        w.noteSwitch(1_000, boundaryMs = 50_000)
+        assertTrue(w.noteTick(4_000, positionMs = 50_200, advanced = true))
+        assertFalse(w.noteTick(4_500, positionMs = 50_700, advanced = true))
+        assertTrue(w.isOpen(8_999))
+        assertFalse(w.isOpen(9_000))
+        assertTrue(ResumeGatePolicy.shouldArmAfterSwitch(pending = true, inSwitchWindow = w.isOpen(9_000), gateActive = false))
+    }
+
+    @Test fun laterSwitchReArmsTheWindow() {
+        val w = ResumeGatePolicy.SwitchWindow()
+        w.noteSwitch(1_000, boundaryMs = 50_000)
+        w.noteTick(4_000, positionMs = 50_200, advanced = true)
+        // Re-armed before it settled: stays open, first frame cleared, boundary kept.
+        assertFalse(w.noteSwitch(6_000, boundaryMs = 53_000))
+        assertNull(w.firstFrameAtMs)
+        assertEquals(50_000L, w.boundaryMs)
+        assertTrue(w.isOpen(12_000))
+        assertTrue(w.noteTick(13_000, positionMs = 51_000, advanced = true))
+        assertFalse(w.isOpen(18_000))
+    }
+
+    @Test fun capClosesAWindowWhoseSourceNeverRenders() {
+        val w = ResumeGatePolicy.SwitchWindow()
+        w.noteSwitch(1_000, boundaryMs = 50_000)
+        assertTrue(w.isOpen(30_999))
+        assertFalse(w.isOpen(31_000))
+        assertFalse(w.noteTick(31_000, positionMs = 51_000, advanced = true))
+        // A closed window reopens on a new switch with a fresh boundary.
+        assertTrue(w.noteSwitch(40_000, boundaryMs = 60_000))
+        assertEquals(60_000L, w.boundaryMs)
+    }
+
+    @Test fun staleSwitchIsIgnored() {
+        val w = ResumeGatePolicy.SwitchWindow()
+        w.noteSwitch(10_000, boundaryMs = 50_000)
+        w.noteTick(12_000, positionMs = 50_100, advanced = true)
+        assertFalse(w.noteSwitch(9_000, boundaryMs = 70_000))
+        assertFalse(w.noteSwitch(10_000, boundaryMs = 70_000))
+        assertEquals(12_000L, w.firstFrameAtMs)
+        assertEquals(50_000L, w.boundaryMs)
+        assertFalse(w.isOpen(17_000))
+    }
 }

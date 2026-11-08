@@ -1122,7 +1122,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 Log.i(
                     TAG,
                     "[HOLDBACK] resume gate deferred ch=$currentChannelId reason=$reason: switch window open " +
-                        "for ${switchWindowUntilMs - SystemClock.elapsedRealtime()}ms; one hold to " +
+                        "for up to ${switchWindow.closesByMs() - SystemClock.elapsedRealtime()}ms; one hold to " +
                         "${resumeGatePeakTargetMs}ms when it closes",
                 )
             }
@@ -1441,9 +1441,36 @@ class AerioExoPlayerHolder @Inject constructor(
      *  stream_limit before the server notices the old socket close, stops the
      *  channel and restarts it on the default stream. So only a player error
      *  (or the follow-poller's confirmed dead session) may reopen in it. */
-    @Volatile private var switchWindowUntilMs = 0L
+    private val switchWindow = ResumeGatePolicy.SwitchWindow()
+    /** Last position seen by [noteSwitchWindowTick]; -1 = none. */
+    private var switchWindowLastPosMs = -1L
 
-    private fun inSwitchWindow(): Boolean = SystemClock.elapsedRealtime() < switchWindowUntilMs
+    private fun inSwitchWindow(): Boolean = switchWindow.isOpen(SystemClock.elapsedRealtime())
+
+    /** Opens or re-arms the switch window (ResumeGatePolicy.SwitchWindow).
+     *  [boundaryMs] is the buffered end now, so the old buffer playing out is
+     *  not taken as the new source's first frame; null when the player is
+     *  being re-prepared onto a new timeline. */
+    private fun openSwitchWindow(nowMs: Long, boundaryMs: Long?, why: String) {
+        val opened = switchWindow.noteSwitch(nowMs, boundaryMs, resetBoundary = boundaryMs == null)
+        switchWindowLastPosMs = -1L
+        if (opened) Log.i(TAG, "[SWITCH] switch window opened ($why, boundary ${boundaryMs ?: "none"}ms)")
+    }
+
+    /** Watchdog tick: records the new source's first rendered frame. */
+    private fun noteSwitchWindowTick(p: ExoPlayer, nowMs: Long) {
+        if (switchWindow.lastSwitchAtMs == null) return
+        val pos = p.currentPosition
+        val advanced = switchWindowLastPosMs >= 0L && pos > switchWindowLastPosMs && p.isPlaying
+        switchWindowLastPosMs = pos
+        if (switchWindow.noteTick(nowMs, pos, advanced)) {
+            Log.i(
+                TAG,
+                "[SWITCH] new source first frame at ${pos}ms +${nowMs - (switchWindow.lastSwitchAtMs ?: nowMs)}ms " +
+                    "after the last switch; window closes in ${ResumeGatePolicy.SWITCH_SETTLE_AFTER_FIRST_FRAME_MS}ms",
+            )
+        }
+    }
 
     /** Wrap a freshly built live source for [followStreamSwitch]. Non raw-TS
      *  sources pass through untouched. */
@@ -1612,7 +1639,7 @@ class AerioExoPlayerHolder @Inject constructor(
         // new upstream, so there is no old buffer to drop.
         if (isFollowUnsafe()) {
             Log.i(TAG, "[SWITCH] player recovering (state=${p.playbackState}, quick retry pending=${stoppingRetryJob?.isActive == true}); no kept-connection skip")
-            switchWindowUntilMs = SystemClock.elapsedRealtime() + SWITCH_WINDOW_MS
+            openSwitchWindow(SystemClock.elapsedRealtime(), null, "follow while recovering")
             return@withContext true
         }
         // A known codec type change never rides the kept connection: the
@@ -1628,7 +1655,7 @@ class AerioExoPlayerHolder @Inject constructor(
         val startPos = p.currentPosition
         val startBuffered = p.bufferedPosition
         Log.i(TAG, "[SWITCH] kept connection (buffered ahead ${startBuffered - startPos}ms at switch)")
-        switchWindowUntilMs = startAt + SWITCH_WINDOW_MS
+        openSwitchWindow(startAt, startBuffered, "follow")
         // Drop the old stream's buffered samples as soon as new data is queued,
         // instead of playing them out. Any failure leaves the old buffer to play.
         val src = switchSkipSource
@@ -1664,7 +1691,7 @@ class AerioExoPlayerHolder @Inject constructor(
                     // Dispatcharr is still connecting the new upstream and fails
                     // over (or ends the session) on its own; keep the window open
                     // so no silence heal reopens the channel meanwhile.
-                    switchWindowUntilMs = now + SWITCH_WINDOW_MS
+                    openSwitchWindow(now, pl.bufferedPosition, "no progress on new upstream")
                     // Bytes are arriving, so the new upstream IS flowing; the
                     // extractor just cannot use them (changed PIDs, foreign
                     // timeline). Re-prime the extractor chain once.
@@ -3350,7 +3377,7 @@ class AerioExoPlayerHolder @Inject constructor(
             switchWatchJob = null
             extendResumeGateForSwitch("server-side switch (reason=$reason)")
             lastBufferAdvanceAtMs = startAt
-            switchWindowUntilMs = startAt + SWITCH_WINDOW_MS
+            openSwitchWindow(startAt, p.bufferedPosition, "server-side switch")
             val startPos = p.currentPosition
             serverSwitchWatchJob?.cancel()
             serverSwitchWatchJob = watchdogScope.launch {
@@ -3371,7 +3398,7 @@ class AerioExoPlayerHolder @Inject constructor(
                                 "[SWITCH] no progress ${now - startAt}ms after server-side switch " +
                                     "while bytes arrive (last byte ${byteGapMs}ms ago); re-priming same url",
                             )
-                            switchWindowUntilMs = 0L
+                            switchWindow.close()
                             reprimeSameUrl("server-side switch, no samples", rejoinNearLive = true)
                         }
                         return@launch
@@ -3416,7 +3443,7 @@ class AerioExoPlayerHolder @Inject constructor(
         serverSwitchWatchJob?.cancel()
         serverSwitchWatchJob = null
         // Keep the stall and silence nets quiet while the player is stopped.
-        switchWindowUntilMs = now + SWITCH_WINDOW_MS
+        openSwitchWindow(now, null, "codec rebuild")
         val inBuffer = isTimeshifting && !isAdoptedLive
         val reenterWall = if (inBuffer) {
             currentRewindWallMs()?.let { it + (p.bufferedPosition - p.currentPosition).coerceAtLeast(0L) + 500L }
@@ -4754,6 +4781,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 // Live resume gate: runs before every heal below, because while it
                 // holds, playWhenReady is false and the stale-position check
                 // deliberately skips the stream.
+                noteSwitchWindowTick(p, now)
                 tickResumeGate(p, now)
                 tickAudioOnlyBurst(now)
                 if (audioOnlyHoldActive) tickAudioOnlyHold(p, now)
@@ -5841,8 +5869,9 @@ class AerioExoPlayerHolder @Inject constructor(
         private const val SWITCH_AUDIO_HOLD_MS = 3_000L
         private const val SWITCH_AUDIO_HOLD_POLL_MS = 100L
         /** After a switch follow, only a player error or a confirmed dead
-         *  session may reopen the channel. */
-        private const val SWITCH_WINDOW_MS = 30_000L
+         *  session may reopen the channel. The resume gate's switch window
+         *  closes earlier, on the new source's first frame (ResumeGatePolicy). */
+        private const val SWITCH_WINDOW_MS = ResumeGatePolicy.SWITCH_WINDOW_CAP_MS
         /** Raw-TS live ingest silence required (with an empty buffer) before
          *  the watchdog reopens the same channel. */
         private const val LIVE_INGEST_RELOAD_SILENCE_MS = 25_000L
