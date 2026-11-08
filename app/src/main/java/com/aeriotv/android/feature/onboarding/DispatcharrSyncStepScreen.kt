@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -375,6 +376,7 @@ private fun TvSyncPromptLayout(
                     onClick = onPrimary,
                     modifier = Modifier.padding(top = u * 8f).fillMaxWidth().height(u * 66f)
                         .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
+                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$primaryLabel") }
                         .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                     shape = RoundedCornerShape(50),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
@@ -388,7 +390,9 @@ private fun TvSyncPromptLayout(
                 }
                 OutlinedButton(
                     onClick = onSecondary,
-                    modifier = Modifier.fillMaxWidth().height(u * 66f).dpadFocusRing(RoundedCornerShape(50)),
+                    modifier = Modifier.fillMaxWidth().height(u * 66f)
+                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$secondaryLabel") }
+                        .dpadFocusRing(RoundedCornerShape(50)),
                     shape = RoundedCornerShape(50),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 ) { Text(secondaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.Medium) }

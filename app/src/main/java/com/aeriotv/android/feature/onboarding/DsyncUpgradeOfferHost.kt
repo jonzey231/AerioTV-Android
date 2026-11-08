@@ -151,12 +151,11 @@ fun DsyncUpgradeOfferHost(
     // Record missing after the first read (DsyncMissingRecord): no writes until answered.
     if (dsyncUi.recordMissing && idle) {
         val upFocus = remember { FocusRequester() }
-        LaunchedEffect(Unit) { runCatching { upFocus.requestFocus() } }
         val turnOff = {
             vm.dsync.answerMissingRecord(upload = false)
             syncVm.setDispatcharrSyncEnabled(false)
         }
-        PromptSurface(onBack = {}) {
+        PromptSurface(onBack = {}, initialFocus = upFocus, traceName = "Upload Again") {
             SyncPromptLayout(
                 title = DsyncMissingRecord.TITLE,
                 body = DsyncMissingRecord.BODY,
@@ -175,8 +174,7 @@ fun DsyncUpgradeOfferHost(
     // Hold the dialog while a TV player is up; it shows at the next idle moment.
     if (busy) return
     val optIn = o.decision == DsyncUpgradeOffer.Decision.ShowOptIn
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(o) { runCatching { focus.requestFocus() } }
+    val focus = remember(o) { FocusRequester() }
     val notNow = {
         offer = null
         scope.launch { vm.decline() }
@@ -188,7 +186,7 @@ fun DsyncUpgradeOfferHost(
         scope.launch { vm.dismiss() }
         Unit
     }
-    PromptSurface(onBack = dismiss) {
+    PromptSurface(onBack = dismiss, initialFocus = focus, traceName = "Turn On") {
         SyncPromptLayout(
             title = if (optIn) DsyncUpgradeOffer.OPT_IN_TITLE else DsyncUpgradeOffer.MIGRATE_TITLE,
             body = if (optIn) DsyncUpgradeOffer.optInBody(o.driveOn) else DsyncUpgradeOffer.MIGRATE_BODY,
@@ -229,9 +227,26 @@ fun DsyncUpgradeOfferHost(
 /**
  * Full-screen themed surface above the main screen (the host composes before
  * the main content, so a window keeps it on top). Back runs [onBack].
+ *
+ * Focus (Streamer 2026-11-07): with the prompt on screen dumpsys reported
+ * mCurrentFocus = MainActivity and the tracer's last line was
+ * "[FOCUS] none -> tab:LiveTV", so the Live TV tab still held Compose focus
+ * behind the prompt while Turn On drew its ring in the dialog's own focus
+ * owner. The request made from the host ran before the dialog window was
+ * attached. Now the main window's Compose focus is cleared while the prompt
+ * is up (nothing behind it can hold or take focus), the dialog window asks
+ * for window focus, and [initialFocus] is requested from inside the dialog
+ * after its first frames, retried until it lands, and traced.
  */
 @Composable
-private fun PromptSurface(onBack: () -> Unit, content: @Composable () -> Unit) {
+private fun PromptSurface(
+    onBack: () -> Unit,
+    initialFocus: FocusRequester,
+    traceName: String,
+    content: @Composable () -> Unit,
+) {
+    val mainFocus = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(Unit) { mainFocus.clearFocus(force = true) }
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onBack,
         properties = androidx.compose.ui.window.DialogProperties(
@@ -240,6 +255,21 @@ private fun PromptSurface(onBack: () -> Unit, content: @Composable () -> Unit) {
             dismissOnClickOutside = false,
         ),
     ) {
+        val view = androidx.compose.ui.platform.LocalView.current
+        LaunchedEffect(initialFocus) {
+            repeat(FOCUS_TRIES) {
+                androidx.compose.runtime.withFrameNanos { }
+                if (view.isAttachedToWindow) {
+                    view.rootView.requestFocus()
+                    if (runCatching { initialFocus.requestFocus() }.isSuccess && view.hasFocus()) {
+                        com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$traceName")
+                        return@LaunchedEffect
+                    }
+                }
+                delay(FOCUS_RETRY_MS)
+            }
+            Log.i(com.aeriotv.android.ui.tv.TvFocusTrace.TAG, "[FOCUS] prompt:$traceName request did not land")
+        }
         androidx.compose.material3.Surface(
             modifier = Modifier.fillMaxSize(),
             color = androidx.compose.material3.MaterialTheme.colorScheme.background,
@@ -251,3 +281,5 @@ private data class SetupSourceChoiceAsk(val probe: com.aeriotv.android.core.sync
 
 private const val SETTLE_MS = 2_000L
 private const val LOAD_TRIES = 15
+private const val FOCUS_TRIES = 10
+private const val FOCUS_RETRY_MS = 50L
