@@ -126,7 +126,7 @@ fun OnboardingPill(
         if (filled) {
             androidx.compose.material3.Button(
                 onClick = onClick,
-                modifier = modifier.dpadFocusRing(shape, onFilled = true, ringWidth = ringWidth),
+                modifier = modifier.dpadFocusRing(shape, onFilled = true, ringWidth = ringWidth, scaleOnFocus = false),
                 shape = shape,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(

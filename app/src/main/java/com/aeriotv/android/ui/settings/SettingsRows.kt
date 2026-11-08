@@ -821,12 +821,15 @@ fun Modifier.dpadFocusRing(
     // invisible, so focus then draws a white ring plus a slight scale.
     onFilled: Boolean = false,
     ringWidth: androidx.compose.ui.unit.Dp = SettingsFocusRingWidth,
+    // False keeps a focused filled control at its resting size (tvOS
+    // TVNoHighlightButtonStyle without scalesOnFocus): only the ring changes.
+    scaleOnFocus: Boolean = true,
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
     return this
         .onFocusChanged { focused = it.isFocused }
         .then(
-            if (onFilled && focused) {
+            if (onFilled && focused && scaleOnFocus) {
                 Modifier.graphicsLayer { scaleX = 1.04f; scaleY = 1.04f }
             } else {
                 Modifier
