@@ -52,7 +52,7 @@ android {
         applicationId = "com.aeriotv.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 70
+        versionCode = 71
         versionName = "0.5.14"
         vectorDrawables { useSupportLibrary = true }
         ndk {
