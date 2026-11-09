@@ -1,3 +1,5 @@
+<img src="logo.png" width="128" alt="AerioTV">
+
 # AerioTV for Android
 
 AerioTV for Android is a native IPTV streaming app for Android phones, tablets, and Google TV / Android TV, built from a single Jetpack Compose codebase. It connects to Dispatcharr (admin login or API key), Xtream Codes, and M3U playlist servers to deliver live TV, movies, and series with a full electronic program guide (EPG) when supplied by the user.
