@@ -11,21 +11,43 @@ import org.junit.Test
 class RewindStoragePolicyTest {
     private val hugeFree = 2_000L * GB
 
+    private val def = RewindStoragePolicy.DEFAULT_BYTES_PER_SEC
+
+    @Test fun allowanceDefaultsTo10MbpsUntilMeasured() {
+        assertEquals(1_250_000L, RewindStoragePolicy.allowanceBytesPerSec(null))
+        assertEquals(1_250_000L, RewindStoragePolicy.allowanceBytesPerSec(0.0))
+        assertEquals(1_250_000L, RewindStoragePolicy.allowanceBytesPerSec(Double.NaN))
+    }
+
+    @Test fun allowanceIsMeasuredPeakPlus25Percent() {
+        assertEquals(1_250_000L, RewindStoragePolicy.allowanceBytesPerSec(1_000_000.0))
+        assertEquals(3_125_000L, RewindStoragePolicy.allowanceBytesPerSec(2_500_000.0))
+    }
+
+    @Test fun measuredRateFromClosedSegments() {
+        val segs = listOf(Segment("a", 0, 6_000_000), Segment("b", 6_000, 6_000_000), Segment("c", 12_000, 10))
+        assertEquals(1_000_000.0, RewindStoragePolicy.measuredBytesPerSec(segs, 6_000)!!, 0.001)
+        assertEquals(null, RewindStoragePolicy.measuredBytesPerSec(segs.take(1), 6_000))
+    }
+
     @Test fun capUsesDepthAllowanceWhenSmall() {
-        // 15 min x 5 x 1.5 MB/s = 6.75e9 bytes
-        assertEquals(6_750_000_000L, RewindStoragePolicy.capBytes(15 * 60_000L, false, 0, hugeFree))
+        // 15 min x 5 x 1.25 MB/s = 5.625e9 bytes
+        assertEquals(5_625_000_000L, RewindStoragePolicy.capBytes(15 * 60_000L, def, false, 0, hugeFree))
+        // Measured 1 MB/s peak -> 1.25 MB/s allowance, same arithmetic.
+        val a = RewindStoragePolicy.allowanceBytesPerSec(1_000_000.0)
+        assertEquals(5_625_000_000L, RewindStoragePolicy.capBytes(15 * 60_000L, a, false, 0, hugeFree))
     }
 
     @Test fun capClampsToCeilingOnLargeDisk() {
         // The 43 GB case: 60 min depth on a big disk must not be unbounded.
-        assertEquals(16L * GB, RewindStoragePolicy.capBytes(60 * 60_000L, false, 0, hugeFree))
-        assertEquals(8L * GB, RewindStoragePolicy.capBytes(60 * 60_000L, true, 0, hugeFree))
+        assertEquals(16L * GB, RewindStoragePolicy.capBytes(60 * 60_000L, def, false, 0, hugeFree))
+        assertEquals(8L * GB, RewindStoragePolicy.capBytes(60 * 60_000L, def, true, 0, hugeFree))
     }
 
     @Test fun capKeepsFreeSpaceFloor() {
-        assertEquals(1L * GB, RewindStoragePolicy.capBytes(180 * 60_000L, false, 0, 3L * GB))
-        assertEquals(0L, RewindStoragePolicy.capBytes(180 * 60_000L, false, 0, 1L * GB))
-        assertEquals(4L * GB, RewindStoragePolicy.capBytes(180 * 60_000L, false, 3L * GB, 3L * GB))
+        assertEquals(1L * GB, RewindStoragePolicy.capBytes(180 * 60_000L, def, false, 0, 3L * GB))
+        assertEquals(0L, RewindStoragePolicy.capBytes(180 * 60_000L, def, false, 0, 1L * GB))
+        assertEquals(4L * GB, RewindStoragePolicy.capBytes(180 * 60_000L, def, false, 3L * GB, 3L * GB))
     }
 
     private fun sess(name: String, start: Long, active: Boolean, owned: Boolean, n: Int) =

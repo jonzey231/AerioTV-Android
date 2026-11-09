@@ -10,7 +10,8 @@ package com.aeriotv.android.core.timeshift
  *
  * The rules here:
  * 1. A hard cap on all rewind bytes across sessions: the smaller of
- *    depth x [MAX_SESSIONS] channels x [BITRATE_ALLOWANCE_BYTES_PER_SEC]
+ *    depth x [MAX_SESSIONS] channels x the allowance (measured peak
+ *    bitrate of the sessions plus 25 percent, 10 Mbps until measured)
  *    and a fixed ceiling (16 GB phones and tablets, 8 GB TV), and also no
  *    more than usage + free space above the floor.
  * 2. Trim order: oldest segments of the oldest non-active session first,
@@ -27,19 +28,42 @@ object RewindStoragePolicy {
     const val TV_CEILING_BYTES = 8L * GB
     /** Keep Recent Channels Live holds at most this many sessions plus the active one. */
     const val MAX_SESSIONS = 5
-    /** 12 Mbps: covers HD and most UHD channels at the configured depth. */
-    const val BITRATE_ALLOWANCE_BYTES_PER_SEC = 12_000_000L / 8
+    /** Allowance before any bitrate is measured: 10 Mbps (Apple parity). */
+    const val DEFAULT_BYTES_PER_SEC = 10_000_000L / 8
+    /** Headroom over the measured peak bitrate (VBR bursts). */
+    const val BITRATE_HEADROOM = 1.25
     const val FREE_SPACE_FLOOR_BYTES = 2L * GB
+
+    /** Per-second allowance from the peak bitrate measured across the
+     *  running sessions; null or 0 means not yet measured. */
+    fun allowanceBytesPerSec(measuredPeakBytesPerSec: Double?): Long {
+        val m = measuredPeakBytesPerSec
+        if (m == null || m <= 0.0 || !m.isFinite()) return DEFAULT_BYTES_PER_SEC
+        return (m * BITRATE_HEADROOM).toLong()
+    }
+
+    /** Average bytes per second of one session's segments, or null when
+     *  it holds under two segments' worth of time. */
+    fun measuredBytesPerSec(segments: List<Segment>, segmentMs: Long): Double? {
+        if (segments.size < 2) return null
+        val sorted = segments.sortedBy { it.startMs }
+        // Exclude the newest (still being written) segment from both sides.
+        val closed = sorted.dropLast(1)
+        val spanMs = sorted.last().startMs - sorted.first().startMs
+        if (spanMs < segmentMs) return null
+        return closed.sumOf { it.bytes } * 1000.0 / spanMs
+    }
 
     fun capBytes(
         depthMs: Long,
+        allowanceBytesPerSec: Long,
         isTv: Boolean,
         usageBytes: Long,
         usableBytes: Long,
         floorBytes: Long = FREE_SPACE_FLOOR_BYTES,
     ): Long {
         val depthSec = (depthMs / 1000L).coerceAtLeast(0L)
-        val byDepth = depthSec * MAX_SESSIONS * BITRATE_ALLOWANCE_BYTES_PER_SEC
+        val byDepth = depthSec * MAX_SESSIONS * allowanceBytesPerSec.coerceAtLeast(0L)
         val ceiling = if (isTv) TV_CEILING_BYTES else PHONE_CEILING_BYTES
         val byFree = usageBytes + (usableBytes - floorBytes).coerceAtLeast(0L)
         return minOf(byDepth, ceiling, byFree)

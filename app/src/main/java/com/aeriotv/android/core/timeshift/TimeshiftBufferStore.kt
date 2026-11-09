@@ -117,7 +117,27 @@ class TimeshiftBufferStore @Inject constructor(
     /** Hard cap on all rewind bytes (see [RewindStoragePolicy.capBytes]). */
     fun capBytes(): Long {
         val usable = runCatching { rootDir.apply { mkdirs() }.usableSpace }.getOrDefault(0L)
-        return RewindStoragePolicy.capBytes(lastDepthMs, isTv, totalBytes(), usable)
+        return RewindStoragePolicy.capBytes(
+            lastDepthMs,
+            RewindStoragePolicy.allowanceBytesPerSec(measuredPeakBytesPerSec()),
+            isTv, totalBytes(), usable,
+        )
+    }
+
+    /** Peak average bitrate across the sessions live writers own; decays
+     *  10 percent per pass toward the current peak (Apple parity). */
+    @Volatile private var peakBytesPerSec = 0.0
+
+    private fun measuredPeakBytesPerSec(): Double? {
+        val now = ownedDirs().mapNotNull { d ->
+            val segs = d.listFiles()
+                ?.filter { it.name.startsWith("seg_") && it.name.endsWith(".ts") }
+                ?.map { RewindStoragePolicy.Segment(it.name, segStart(it), it.length()) }
+                .orEmpty()
+            RewindStoragePolicy.measuredBytesPerSec(segs, SEGMENT_MS)
+        }.maxOrNull() ?: 0.0
+        peakBytesPerSec = maxOf(peakBytesPerSec * 0.9, now)
+        return peakBytesPerSec.takeIf { it > 0.0 }
     }
 
     private fun onWriterRolled() {
