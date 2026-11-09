@@ -485,21 +485,24 @@ app/src/main/java/com/aeriotv/android/
 Copyright (C) 2026 Logan Jones
 
 AerioTV for Android is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
+under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option) any
 later version. See [LICENSE](LICENSE).
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE. See the GNU General Public License for more details.
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details.
 
-An additional permission under GPL section 7 covers linking with the proprietary
+An additional permission under AGPL section 7 covers linking with the proprietary
 Google Play services client libraries. See [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).
 
 Releases up to and including v0.4.20 were published under the MIT License. That
 grant is not revoked: any copy obtained under MIT keeps its MIT rights to that
-snapshot in perpetuity. Everything from the relicensing commit forward is
-GPL-3.0-or-later.
+snapshot in perpetuity. Releases from v0.4.21 up to and including v0.5.13 were
+published under GPL-3.0-or-later; that grant is likewise not revoked for those
+snapshots. Everything from the AGPL relicensing commit forward is
+AGPL-3.0-or-later.
 
 ### Third-party components
 
@@ -528,8 +531,8 @@ source directly, open an issue at
 The Google Play services client libraries (Cast sender, Cast Connect receiver,
 Play services Auth, Google Identity) are proprietary and are used under the
 Android Software Development Kit License Agreement and the Google APIs Terms of
-Service. Linking them with this GPL-licensed program is permitted by an
-additional permission under GPL section 7; see
+Service. Linking them with this AGPL-licensed program is permitted by an
+additional permission under AGPL section 7; see
 [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).
 
 The four-color Google "G" on the Sign in with Google button

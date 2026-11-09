@@ -2,7 +2,7 @@
 //
 // Settings -> About -> Open Source Licenses.
 //
-// Why this screen exists: AerioTV is GPL-3.0-or-later and it distributes an
+// Why this screen exists: AerioTV is AGPL-3.0-or-later and it distributes an
 // FFmpeg build under the LGPL-2.1-or-later. Both licenses require that the
 // license text and the attribution travel WITH the binary, not just with the
 // repo, and the LGPL additionally requires telling the user how to relink a
@@ -78,7 +78,7 @@ import kotlinx.coroutines.withContext
 
 /** A license text bundled in `res/raw` and viewable in full inside the app. */
 private enum class BundledLicense(val title: String, val res: Int) {
-    Gpl3("GNU General Public License v3.0", R.raw.license_gpl_3_0),
+    Agpl3("GNU Affero General Public License v3.0", R.raw.license_agpl_3_0),
     Lgpl21("GNU Lesser General Public License v2.1", R.raw.license_lgpl_2_1),
     Apache2("Apache License 2.0", R.raw.license_apache_2_0),
 }
@@ -90,7 +90,7 @@ private const val FFMPEG_SOURCE_URL = "https://github.com/FFmpeg/FFmpeg/tree/rel
 fun LicensesScreen(onBack: () -> Unit) {
     // Which full license text is open, if any. Kept as local state rather than
     // its own SettingsRoute: it is a leaf detail of THIS screen and pushing it
-    // on the settings stack would put "GNU General Public License v3.0" in the
+    // on the settings stack would put "GNU Affero General Public License v3.0" in the
     // TV rail's pushed-route slot, which reads as a settings section.
     var viewing by remember { mutableStateOf<BundledLicense?>(null) }
     var qrLink by remember { mutableStateOf<TvQrLink?>(null) }
@@ -174,7 +174,7 @@ private fun LicenseIndex(
             LicenseBlurb(
                 "Copyright (C) 2026 Logan Jones\n\n" +
                     "AerioTV for Android is free software: you can redistribute it " +
-                    "and/or modify it under the terms of the GNU General Public " +
+                    "and/or modify it under the terms of the GNU Affero General Public " +
                     "License as published by the Free Software Foundation, either " +
                     "version 3 of the License, or (at your option) any later version.\n\n" +
                     "This program is distributed in the hope that it will be useful, " +
@@ -185,10 +185,10 @@ private fun LicenseIndex(
         item("aerio-rows") {
             LicenseCard {
                 SettingsNavRow(
-                    title = "GNU General Public License v3.0",
+                    title = "GNU Affero General Public License v3.0",
                     subtitle = "The license this app is distributed under",
                     icon = Icons.Outlined.Description,
-                    onClick = { onOpenLicense(BundledLicense.Gpl3) },
+                    onClick = { onOpenLicense(BundledLicense.Agpl3) },
                 )
                 SettingsNavRow(
                     title = "Source Code",
@@ -202,7 +202,7 @@ private fun LicenseIndex(
         item("aerio-footer") {
             SettingsSectionFooter(
                 "Linking with the proprietary Google Play services libraries is " +
-                    "permitted by an additional permission under GPL section 7. " +
+                    "permitted by an additional permission under AGPL section 7. " +
                     "See LICENSE-EXCEPTIONS.md in the source repository.",
             )
         }

@@ -1,7 +1,7 @@
 # Third-party licenses
 
-AerioTV for Android is licensed under the GNU General Public License v3.0 or
-later (see [LICENSE](LICENSE) and [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md)).
+AerioTV for Android is licensed under the GNU Affero General Public License
+v3.0 or later (see [LICENSE](LICENSE) and [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md)).
 This file lists the third-party components it distributes or links, and the terms
 they carry.
 
@@ -92,8 +92,8 @@ under the Android Software Development Kit License Agreement and the Google APIs
 Terms of Service, are linked from Google's Maven repository, and are not
 redistributed in source form here.
 
-Because those terms are not GPL-compatible, the copyright holder grants an
-additional permission under GPL section 7 to permit linking them with this
+Because those terms are not AGPL-compatible, the copyright holders grant an
+additional permission under AGPL section 7 to permit linking them with this
 program. See [LICENSE-EXCEPTIONS.md](LICENSE-EXCEPTIONS.md).
 
 ## Test-only dependencies
