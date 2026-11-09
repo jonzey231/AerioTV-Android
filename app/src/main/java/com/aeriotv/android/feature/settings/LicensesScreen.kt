@@ -225,7 +225,7 @@ private fun LicenseIndex(
                     "flac, alac. No GPL-only component is linked in.\n\n" +
                     "AerioTV includes independent implementations of audio and video " +
                     "codecs, supplied by FFmpeg, that may be covered by patents in " +
-                    "some countries. AerioTV is free software under GPL-3.0-or-later " +
+                    "some countries. AerioTV is free software under AGPL-3.0-or-later " +
                     "and grants no patent license; users are responsible for " +
                     "compliance where they live.\n\n" +
                     "AerioTV also encodes video on the device for casting, in H.264/AVC " +

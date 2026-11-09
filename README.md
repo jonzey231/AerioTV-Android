@@ -543,7 +543,7 @@ Google Sign-In branding guidelines.
 
 AerioTV includes independent implementations of audio and video codecs, supplied
 by FFmpeg, that may be covered by patents in some countries. AerioTV is free
-software under GPL-3.0-or-later and grants no patent license of any kind; users
+software under AGPL-3.0-or-later and grants no patent license of any kind; users
 and redistributors are responsible for compliance with the patent law that
 applies where they live.
 
