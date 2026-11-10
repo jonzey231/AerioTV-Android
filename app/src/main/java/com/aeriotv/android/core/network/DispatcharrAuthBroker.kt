@@ -90,62 +90,90 @@ class DispatcharrAuthBroker @Inject constructor(
             ?: throw IllegalArgumentException("Playlist ${playlistId.take(8)} has no api_key")
         client.seedAuthMode(playlist)
         client.seedUserAgent(playlist)
+        // Known rejected and unrecoverable: fail here, before any request
+        // (DispatcharrRequestGate). Every looping caller (the playback status
+        // poll every 12 s, the DVR poll, VOD lanes, EPG) lands here.
+        if (DispatcharrRequestGate.isKeyRejected(initialKey)) throw DispatcharrError.KeyRejected()
         return try {
             block(initialKey)
         } catch (e: DispatcharrError.Unauthorized) {
+            if (e is DispatcharrError.KeyRejected) throw e
             invalidateRow(playlistId)
             // Task #49 (iOS verifyConnection v1.6.20 parity): before assuming
             // the KEY was rotated, check whether the 401 is a header-SHAPE
             // rejection -- some deployments (reverse proxies, hardened
             // builds) reject `Authorization: ApiKey` or require it, with a
-            // perfectly valid key. The probe records the working shape in
-            // the client's registry; persist it and replay. Cheap (a couple
-            // of /api/core/version/ GETs) and requires no saved credentials,
-            // so it runs ahead of the credential rebootstrap.
-            val detected = detectAndPersistAuthMode(playlist, initialKey)
-            if (detected != null) {
-                Log.i(TAG, "401 for ${playlistId.take(8)} was a header-shape rejection; retrying with mode=$detected")
-                return block(initialKey)
+            // perfectly valid key. The probe also tells a rejected KEY apart
+            // from an endpoint-specific 401/403 for a key that still works,
+            // and it stops at Dispatcharr's "Invalid API key" answer, so a
+            // bad key costs the server's failed-key budget two attempts here,
+            // not four.
+            val probe = client.probeApiKey(playlist.urlString, initialKey)
+            if (probe is DispatcharrClient.KeyProbe.Accepted) {
+                val detected = persistAuthModeIfChanged(playlist, probe.mode)
+                if (detected != null) {
+                    Log.i(TAG, "401 for ${playlistId.take(8)} was a header-shape rejection; retrying with mode=$detected")
+                    return block(initialKey)
+                }
             }
-            Log.i(TAG, "401 on apiKey call for ${playlistId.take(8)}; attempting silent rebootstrap")
+            val keyRejected = probe is DispatcharrClient.KeyProbe.Rejected
+            Log.i(TAG, "401 on apiKey call for ${playlistId.take(8)} (key probe: ${probe::class.simpleName}); attempting silent rebootstrap")
+            val hasPassword = !playlist.password.isNullOrBlank() && !playlist.username.isNullOrBlank()
             val freshKey = silentRebootstrapApiKey(playlist)
-            if (freshKey == null && (playlist.password.isNullOrBlank() || playlist.username.isNullOrBlank())) {
+            if (freshKey == null && !hasPassword) {
                 // API-Key-mode playlists have no credentials to re-mint from,
                 // so a rejected key is terminal until the user replaces it.
                 // Before this flag the failure was invisible: Live TV and the
                 // guide kept serving from cache while VOD alone 401'd, so the
                 // Movies & TV tab simply never appeared and nothing said why
                 // (reported 2026-08-08 on both a Z Fold and the Streamer).
-                // Record it so Settings can prompt for a new key.
                 Log.w(
                     TAG,
                     "silent rebootstrap returned null for ${playlistId.take(8)}: API-Key-mode " +
                         "playlist with a rejected key has nothing to re-mint from. The user must " +
                         "enter a new key in Edit Playlist. Surfacing the 401.",
                 )
+                // Retrying a key the server refused fed its failed-key throttle
+                // (10 per minute per IP) every 12 s until every API-key request
+                // from the network got 429, valid keys included (2026-11-09).
+                // Hold it locally until Edit Playlist changes something.
+                if (keyRejected) {
+                    gateRejectedKey(playlist, initialKey, passwordToo = false)
+                    throw DispatcharrError.KeyRejected()
+                }
                 throw e
             }
-            if (freshKey == null) throw e
+            if (freshKey == null) {
+                // A password playlist whose re-login was itself refused
+                // (DispatcharrLoginGate parks it): the same hold, or the
+                // re-login would run again every minute.
+                if (keyRejected && DispatcharrLoginGate.isRejected(playlistId)) {
+                    gateRejectedKey(playlist, initialKey, passwordToo = true)
+                    throw DispatcharrError.KeyRejected()
+                }
+                throw e
+            }
             block(freshKey)
         }
     }
 
+    private fun gateRejectedKey(playlist: PlaylistEntity, key: String, passwordToo: Boolean) {
+        if (DispatcharrRequestGate.markKeyRejected(playlist.id, key, playlist.name, passwordToo)) {
+            Log.w(
+                TAG,
+                "[AUTH] API key for ${playlist.id.take(8)} rejected by the server; holding every API call " +
+                    "for this playlist locally (no network) until Edit Playlist changes the key or credentials",
+            )
+        }
+    }
+
     /**
-     * Probe the server's accepted auth header shape and, when one works AND
-     * differs from what the playlist row already records, persist it so
-     * every later call starts in the right shape. Returns the detected mode
-     * only when it represents a CHANGE worth replaying the original call
-     * for; null when no shape authenticates (key genuinely bad), the server
-     * is unreachable, or the detected shape is what we were already using
-     * (replaying would just 401 again).
+     * Persist a header shape the probe found when it differs from what the
+     * playlist row records. Returns the mode only when it is a CHANGE worth
+     * replaying the original call for.
      */
-    private suspend fun detectAndPersistAuthMode(
-        playlist: PlaylistEntity,
-        apiKey: String,
-    ): String? {
+    private suspend fun persistAuthModeIfChanged(playlist: PlaylistEntity, detected: String): String? {
         val previous = playlist.dispatcharrAuthMode.ifBlank { AUTH_MODE_BOTH }
-        val detected = client.detectAuthMode(playlist.urlString, apiKey) ?: return null
-        // Also register the LAN route's host under the detected mode.
         client.seedAuthMode(playlist.copy(dispatcharrAuthMode = detected))
         if (detected == previous) return null
         dao.update(playlist.copy(dispatcharrAuthMode = detected))

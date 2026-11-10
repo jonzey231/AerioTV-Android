@@ -36,6 +36,10 @@ class DispatcharrImageAuthInterceptor(
         // path that adds it explicitly), don't double up.
         if (req.header(HEADER_X_API_KEY) != null) return chain.proceed(req)
         val key = credentials.apiKeyFor(req.url.toString()) ?: return chain.proceed(req)
+        // A key the server already rejected would cost one failed-key attempt
+        // per logo against the server's per-IP throttle (10 a minute): send
+        // the image request without it instead.
+        if (DispatcharrRequestGate.isKeyRejected(key)) return chain.proceed(req)
         val authed = req.newBuilder()
             .addHeader(HEADER_X_API_KEY, key)
             .addHeader(HEADER_AUTHORIZATION, "ApiKey $key")

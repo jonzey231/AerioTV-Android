@@ -200,8 +200,14 @@ fun settingsRouteForDeepLinkPage(
     "manage-profiles" -> SettingsRoute.ManageProfiles
     "playlist-detail" -> activePlaylistId?.let { SettingsRoute.PlaylistDetail(it) }
     "edit-playlist" -> activePlaylistId?.let { SettingsRoute.EditPlaylist(it) }
-    else -> null
+    // A specific playlist (the rejected-key prompt names the one it is about).
+    else -> page.trim().takeIf { it.startsWith(EDIT_PLAYLIST_PAGE_PREFIX) }
+        ?.removePrefix(EDIT_PLAYLIST_PAGE_PREFIX)?.takeIf { it.isNotBlank() }
+        ?.let { SettingsRoute.EditPlaylist(it) }
 }
+
+/** "edit-playlist:<id>": Edit Playlist for that playlist, active or not. */
+const val EDIT_PLAYLIST_PAGE_PREFIX = "edit-playlist:"
 
 /** True when [page] needs the active playlist id before it can be resolved. */
 fun settingsDeepLinkPageNeedsPlaylist(page: String): Boolean =

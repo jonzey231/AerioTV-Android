@@ -43,7 +43,9 @@ object PlaybackHeaders {
         if (playlist == null) return emptyMap()
         return buildMap {
             val key = playlist.apiKey?.takeIf { it.isNotBlank() }
-            if (isDispatcharr(playlist) && key != null) {
+            // A key the server already rejected is left off: each stream open
+            // would otherwise count against its failed-key throttle.
+            if (isDispatcharr(playlist) && key != null && !DispatcharrRequestGate.isKeyRejected(key)) {
                 put("X-API-Key", key)
                 put("Authorization", "ApiKey $key")
             }

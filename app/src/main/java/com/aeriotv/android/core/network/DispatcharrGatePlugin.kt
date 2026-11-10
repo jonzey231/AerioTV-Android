@@ -5,6 +5,7 @@ import com.aeriotv.android.core.debug.LogSanitizer
 import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.statement.bodyAsText
+import io.ktor.util.AttributeKey
 
 /**
  * Ktor plugin on [DispatcharrClient]'s HTTP client that applies
@@ -16,6 +17,10 @@ import io.ktor.client.statement.bodyAsText
  *    server, and throw [DispatcharrError.RateLimited] so no caller turns it
  *    into a generic "HTTP 429" transport error.
  *
+ *  - a request carrying an API key the server already rejected (and the app
+ *    cannot recover) fails fast with [DispatcharrError.KeyRejected] and is
+ *    never sent, unless it is an explicit key check ([BypassKeyGate]).
+ *
  * The login and token refresh endpoints are left to [DispatcharrLoginGate]
  * (their own throttle scope, their own Retry-After handling).
  */
@@ -25,6 +30,13 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
         val path = built.encodedPath
         val isTokenEndpoint = path.contains("/api/accounts/token/")
         val server = DispatcharrRequestGate.serverKey(built.toString())
+        if (!request.attributes.contains(BypassKeyGate)) {
+            val key = requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
+            if (key != null && DispatcharrRequestGate.isKeyRejected(key)) {
+                Log.i(TAG, "[AUTH] skipped ${request.method.value} $path: this API key was rejected by the server; waiting for Edit Playlist")
+                throw DispatcharrError.KeyRejected()
+            }
+        }
         if (!isTokenEndpoint) {
             val left = DispatcharrRequestGate.pausedSeconds(server)
             if (left > 0) {
@@ -49,6 +61,17 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
         }
         call
     }
+}
+
+/** Set on an explicit key check (verifyConnection, Edit Playlist, the setup sender) so a rejected key can be tried again on purpose. */
+internal val BypassKeyGate = AttributeKey<Boolean>("DispatcharrBypassKeyGate")
+
+/** The API key a request carries: X-API-Key, else `Authorization: ApiKey <k>` or `Bearer <k>`. */
+internal fun requestApiKey(xApiKey: String?, authorization: String?): String? {
+    xApiKey?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    val parts = authorization?.trim()?.split(Regex("\\s+"), limit = 2) ?: return null
+    if (parts.size != 2) return null
+    return parts[1].takeIf { parts[0].equals("ApiKey", true) || parts[0].equals("Bearer", true) }
 }
 
 private const val TAG = "DispatcharrGate"

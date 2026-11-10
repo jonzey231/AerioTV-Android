@@ -1067,6 +1067,9 @@ class ProfileManager @Inject constructor(
         val p = store.byId(profileId) ?: error("Profile not found")
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
+        // The user typed this sign-in on purpose: let it reach the server even
+        // if an earlier copy of the key is held as rejected.
+        apiKey?.trim()?.takeIf { it.isNotEmpty() }?.let { com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(it) }
         val key = authenticate(playlistId, p.id, base, p.username, password, apiKey).key
         val me = client.fetchMe(base, key) ?: error("Could not read ${p.username} from the server.")
         if (!me.username.equals(p.username, ignoreCase = true)) error("This API key belongs to ${me.username}, not ${p.username}.")

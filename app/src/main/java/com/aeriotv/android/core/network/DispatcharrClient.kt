@@ -85,6 +85,10 @@ const val AUTH_MODE_BEARER = "bearer"
  *  cursor. Hitting the cap logs a warning rather than failing. */
 private const val MAX_LIST_PAGES = 200
 
+/** Dispatcharr's own answer for an unknown key (ApiKeyAuthentication: "Invalid API key"). */
+internal fun isDispatcharrInvalidKeyBody(body: String): Boolean =
+    body.contains("Invalid API key", ignoreCase = true)
+
 @Singleton
 class DispatcharrClient @Inject constructor() {
 
@@ -751,12 +755,63 @@ class DispatcharrClient @Inject constructor() {
      */
     suspend fun verifyConnection(baseUrl: String, apiKey: String): VersionResponse {
         val url = "${baseUrl.trimEnd('/')}/api/core/version/"
-        val response: HttpResponse = client.get(url) { applyAuth(apiKey) }
+        // An explicit key check: runs even for a key the gate holds as
+        // rejected (the user may have fixed it on the server), and a pass
+        // clears that state.
+        val response: HttpResponse = client.get(url) { applyAuth(apiKey); attributes.put(BypassKeyGate, true) }
         unauthorizedCheck(response, url)
         if (!response.status.isSuccess()) {
             throw DispatcharrError.Transport("Connection check failed: HTTP ${response.status.value} ${response.status.description}")
         }
+        DispatcharrRequestGate.clearKey(apiKey)
         return response.body()
+    }
+
+    /** Outcome of [probeApiKey]. */
+    sealed interface KeyProbe {
+        /** The key authenticated under [mode]. */
+        data class Accepted(val mode: String) : KeyProbe
+        /** Dispatcharr itself said the key is invalid, or every header shape got 401/403. */
+        data object Rejected : KeyProbe
+        /** No answer that proves anything (network error, 5xx). */
+        data object Unknown : KeyProbe
+    }
+
+    /**
+     * Is [apiKey] itself good? /api/core/version/ is AllowAny on Dispatcharr,
+     * but an INVALID key is still authenticated and refused there (401
+     * "Invalid API key"), while a missing key passes. So a 2xx proves the
+     * key (or its header shape), and a 401 whose body names the invalid key
+     * proves rejection on the first request: no second and third shape, each
+     * of which would count against the server's failed-key budget.
+     * Header-shape fallbacks (X-API-Key alone, Bearer) run only when the
+     * 401 does not come from Dispatcharr's key check (a reverse proxy).
+     * A 429 propagates as [DispatcharrError.RateLimited].
+     */
+    suspend fun probeApiKey(baseUrl: String, apiKey: String): KeyProbe {
+        val url = "${baseUrl.trimEnd('/')}/api/core/version/"
+        var sawAuthFailure = false
+        for (mode in listOf(AUTH_MODE_BOTH, AUTH_MODE_XAPIKEY, AUTH_MODE_BEARER)) {
+            val response: HttpResponse = try {
+                client.get(url) { applyAuth(apiKey, mode) }
+            } catch (r: DispatcharrError.RateLimited) {
+                throw r
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                return KeyProbe.Unknown
+            }
+            val code = response.status.value
+            if (response.status.isSuccess()) {
+                runCatching { Url(baseUrl).host }.getOrNull()?.let { hostAuthModes[it] = mode }
+                return KeyProbe.Accepted(mode)
+            }
+            if (code != 401 && code != 403) return KeyProbe.Unknown
+            sawAuthFailure = true
+            val body = runCatching { response.bodyAsText() }.getOrNull().orEmpty()
+            if (isDispatcharrInvalidKeyBody(body)) return KeyProbe.Rejected
+        }
+        return if (sawAuthFailure) KeyProbe.Rejected else KeyProbe.Unknown
     }
 
     /**
@@ -1298,24 +1353,8 @@ class DispatcharrClient @Inject constructor() {
      * Bearer. Returns null when no shape authenticates (the key itself is
      * bad) or the server is unreachable.
      */
-    suspend fun detectAuthMode(baseUrl: String, apiKey: String): String? {
-        val url = "${baseUrl.trimEnd('/')}/api/core/version/"
-        for (mode in listOf(AUTH_MODE_BOTH, AUTH_MODE_XAPIKEY, AUTH_MODE_BEARER)) {
-            val ok = try {
-                val response: HttpResponse = client.get(url) { applyAuth(apiKey, mode) }
-                response.status.isSuccess()
-            } catch (t: Throwable) {
-                // Transport-level failure: no shape will fare better.
-                return null
-            }
-            if (ok) {
-                runCatching { Url(baseUrl).host }.getOrNull()
-                    ?.let { hostAuthModes[it] = mode }
-                return mode
-            }
-        }
-        return null
-    }
+    suspend fun detectAuthMode(baseUrl: String, apiKey: String): String? =
+        (runCatching { probeApiKey(baseUrl, apiKey) }.getOrNull() as? KeyProbe.Accepted)?.mode
 
     /**
      * Returns the canonical playback URL for a Dispatcharr channel via the

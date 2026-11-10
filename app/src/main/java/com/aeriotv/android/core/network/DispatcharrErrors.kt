@@ -27,7 +27,17 @@ package com.aeriotv.android.core.network
  */
 sealed class DispatcharrError(message: String) : Exception(message) {
     class InvalidCredentials(message: String) : DispatcharrError(message)
-    class Unauthorized(message: String) : DispatcharrError(message)
+    open class Unauthorized(message: String) : DispatcharrError(message)
+
+    /**
+     * The server already rejected this exact API key and the app has no way
+     * to recover it ([DispatcharrRequestGate]): failed locally, nothing was
+     * sent. An [Unauthorized] so every caller that stops on a 401 stops here
+     * too; the auth broker never tries to recover it.
+     */
+    class KeyRejected : Unauthorized(
+        "The server did not accept this playlist's API key. Enter a new key in Edit Playlist.",
+    )
     class RefreshExpired(message: String) : DispatcharrError(message)
     class UnexpectedResponse(message: String) : DispatcharrError(message)
     open class Transport(message: String) : DispatcharrError(message)

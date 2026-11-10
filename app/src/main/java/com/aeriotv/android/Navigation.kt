@@ -1266,6 +1266,12 @@ fun AerioTVNavHost(
                 com.aeriotv.android.feature.onboarding.DsyncUpgradeOfferHost(
                     syncVm = hiltViewModel(parent),
                 )
+                // The server refused a playlist's API key: once per rejection.
+                com.aeriotv.android.feature.settings.ApiKeyRejectedPromptHost(
+                    onEditPlaylist = { id ->
+                        vm.requestSettingsPage(com.aeriotv.android.feature.settings.EDIT_PLAYLIST_PAGE_PREFIX + id)
+                    },
+                )
                 // Capability gates read the LIVE active row: the UiState snapshot
                 // predates the probe that writes the permissions (2026-10-05).
                 val livePlaylist by vm.activePlaylistLive.collectAsStateWithLifecycle(initialValue = null)

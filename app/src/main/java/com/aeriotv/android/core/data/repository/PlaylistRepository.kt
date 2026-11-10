@@ -607,6 +607,12 @@ class PlaylistRepository @Inject constructor(
             currentStage = null
             Log.i(TAG_SAVE, "save $outcome totalMs=${now - saveStartedAt}")
         }
+        // An explicit save (Add Playlist, Edit Playlist, a device setup) is
+        // the user acting on a key or credentials: lift any local "this key
+        // was rejected" hold so the save really asks the server once.
+        existingId?.let { com.aeriotv.android.core.network.DispatcharrRequestGate.clearPlaylist(it) }
+        request.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(it) }
         return runCatching {
         val normalisedBase = request.url.trimEnd('/')
         val sourceType = request.sourceType
