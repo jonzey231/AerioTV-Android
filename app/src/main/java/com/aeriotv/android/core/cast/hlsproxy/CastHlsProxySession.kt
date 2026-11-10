@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.aeriotv.android.core.debug.debugLog
 import com.aeriotv.android.core.debug.debugLogWarn
+import com.aeriotv.android.core.security.clientCertificates
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.net.Inet4Address
 import java.util.concurrent.TimeUnit
@@ -116,6 +117,7 @@ class CastHlsProxySession @Inject constructor(
 
     private val client by lazy {
         OkHttpClient.Builder()
+            .clientCertificates()
             .connectTimeout(15, TimeUnit.SECONDS)
             // 15 s like the iOS proxy (timeoutIntervalForRequest = 15): the
             // Dispatcharr proxy sends bursts 8 to 11 s apart, so 15 s of

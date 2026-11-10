@@ -568,6 +568,8 @@ private fun DispatcharrFields(
 
     LanUrlField(state = state, viewModel = viewModel)
 
+    ClientCertificateFields(serverUrl = state.url, enabled = !state.isLoading)
+
     SegmentedAuthControl(
         selected = authMode,
         onSelect = onAuthModeChange,
@@ -781,7 +783,7 @@ private fun M3uFields(state: PlaylistViewModel.UiState, viewModel: PlaylistViewM
 /** Task #45: small inline action under a URL field that swaps it for an
  *  imported local file. */
 @Composable
-private fun ImportFileLink(label: String, onClick: () -> Unit) {
+internal fun ImportFileLink(label: String, onClick: () -> Unit) {
     Text(
         text = label,
         style = MaterialTheme.typography.bodySmall,

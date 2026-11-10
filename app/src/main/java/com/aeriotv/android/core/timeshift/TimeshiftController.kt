@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.datasource.DataSource
 import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.core.security.clientCertificates
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -208,6 +209,7 @@ class TimeshiftController @Inject constructor(
 
     private val fillClient by lazy {
         OkHttpClient.Builder()
+            .clientCertificates()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .followRedirects(true)

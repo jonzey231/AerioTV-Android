@@ -575,6 +575,19 @@ fun EditPlaylistScreen(
                 }
             }
 
+            // Client certificate (mTLS), Dispatcharr on phone and tablet: kept
+            // per host, so a renewed .p12 takes effect without a playlist save.
+            // The field carries its own label, so the section has no header.
+            if (isDispatcharr && !isTv) {
+                item("client-certificate") {
+                    SettingsSection(header = "") {
+                        FieldGroup {
+                            com.aeriotv.android.feature.onboarding.ClientCertificateFields(serverUrl = url, enabled = true)
+                        }
+                    }
+                }
+            }
+
             // User-Agent (Dispatcharr only, Apple parity). Identification, not
             // behavior: Dispatcharr's admin Stats panel attributes traffic by
             // User-Agent, so a household running several boxes can tell them

@@ -367,6 +367,30 @@ the single `/api/*` rule.
 
 </details>
 
+### Client certificate (mTLS)
+
+If the proxy in front of Dispatcharr asks for a client certificate (mutual
+TLS: Pangolin, Traefik, nginx, Caddy), AerioTV TODO or later presents
+one. Every device that connects needs that version.
+
+- **Phone and tablet:** in Add Playlist or Edit Playlist, under
+  *Client Certificate*, choose the PKCS#12 file (`.p12` or `.pfx`) and
+  enter its password. AerioTV checks it right away and shows whose
+  certificate it is and until when it's valid.
+- **TV:** a TV has no file picker. Set it up from your phone (*Set up
+  another device*): the certificate goes along, end to end encrypted.
+
+The certificate is kept per server host, encrypted on the device, and shown
+to that host only, never to TMDB, logo servers or Google. A local URL without
+the proxy needs none. When the server turns a connection down, AerioTV says
+whether it wants a certificate or didn't accept this one (unknown CA,
+expired, revoked).
+
+With a certificate, Pangolin's own login for the resource (SSO, PIN,
+password) is no longer needed, and the access rules above aren't either:
+turn authentication off for the Dispatcharr resource and let the
+certificate (checked by Traefik) and Dispatcharr's own sign-in guard it.
+
 ## When does AerioTV refresh?
 
 AerioTV always opens from the cache on your device first and refreshes in the background. The spinner only appears when there is nothing cached yet or when you refresh by hand.

@@ -53,6 +53,8 @@ import com.aeriotv.android.core.data.repository.PlaylistRepository
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.profiles.AvatarSpec
 import com.aeriotv.android.core.profiles.ProfileManager
+import com.aeriotv.android.core.security.ClientCertificates
+import com.aeriotv.android.core.setup.SetupCrypto
 import com.aeriotv.android.core.setup.SetupProtocol
 import com.aeriotv.android.core.setup.SetupReceiver
 import com.aeriotv.android.core.sync.DriveSyncWorker
@@ -64,12 +66,14 @@ import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -85,6 +89,7 @@ class TvSetupViewModel @Inject constructor(
     private val prefs: AppPreferences,
     private val dsync: DispatcharrSyncManager,
     private val playlists: PlaylistRepository,
+    private val certificates: com.aeriotv.android.core.security.ClientCertificateStore,
 ) : ViewModel() {
 
     sealed interface Phase {
@@ -242,6 +247,13 @@ class TvSetupViewModel @Inject constructor(
         val replaceId = resolved?.takeIf { it.first == DuplicateChoice.Replace }?.second
         val applyingLine = if (replaceId != null) "Updating your playlist" else "Connecting to your server"
         _phase.value = Phase.Applying(applyingLine)
+        // Before the add: its connection test already goes through the proxy.
+        pl.clientCertificate?.let { c ->
+            val host = ClientCertificates.hostOf(pl.url)
+            val p12 = SetupCrypto.unb64(c.p12)
+            if (host != null && p12 != null) withContext(Dispatchers.IO) { certificates.save(host, p12, c.password) }
+                .onFailure { Log.w(TAG, "[SETUP] client certificate not kept: ${it.message}") }
+        }
         // A 429 (the server's API-key throttle tripped by another client on
         // this network, 2026-11-09) counts down and tries again, twice, then
         // names the rate limit instead of "Could not connect: HTTP 429".

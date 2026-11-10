@@ -98,7 +98,13 @@ object SetupProtocol {
         val channelProfileIds: List<Int> = emptyList(),
         /** The playlist's own sign-in (the default profile on Dispatcharr; the XC login). */
         val credential: Credential? = null,
+        /** The client certificate (mTLS) kept for [url]'s host, when there is one. */
+        val clientCertificate: ClientCertificatePart? = null,
     )
+
+    /** A PKCS#12 file as standard base64, with its password. */
+    @Serializable
+    data class ClientCertificatePart(val p12: String, val password: String)
 
     @Serializable
     data class Credential(val apiKey: String? = null, val username: String? = null, val password: String? = null)

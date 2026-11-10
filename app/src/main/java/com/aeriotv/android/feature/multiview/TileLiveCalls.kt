@@ -7,6 +7,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
+import com.aeriotv.android.core.security.clientCertificates
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -129,7 +130,7 @@ internal class TileLiveCalls {
     private companion object {
         /** Shared per timeout so every tile reuses one pool / dispatcher. */
         private val clients = ConcurrentHashMap<Int, OkHttpClient>()
-        private val baseClient: OkHttpClient by lazy { OkHttpClient() }
+        private val baseClient: OkHttpClient by lazy { OkHttpClient.Builder().clientCertificates().build() }
 
         fun clientFor(timeoutMs: Int): OkHttpClient = clients.getOrPut(timeoutMs) {
             baseClient.newBuilder()
