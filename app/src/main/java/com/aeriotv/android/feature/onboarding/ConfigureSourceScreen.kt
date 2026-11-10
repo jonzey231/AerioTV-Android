@@ -355,6 +355,7 @@ fun ConfigureSourceScreen(
                     onNameChange = viewModel::onNameChange,
                     isLoading = state.isLoading,
                     error = state.error,
+                    busyMessage = state.busyMessage,
                     guideRow = {
                         GuideHistoryRow(
                             selectedDays = state.epgRetentionDays,
@@ -443,6 +444,13 @@ fun ConfigureSourceScreen(
             val validation = validate(sourceType, state, dispatcharrAuthMode)
             if (validation != null) {
                 InfoBanner(text = validation)
+            }
+            state.busyMessage?.let { msg ->
+                Text(
+                    text = msg,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             state.error?.let { msg ->
                 Text(

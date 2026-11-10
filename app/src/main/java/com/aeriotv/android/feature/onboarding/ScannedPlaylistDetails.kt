@@ -36,6 +36,8 @@ internal fun ScannedPlaylistDetails(
     onNameChange: (String) -> Unit,
     isLoading: Boolean,
     error: String?,
+    /** A 429 countdown line ("The server is busy. Trying again in N seconds."). */
+    busyMessage: String? = null,
     guideRow: @Composable () -> Unit,
     dvrRow: @Composable () -> Unit,
     onConnect: () -> Unit,
@@ -69,6 +71,9 @@ internal fun ScannedPlaylistDetails(
         guideRow()
         dvrRow()
 
+        busyMessage?.let {
+            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        }
         error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }

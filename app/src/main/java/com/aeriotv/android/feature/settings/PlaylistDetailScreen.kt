@@ -546,7 +546,8 @@ fun PlaylistDetailScreen(
                         icon = Icons.Outlined.Public,
                         label = "Test Connection",
                         onClick = { viewModel.testConnection() },
-                        running = state.testStatus is PlaylistViewModel.ActionStatus.Running,
+                        running = state.testStatus is PlaylistViewModel.ActionStatus.Running ||
+                            state.testStatus is PlaylistViewModel.ActionStatus.Waiting,
                         status = state.testStatus,
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
@@ -605,7 +606,8 @@ fun PlaylistDetailScreen(
                         icon = Icons.Outlined.Public,
                         label = "Test Connection",
                         onClick = { viewModel.testConnection() },
-                        running = state.testStatus is PlaylistViewModel.ActionStatus.Running,
+                        running = state.testStatus is PlaylistViewModel.ActionStatus.Running ||
+                            state.testStatus is PlaylistViewModel.ActionStatus.Waiting,
                         status = state.testStatus,
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
@@ -893,6 +895,11 @@ private fun ActionRow(
                     text = status.message,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
+                )
+                is PlaylistViewModel.ActionStatus.Waiting -> Text(
+                    text = status.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> Unit
             }

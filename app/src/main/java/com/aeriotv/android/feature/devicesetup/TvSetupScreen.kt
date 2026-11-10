@@ -240,9 +240,12 @@ class TvSetupViewModel @Inject constructor(
             }
         }
         val replaceId = resolved?.takeIf { it.first == DuplicateChoice.Replace }?.second
-        if (replaceId != null) _phase.value = Phase.Applying("Updating your playlist")
-        val entity = add(
-            PlaylistRepository.SaveRequest(
+        val applyingLine = if (replaceId != null) "Updating your playlist" else "Connecting to your server"
+        _phase.value = Phase.Applying(applyingLine)
+        // A 429 (the server's API-key throttle tripped by another client on
+        // this network, 2026-11-09) counts down and tries again, twice, then
+        // names the rate limit instead of "Could not connect: HTTP 429".
+        val request = PlaylistRepository.SaveRequest(
                 sourceType = type,
                 name = pl.name.ifBlank { null },
                 url = pl.url,
@@ -255,9 +258,16 @@ class TvSetupViewModel @Inject constructor(
                 vodEnabled = pl.vodEnabled,
                 epgRetentionDays = pl.guideDays,
                 customUserAgent = pl.userAgent?.takeIf { isDispatcharr },
-            ),
-            replaceId,
-        ).getOrElse {
+            )
+        val entity = com.aeriotv.android.core.network.RateLimitRetry.run(
+            onCountdown = { left ->
+                if (left == com.aeriotv.android.core.network.DispatcharrRequestGate.MAX_RETRY_AFTER_S || left % 10 == 0L) {
+                    Log.i(TAG, "[SETUP] server rate-limited the playlist add; retrying in ${left}s")
+                }
+                _phase.value = Phase.Applying(com.aeriotv.android.core.network.serverBusyCountdown(left))
+            },
+            onRetry = { _phase.value = Phase.Applying(applyingLine) },
+        ) { add(request, replaceId) }.getOrElse {
             Log.w(TAG, "[SETUP] playlist add failed: ${it.message}")
             _phase.value = Phase.Failed(it.message ?: "Could not connect to your server.")
             return

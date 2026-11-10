@@ -102,6 +102,8 @@ class DispatcharrClient @Inject constructor() {
 
     private val client = HttpClient(OkHttp) {
         installSanitizedLogging()
+        // 429 pause and (later) the rejected-key gate: DispatcharrRequestGate.
+        install(DispatcharrGatePlugin)
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000
             connectTimeoutMillis = 15_000
@@ -200,8 +202,7 @@ class DispatcharrClient @Inject constructor() {
             // credential problems that did not exist (Discord 2026-08-16,
             // iOS twin fixed the same day). Self-clearing: say WAIT, and
             // park every login to this server until Retry-After.
-            val secs = DispatcharrLoginGate.parseRetryAfter(response.headers["Retry-After"])
-                ?: DispatcharrLoginGate.DEFAULT_RETRY_AFTER_S
+            val secs = DispatcharrRequestGate.parseRetryAfter(response.headers["Retry-After"])
             DispatcharrLoginGate.parkServer(baseUrl, secs)
             throw DispatcharrError.LoginThrottled(secs)
         }
@@ -256,8 +257,7 @@ class DispatcharrClient @Inject constructor() {
             )
         }
         if (code == 429) {
-            val secs = DispatcharrLoginGate.parseRetryAfter(response.headers["Retry-After"])
-                ?: DispatcharrLoginGate.DEFAULT_RETRY_AFTER_S
+            val secs = DispatcharrRequestGate.parseRetryAfter(response.headers["Retry-After"])
             DispatcharrLoginGate.parkServer(baseUrl, secs)
             throw DispatcharrError.LoginThrottled(secs)
         }

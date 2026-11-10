@@ -4,6 +4,10 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.DeepLinkTarget
+import com.aeriotv.android.core.network.RateLimitRetry
+import com.aeriotv.android.core.network.rateLimitSeconds
+import com.aeriotv.android.core.network.rateLimitedMessage
+import com.aeriotv.android.core.network.serverBusyCountdown
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.M3UChannel
@@ -150,6 +154,8 @@ class PlaylistViewModel @Inject constructor(
         val selectedGroup: String = ALL_GROUPS,
         val sortMode: SortMode = SortMode.ByNumber,
         val isLoading: Boolean = false,
+        /** Add Playlist while a 429 counts down: "The server is busy. Trying again in N seconds." */
+        val busyMessage: String? = null,
         val error: String? = null,
         /**
          * Dispatcharr channel profiles available for the active playlist, shown
@@ -176,6 +182,8 @@ class PlaylistViewModel @Inject constructor(
     sealed interface ActionStatus {
         data object Idle : ActionStatus
         data object Running : ActionStatus
+        /** Still running, waiting out a 429; [message] is the live countdown. */
+        data class Waiting(val message: String) : ActionStatus
         data class Success(val message: String) : ActionStatus
         data class Failure(val message: String) : ActionStatus
     }
@@ -1153,7 +1161,12 @@ class PlaylistViewModel @Inject constructor(
                 vodEnabled = s.vodEnabled,
                 epgRetentionDays = s.epgRetentionDays,
             )
-            repository.loadAndPersist(request, existingId = s.draftPlaylistId).fold(
+            RateLimitRetry.run(
+                onCountdown = { left -> _state.update { it.copy(busyMessage = serverBusyCountdown(left)) } },
+                onRetry = { _state.update { it.copy(busyMessage = null) } },
+            ) {
+                repository.loadAndPersist(request, existingId = s.draftPlaylistId)
+            }.also { _state.update { it.copy(busyMessage = null) } }.fold(
                 onSuccess = { (entity, channels) ->
                     _state.update {
                         it.copy(
@@ -1240,7 +1253,8 @@ class PlaylistViewModel @Inject constructor(
             },
             onFailure = { t ->
                 _state.update { it.copy(isLoading = false, channels = emptyList(), error = null) }
-                Result.failure(IllegalStateException(loadFailureMessage("Could not connect", t)))
+                // Cause kept: the setup receiver reads a 429 off it to count down and retry.
+                Result.failure(IllegalStateException(loadFailureMessage("Could not connect", t), t))
             },
         )
     }
@@ -1254,7 +1268,12 @@ class PlaylistViewModel @Inject constructor(
      * guidance (Discord report, Onn 4K, 2026-07-29).
      */
     private fun loadFailureMessage(prefix: String, t: Throwable): String =
-        if (t is OutOfMemoryError) {
+        if (t is RateLimitRetry.RateLimitedFinal) {
+            t.message ?: rateLimitedMessage(t.seconds)
+        } else if (t.rateLimitSeconds() != null) {
+            // A 429 names the rate limit, never "Could not connect: HTTP 429".
+            rateLimitedMessage(t.rateLimitSeconds()!!)
+        } else if (t is OutOfMemoryError) {
             "$prefix: playlist is too large for this device's memory. If this is an " +
                 "Xtream Codes get.php link, add it with the Xtream Codes source type instead."
         } else {
@@ -2857,7 +2876,10 @@ class PlaylistViewModel @Inject constructor(
             val active = repository.activePlaylist() ?: return@launch
             Log.i(TAG, "testConnection: probing ${active.urlString}")
             _state.update { it.copy(testStatus = ActionStatus.Running) }
-            repository.refresh(active).fold(
+            RateLimitRetry.run(
+                onCountdown = { left -> _state.update { it.copy(testStatus = ActionStatus.Waiting(serverBusyCountdown(left))) } },
+                onRetry = { _state.update { it.copy(testStatus = ActionStatus.Running) } },
+            ) { repository.refresh(active) }.fold(
                 onSuccess = { channels ->
                     Log.i(TAG, "testConnection: ok (${channels.size} channels)")
                     _state.update {
@@ -2873,7 +2895,9 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             testStatus = ActionStatus.Failure(
-                                "Connection failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
+                                t.rateLimitSeconds()?.let { secs ->
+                                    (t as? RateLimitRetry.RateLimitedFinal)?.message ?: rateLimitedMessage(secs)
+                                } ?: "Connection failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                             ),
                         )
                     }

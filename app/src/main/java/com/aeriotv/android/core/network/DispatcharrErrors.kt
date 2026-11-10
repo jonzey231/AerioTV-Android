@@ -45,6 +45,14 @@ sealed class DispatcharrError(message: String) : Exception(message) {
     )
 
     /**
+     * HTTP 429 from an API call, or a call skipped because an earlier 429
+     * still parks the server ([DispatcharrRequestGate]). [retryAfterSeconds]
+     * is the wait left (Retry-After, 60 s when missing, capped at 120 s). A
+     * [Transport] so every existing catch keeps handling it.
+     */
+    class RateLimited(val retryAfterSeconds: Long) : Transport(rateLimitedMessage(retryAfterSeconds))
+
+    /**
      * A 403 from an endpoint whose permission class is a CAPABILITY check
      * rather than an authentication check (the DVR writes, which are
      * IsAdminOrDVRManager).
@@ -61,4 +69,40 @@ sealed class DispatcharrError(message: String) : Exception(message) {
         message: String,
         val capabilityHint: String? = null,
     ) : DispatcharrError(message)
+}
+
+/** Final copy once the automatic retries are spent: names the rate limit. */
+fun rateLimitedMessage(seconds: Long): String =
+    "The server is rate-limiting requests from this network (HTTP 429). " +
+        "Wait ${secondsPhrase(seconds)} and try again."
+
+/** "1 second", "45 seconds". */
+fun secondsPhrase(seconds: Long): String = if (seconds == 1L) "1 second" else "$seconds seconds"
+
+/** The countdown line interactive flows show while they wait out a 429. */
+fun serverBusyCountdown(seconds: Long): String =
+    "The server is busy. Trying again in ${secondsPhrase(seconds)}."
+
+/** The 429 anywhere in [this] throwable's cause chain, as seconds to wait; null when it is not one. */
+fun Throwable.rateLimitSeconds(): Long? {
+    var t: Throwable? = this
+    var depth = 0
+    while (t != null && depth < 8) {
+        when (t) {
+            is DispatcharrError.RateLimited -> return t.retryAfterSeconds
+            is DispatcharrError.LoginThrottled -> return t.retryAfterSeconds
+        }
+        t = t.cause
+        depth++
+    }
+    // A layer that rewrapped the error by message only (PlaylistFetcher,
+    // a Result built from t.message) still carries the status text.
+    var m: Throwable? = this
+    depth = 0
+    while (m != null && depth < 8) {
+        if (m.message?.contains("HTTP 429") == true) return DispatcharrRequestGate.DEFAULT_RETRY_AFTER_S
+        m = m.cause
+        depth++
+    }
+    return null
 }
