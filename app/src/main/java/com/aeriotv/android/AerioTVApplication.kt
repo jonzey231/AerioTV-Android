@@ -62,6 +62,8 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var multiviewStore: MultiviewStore
     @Inject lateinit var memoryPressureBus: MemoryPressureBus
     @Inject lateinit var activeCredentials: ActivePlaylistCredentials
+    /** Built at launch so a held Dispatcharr key re-checks itself while the app is in the foreground. */
+    @Inject lateinit var keyRecheck: com.aeriotv.android.core.network.DispatcharrKeyRecheck
     @Inject lateinit var castReceiver: com.aeriotv.android.core.cast.AerioCastReceiverController
     @Inject lateinit var castNotificationController: com.aeriotv.android.core.cast.CastNotificationController
     @Inject lateinit var companionHost: com.aeriotv.android.core.cast.companion.CompanionHostController

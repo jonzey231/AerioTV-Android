@@ -64,12 +64,124 @@ object DispatcharrRequestGate {
      * only on the transition (first rejection of this key for this
      * playlist), and only then raises the prompt.
      */
-    fun markKeyRejected(playlistId: String, key: String, playlistName: String = "", passwordToo: Boolean = false): Boolean {
-        val set = rejected.getOrPut(keyHash(key)) { ConcurrentHashMap.newKeySet() }
+    fun markKeyRejected(
+        playlistId: String,
+        key: String,
+        playlistName: String = "",
+        passwordToo: Boolean = false,
+        /** The server the automatic re-check probes (empty = no re-check). */
+        baseUrl: String = "",
+    ): Boolean {
+        val hash = keyHash(key)
+        val set = rejected.getOrPut(hash) { ConcurrentHashMap.newKeySet() }
         val fresh = set.add(playlistId)
-        if (fresh) _prompt.value = Prompt(playlistId, playlistName, passwordToo)
+        if (fresh) {
+            _prompt.value = Prompt(playlistId, playlistName, passwordToo)
+            if (baseUrl.isNotBlank()) {
+                rechecks.putIfAbsent(hash, Recheck(hash, key.trim(), baseUrl, serverKey(baseUrl), playlistId, passwordToo, clock()))
+            }
+        }
         return fresh
     }
+
+    // ---- Automatic re-check while a key is held (owner 2026-11-09: "We
+    // don't want to just block access but we don't want constant retries
+    // that force a server-side block from repeated attempts either.") ----
+
+    /** Scheduled probes after the rejection: 1, 5, and 15 minutes. */
+    val RECHECK_OFFSETS_MS = longArrayOf(60_000, 300_000, 900_000)
+    /** Then one every 30 minutes. */
+    const val RECHECK_INTERVAL_MS = 1_800_000L
+    /** Never two probes for one key within this, whatever asked (schedule, foreground, user refresh). */
+    const val RECHECK_MIN_GAP_MS = 60_000L
+
+    /** One held key's re-check state. [key] is kept in memory only, to probe with. */
+    class Recheck internal constructor(
+        val hash: String,
+        val key: String,
+        val baseUrl: String,
+        val serverKey: String,
+        val playlistId: String,
+        /** Password playlist whose re-login was refused: the probe is one login. */
+        val passwordToo: Boolean,
+        val rejectedAt: Long,
+    ) {
+        /** Scheduled probes run so far. */
+        @Volatile var scheduledDone = 0
+            internal set
+        @Volatile var lastProbeAt = Long.MIN_VALUE / 2
+            internal set
+        @Volatile var inFlight = false
+            internal set
+    }
+
+    private val rechecks = ConcurrentHashMap<String, Recheck>()
+
+    /** Due time of the scheduled probe number [done] (0-based) after [rejectedAt]. */
+    fun scheduledDueAt(rejectedAt: Long, done: Int): Long =
+        if (done < RECHECK_OFFSETS_MS.size) rejectedAt + RECHECK_OFFSETS_MS[done]
+        else rejectedAt + RECHECK_OFFSETS_MS.last() + (done - RECHECK_OFFSETS_MS.size + 1) * RECHECK_INTERVAL_MS
+
+    /** Held keys with a re-check (snapshot). */
+    fun rechecks(): List<Recheck> = rechecks.values.toList()
+
+    /**
+     * Earliest time [r]'s next scheduled probe may run: its schedule slot,
+     * no sooner than [RECHECK_MIN_GAP_MS] after the last probe, and never
+     * inside a 429 pause for its server ([extraBlockedUntil] adds another
+     * pause, for one the caller tracks, such as the login gate's).
+     */
+    fun nextScheduledAt(r: Recheck, extraBlockedUntil: Long = 0): Long = maxOf(
+        scheduledDueAt(r.rejectedAt, r.scheduledDone),
+        r.lastProbeAt + RECHECK_MIN_GAP_MS,
+        pausedUntil[r.serverKey] ?: 0,
+        extraBlockedUntil,
+    )
+
+    /** Claim a scheduled probe for [r] if one is due now; true = run it (exactly one request). */
+    @Synchronized
+    fun claimScheduled(r: Recheck, extraBlockedUntil: Long = 0): Boolean {
+        if (r.inFlight || rechecks[r.hash] !== r) return false
+        val now = clock()
+        if (now < nextScheduledAt(r, extraBlockedUntil)) return false
+        r.scheduledDone++
+        r.lastProbeAt = now
+        r.inFlight = true
+        return true
+    }
+
+    /**
+     * Claim an on-demand probe (app foreground, a user refresh) for [r]:
+     * allowed only [RECHECK_MIN_GAP_MS] after the last probe of any kind and
+     * outside a 429 pause. Does not advance the schedule.
+     */
+    @Synchronized
+    fun claimOnDemand(r: Recheck, extraBlockedUntil: Long = 0): Boolean {
+        if (r.inFlight || rechecks[r.hash] !== r) return false
+        val now = clock()
+        if (now < r.lastProbeAt + RECHECK_MIN_GAP_MS) return false
+        if (now < (pausedUntil[r.serverKey] ?: 0) || now < extraBlockedUntil) return false
+        r.lastProbeAt = now
+        r.inFlight = true
+        return true
+    }
+
+    /** A probe for [r] finished; [accepted] clears the hold (and its prompt). */
+    fun finishProbe(r: Recheck, accepted: Boolean) {
+        r.inFlight = false
+        if (accepted) {
+            rechecks.remove(r.hash, r)
+            val ids = rejected.remove(r.hash).orEmpty()
+            if (_prompt.value?.playlistId in ids || _prompt.value?.playlistId == r.playlistId) _prompt.value = null
+        }
+    }
+
+    /** Earliest next scheduled probe over every held key, or null with none held. */
+    fun earliestScheduledAt(extraBlockedUntil: (Recheck) -> Long = { 0 }): Long? =
+        rechecks.values.minOfOrNull { nextScheduledAt(it, extraBlockedUntil(it)) }
+
+    /** Absolute end of [serverKey]'s 429 pause on [clock], 0 when not paused. */
+    fun pausedUntilAt(serverKey: String): Long = pausedUntil[serverKey] ?: 0
 
     /** True while [key] is known rejected (any playlist). */
     fun isKeyRejected(key: String): Boolean =
@@ -82,11 +194,13 @@ object DispatcharrRequestGate {
     fun clearPlaylist(playlistId: String) {
         rejected.values.forEach { it.remove(playlistId) }
         rejected.entries.removeIf { it.value.isEmpty() }
+        rechecks.keys.removeIf { !rejected.containsKey(it) }
         if (_prompt.value?.playlistId == playlistId) _prompt.value = null
     }
 
     /** [key] just authenticated: it is good again everywhere. */
     fun clearKey(key: String) {
+        rechecks.remove(keyHash(key))
         val ids = rejected.remove(keyHash(key)) ?: return
         if (_prompt.value?.playlistId in ids) _prompt.value = null
     }
@@ -143,6 +257,7 @@ object DispatcharrRequestGate {
     fun resetForTests() {
         pausedUntil.clear()
         rejected.clear()
+        rechecks.clear()
         _prompt.value = null
     }
 }

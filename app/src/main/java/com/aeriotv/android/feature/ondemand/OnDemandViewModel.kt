@@ -94,6 +94,7 @@ class OnDemandViewModel @Inject constructor(
     private val hiddenTitlesStore: com.aeriotv.android.core.preferences.HiddenTitlesStore,
     private val settleGate: AppSettleGate,
     private val catalogStore: VodCatalogStore,
+    private val keyRecheck: com.aeriotv.android.core.network.DispatcharrKeyRecheck,
 ) : ViewModel() {
 
     data class UiState(
@@ -1073,6 +1074,15 @@ class OnDemandViewModel @Inject constructor(
     fun ensureLoaded() = startInitialLoads()
 
     init {
+        // A held API key proved good again: run the sweeps a refresh runs.
+        viewModelScope.launch {
+            keyRecheck.recovered.collect { id ->
+                if (playlistRepository.activePlaylist()?.id == id) {
+                    startMovieSweep(background = false)
+                    startSeriesSweep(background = false)
+                }
+            }
+        }
         startLibraryPipeline(isMovie = true)
         startLibraryPipeline(isMovie = false)
         deferredStart = viewModelScope.launch {
@@ -1683,7 +1693,7 @@ class OnDemandViewModel @Inject constructor(
     private var seriesSweepJob: kotlinx.coroutines.Job? = null
 
     /** Foreground sweep (pull to refresh, playlist switch, Refresh Everything). */
-    fun refresh() = startMovieSweep(background = false)
+    fun refresh() { keyRecheck.userRefresh(); startMovieSweep(background = false) }
 
     // True while the ACTIVE movie sweep is the quiet background one, so a
     // foreground request can preempt it instead of being swallowed by the
@@ -1831,7 +1841,7 @@ class OnDemandViewModel @Inject constructor(
     }
 
     /** Foreground series sweep; see [refresh]. */
-    fun refreshSeries() = startSeriesSweep(background = false)
+    fun refreshSeries() { keyRecheck.userRefresh(); startSeriesSweep(background = false) }
 
     private fun startSeriesSweep(background: Boolean) {
         if (seriesSweepJob?.isActive == true) {

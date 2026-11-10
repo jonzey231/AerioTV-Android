@@ -79,6 +79,7 @@ class PlaylistViewModel @Inject constructor(
     private val profileManager: com.aeriotv.android.core.profiles.ProfileManager,
     @dagger.hilt.android.qualifiers.ApplicationContext
     private val appContext: android.content.Context,
+    private val keyRecheck: com.aeriotv.android.core.network.DispatcharrKeyRecheck,
 ) : ViewModel() {
 
     enum class Phase { Bootstrapping, NeedsUrl, ChannelsReady }
@@ -489,6 +490,17 @@ class PlaylistViewModel @Inject constructor(
     init {
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(processStartObserver)
         bootstrap()
+        // A held API key proved good again on its own (DispatcharrKeyRecheck):
+        // reload the channels and guide the way Refresh Playlist does, so the
+        // screens recover without an edit or a relaunch.
+        viewModelScope.launch {
+            keyRecheck.recovered.collect { id ->
+                if (repository.activePlaylist()?.id == id) {
+                    Log.i(TAG, "held key recovered for ${id.take(8)}; refreshing the playlist")
+                    refreshPlaylist(fromRecovery = true)
+                }
+            }
+        }
         // Profiles: a profile switch reloads the channel list, groups and VOD
         // for the new Dispatcharr user through the same path as a playlist
         // switch (stops playback, refetches, restores the scoped group).
@@ -2330,7 +2342,9 @@ class PlaylistViewModel @Inject constructor(
      * Re-fetch the active playlist (channels) and follow with EPG. Used by
      * Playlist Detail's "Refresh Playlist" action.
      */
-    fun refreshPlaylist() {
+    fun refreshPlaylist(fromRecovery: Boolean = false) {
+        // A user refresh also re-checks a held key (at most once a minute).
+        if (!fromRecovery) keyRecheck.userRefresh()
         viewModelScope.launch {
             val active = repository.activePlaylist() ?: return@launch
             Log.i(TAG, "refreshPlaylist: re-loading ${active.name}")
@@ -2872,6 +2886,7 @@ class PlaylistViewModel @Inject constructor(
      * [UiState.testStatus] for the Playlist Detail row.
      */
     fun testConnection() {
+        keyRecheck.userRefresh()
         viewModelScope.launch {
             val active = repository.activePlaylist() ?: return@launch
             Log.i(TAG, "testConnection: probing ${active.urlString}")

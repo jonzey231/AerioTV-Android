@@ -158,7 +158,7 @@ class DispatcharrAuthBroker @Inject constructor(
     }
 
     private fun gateRejectedKey(playlist: PlaylistEntity, key: String, passwordToo: Boolean) {
-        if (DispatcharrRequestGate.markKeyRejected(playlist.id, key, playlist.name, passwordToo)) {
+        if (DispatcharrRequestGate.markKeyRejected(playlist.id, key, playlist.name, passwordToo, baseUrl = playlist.urlString)) {
             Log.w(
                 TAG,
                 "[AUTH] API key for ${playlist.id.take(8)} rejected by the server; holding every API call " +

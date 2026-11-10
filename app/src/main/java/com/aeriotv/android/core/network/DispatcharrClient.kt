@@ -1385,6 +1385,30 @@ class DispatcharrClient @Inject constructor() {
      * Bearer. Returns null when no shape authenticates (the key itself is
      * bad) or the server is unreachable.
      */
+    /**
+     * The held-key re-check (DispatcharrKeyRecheck): EXACTLY one request,
+     * /api/core/version/ with [apiKey] in the host's recorded header shape,
+     * past the rejected-key gate. 2xx = Accepted, 401/403 = Rejected,
+     * anything else (network, 5xx, a 429, which also pauses the server) =
+     * Unknown.
+     */
+    suspend fun probeApiKeyOnce(baseUrl: String, apiKey: String): KeyProbe {
+        val url = "${baseUrl.trimEnd('/')}/api/core/version/"
+        val mode = runCatching { hostAuthModes[Url(baseUrl).host] }.getOrNull() ?: AUTH_MODE_BOTH
+        return try {
+            val response = client.get(url) { applyAuth(apiKey, mode); attributes.put(BypassKeyGate, true) }
+            when (response.status.value) {
+                in 200..299 -> KeyProbe.Accepted(mode)
+                401, 403 -> KeyProbe.Rejected
+                else -> KeyProbe.Unknown
+            }
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            KeyProbe.Unknown
+        }
+    }
+
     suspend fun detectAuthMode(baseUrl: String, apiKey: String): String? =
         (runCatching { probeApiKey(baseUrl, apiKey) }.getOrNull() as? KeyProbe.Accepted)?.mode
 
