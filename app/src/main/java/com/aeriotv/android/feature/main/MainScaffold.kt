@@ -1603,13 +1603,20 @@ fun MainScaffold(
                 // frame (Logan 2026-10-05, all platforms). Tablets: the floating
                 // pill's measured width, centered (screen width minus 32 dp, at
                 // most 620 dp, only until the pill has been measured).
+                //
+                // Narrow bar (2026-11-09): the tablet pill is wrap-content, so
+                // with few tabs (a playlist with no On Demand, no DVR) it is
+                // narrow, and a card in its frame was squeezed. Below
+                // [DockCardMinWidth] the cards take the full-width frame (the
+                // normal screen margins) instead. Phones are already there:
+                // the phone bar and every phone card row span the width minus
+                // 20 dp margins whatever the tab count, with the Control a TV
+                // button at the row's trailing end.
                 val tabletCardWidth = if (tabletNav) {
-                    if (navBarWidthPx > 0) {
-                        with(LocalDensity.current) { navBarWidthPx.toDp() }
-                    } else {
-                        val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
-                        minOf(620.dp, (screenW - 32.dp).coerceAtLeast(0.dp))
-                    }
+                    val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+                    val fullFrame = minOf(620.dp, (screenW - 32.dp).coerceAtLeast(0.dp))
+                    val measured = with(LocalDensity.current) { navBarWidthPx.toDp() }
+                    if (navBarWidthPx > 0 && measured >= DockCardMinWidth) measured else fullFrame
                 } else null
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
@@ -2127,6 +2134,18 @@ internal fun Modifier.floatingNavChrome(shape: androidx.compose.ui.graphics.Shap
         .background(cs.surface.copy(alpha = 0.92f))
         .border(1.dp, cs.onSurface.copy(alpha = 0.12f), shape)
 }
+
+/**
+ * Narrowest card the dock gives a card above the nav bar. Measured from the
+ * widest fixed content, the Set up card: 12 to 18 dp lead, 40 dp tile, 12 dp
+ * gap, "Set up" (about 68 dp with its padding), 48 dp dismiss, 4 dp end, so
+ * about 190 dp before the device name, plus about 50 dp so the name shows
+ * its first few characters. Below this the card takes the full-width frame.
+ * It sits under the narrowest usual-tab card (a 360 dp phone with the Control
+ * a TV button beside it: 360 - 40 - 76 = 244 dp), so bars with the usual tab
+ * count are unchanged.
+ */
+internal val DockCardMinWidth = 240.dp
 
 /**
  * GH #33: round floating button above the right end of the tab bar -- entry

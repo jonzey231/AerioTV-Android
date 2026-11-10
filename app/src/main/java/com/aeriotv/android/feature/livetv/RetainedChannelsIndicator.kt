@@ -328,6 +328,9 @@ private fun RetainedCardButton(label: String, onClick: () -> Unit) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
         fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        // One line always: a narrow dock row broke "Set up" in two on iOS (2026-11-09).
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
             .clickable(onClick = onClick)

@@ -144,6 +144,9 @@ internal fun AccentTextControl(label: String, onClick: () -> Unit) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
         fontWeight = FontWeight.SemiBold,
+        // One line always: a narrow dock row broke "Set up" in two on iOS (2026-11-09).
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .clickable(onClick = onClick)
