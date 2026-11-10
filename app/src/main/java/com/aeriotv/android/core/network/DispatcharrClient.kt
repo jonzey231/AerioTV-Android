@@ -791,13 +791,24 @@ class DispatcharrClient @Inject constructor() {
     suspend fun fetchServerVersion(baseUrl: String, apiKey: String): String? =
         runCatching { verifyConnection(baseUrl, apiKey).version }.getOrNull()
 
+    /**
+     * The account's assigned channel profile ids, or null when the server
+     * gives no usable answer. A 401 is thrown as [DispatcharrError.Unauthorized]
+     * (see [fetchAccountSnapshot]) so a caller inside
+     * [DispatcharrAuthBroker.withApiKeyRetry] re-signs in or holds the key.
+     */
     suspend fun fetchCurrentUserProfileIds(baseUrl: String, apiKey: String): List<Int>? = runCatching {
         val url = "${baseUrl.trimEnd('/')}/api/accounts/users/me/"
         val response = client.get(url) { applyAuth(apiKey) }
+        if (response.status.value == 401) {
+            throw DispatcharrError.Unauthorized(
+                "Dispatcharr rejected the api_key for $url (HTTP 401). Admin probably rotated it.",
+            )
+        }
         if (!response.status.isSuccess()) return@runCatching null
         val me: MeResponse = response.body()
         me.channelProfiles
-    }.getOrNull()
+    }.orNullKeepingAuthFailures()
 
     /**
      * Default User-Agent for every Dispatcharr API call. Mirrors iOS

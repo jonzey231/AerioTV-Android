@@ -781,7 +781,15 @@ class PlaylistRepository @Inject constructor(
                 sourceType == SourceType.DispatcharrUserPass
             ) {
                 resolvedApiKey?.takeIf { it.isNotBlank() }
-                    ?.let { dispatcharrClient.fetchCurrentUserProfileIds(normalisedBase, it) }
+                    // Best effort, as before: a 401 here is left to the channel
+                    // fetch below, which re-signs in from saved credentials.
+                    ?.let { k ->
+                        try {
+                            dispatcharrClient.fetchCurrentUserProfileIds(normalisedBase, k)
+                        } catch (u: com.aeriotv.android.core.network.DispatcharrError.Unauthorized) {
+                            null
+                        }
+                    }
                     ?: emptyList()
             } else {
                 emptyList()
@@ -1506,8 +1514,19 @@ class PlaylistRepository @Inject constructor(
             if (sourceType == SourceType.DispatcharrApiKey ||
                 sourceType == SourceType.DispatcharrUserPass
             ) {
-                playlist.apiKey?.takeIf { it.isNotBlank() }
-                    ?.let { dispatcharrClient.fetchCurrentUserProfileIds(base, it) }
+                // Through the key broker: this is the first call of every
+                // refresh, so a rotated key re-signs in here (password
+                // playlists) or starts the hold, instead of spending a
+                // counted failed-key attempt that nothing acts on.
+                if (playlist.apiKey.isNullOrBlank()) null else try {
+                    dispatcharrAuth.withApiKeyRetry(playlist.id) { k ->
+                        dispatcharrClient.fetchCurrentUserProfileIds(base, k)
+                    }
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (t: Throwable) {
+                    null
+                }
             } else {
                 null
             }
