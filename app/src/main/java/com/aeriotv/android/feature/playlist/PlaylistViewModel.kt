@@ -1216,13 +1216,7 @@ class PlaylistViewModel @Inject constructor(
                     if (channels.isNotEmpty()) _sourceConfigured.tryEmit(Unit)
                 },
                 onFailure = { t ->
-                    _state.update {
-                        it.copy(
-                            isLoading = false,
-                            channels = emptyList(),
-                            error = loadFailureMessage("Failed to load", t),
-                        )
-                    }
+                    _state.update { addTestFailedState(it, loadFailureMessage("Failed to load", t)) }
                 },
             )
         }
@@ -1264,7 +1258,7 @@ class PlaylistViewModel @Inject constructor(
                 else Result.success(entity)
             },
             onFailure = { t ->
-                _state.update { it.copy(isLoading = false, channels = emptyList(), error = null) }
+                _state.update { addTestFailedState(it, error = null) }
                 // Cause kept: the setup receiver reads a 429 off it to count down and retry.
                 Result.failure(IllegalStateException(loadFailureMessage("Could not connect", t), t))
             },
@@ -3554,6 +3548,20 @@ class PlaylistViewModel @Inject constructor(
     suspend fun reprobeActiveBase(): String? =
         runCatching { repository.reprobeActiveBase() }.getOrNull()
 }
+
+/**
+ * State after a failed Add Playlist test (the form's Test Connection) or a
+ * failed device-setup add. Only the add form's own fields change: the
+ * loading flag and the error line. The channel list, guide, playlist, and
+ * phase belong to the ACTIVE playlist (Live TV reads them from this same
+ * state), and a failed test never wrote anything to the database, so they
+ * stay exactly as they were. Clearing the channels here emptied the active
+ * playlist's Live TV list until a pull to refresh.
+ */
+internal fun addTestFailedState(
+    state: PlaylistViewModel.UiState,
+    error: String?,
+): PlaylistViewModel.UiState = state.copy(isLoading = false, error = error)
 
 /** Find the programme containing `now` for a given channel. */
 fun List<EPGProgramme>.nowPlaying(now: Long = System.currentTimeMillis()): EPGProgramme? =
