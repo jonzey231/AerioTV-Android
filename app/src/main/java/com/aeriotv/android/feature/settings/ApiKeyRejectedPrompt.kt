@@ -16,6 +16,18 @@ import com.aeriotv.android.core.network.DispatcharrRequestGate
 import com.aeriotv.android.ui.settings.SettingsAlertDialog
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 
+/**
+ * "Open Edit Playlist for this playlist" from places with no Settings
+ * navigation of their own (the Set up another device sheet). The prompt host
+ * below hands it to Settings.
+ */
+object EditPlaylistRequest {
+    private val _pending = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val pending: kotlinx.coroutines.flow.StateFlow<String?> = _pending
+    fun open(playlistId: String) { _pending.value = playlistId }
+    fun consume() { _pending.value = null }
+}
+
 /** Title of the rejected-key prompt. */
 const val API_KEY_REJECTED_TITLE = "Sign-in not accepted"
 
@@ -37,6 +49,12 @@ fun apiKeyRejectedBody(playlistName: String, passwordToo: Boolean): String {
  */
 @Composable
 fun ApiKeyRejectedPromptHost(onEditPlaylist: (playlistId: String) -> Unit) {
+    val editRequest by EditPlaylistRequest.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(editRequest) {
+        val id = editRequest ?: return@LaunchedEffect
+        EditPlaylistRequest.consume()
+        onEditPlaylist(id)
+    }
     val prompt by DispatcharrRequestGate.prompt.collectAsStateWithLifecycle()
     val p = prompt ?: return
     val focus = remember(p) { FocusRequester() }

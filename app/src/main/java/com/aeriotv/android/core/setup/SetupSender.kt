@@ -336,6 +336,53 @@ class SetupSender(
     private companion object { const val TAG = "AerioSetup" }
 }
 
+/** What the sender does after checking the key it is about to send. */
+sealed interface SetupKeyVerdict {
+    /** The server accepted the key, or no verdict after the retries: send. */
+    data object Send : SetupKeyVerdict
+    /** 401/403: do not send; offer Edit Playlist. */
+    data object Rejected : SetupKeyVerdict
+}
+
+/**
+ * Sender pre-flight (2026-11-09): the sender once handed over a key it
+ * already knew the server rejected, and the other device failed with HTTP
+ * 429 and then 401. [check] is one authenticated request with the exact key
+ * in the payload. 401/403 = [SetupKeyVerdict.Rejected]. A 429 counts down
+ * its Retry-After through [onCountdown] and tries again; a network error
+ * waits [NETWORK_RETRY_S] seconds and tries again; up to
+ * [com.aeriotv.android.core.network.RateLimitRetry.MAX_AUTO_RETRIES]
+ * retries, then the send goes ahead (the receiver's own retry covers it).
+ */
+suspend fun preflightSetupKey(
+    check: suspend () -> com.aeriotv.android.core.network.DispatcharrClient.KeyCheck,
+    onCountdown: (secondsLeft: Long, rateLimited: Boolean) -> Unit,
+    tick: suspend () -> Unit = { kotlinx.coroutines.delay(1_000) },
+): SetupKeyVerdict {
+    var retries = 0
+    while (true) {
+        when (val r = check()) {
+            com.aeriotv.android.core.network.DispatcharrClient.KeyCheck.Accepted -> return SetupKeyVerdict.Send
+            com.aeriotv.android.core.network.DispatcharrClient.KeyCheck.Rejected -> return SetupKeyVerdict.Rejected
+            is com.aeriotv.android.core.network.DispatcharrClient.KeyCheck.Unknown -> {
+                if (retries >= com.aeriotv.android.core.network.RateLimitRetry.MAX_AUTO_RETRIES) return SetupKeyVerdict.Send
+                retries++
+                val limited = r.retryAfterSeconds != null
+                var left = (r.retryAfterSeconds ?: NETWORK_RETRY_S)
+                    .coerceIn(1, com.aeriotv.android.core.network.DispatcharrRequestGate.MAX_RETRY_AFTER_S)
+                while (left > 0) { onCountdown(left, limited); tick(); left-- }
+            }
+        }
+    }
+}
+
+/** Wait before re-checking the key after a network error. */
+const val NETWORK_RETRY_S = 3L
+
+/** Sender copy when the key it would send is refused. */
+const val SETUP_KEY_REJECTED_MESSAGE =
+    "The server did not accept this playlist's API key, so it was not sent. Enter a new key in Edit Playlist, then try again."
+
 /**
  * The sign-in for "Import this user only": `username` always rides beside the
  * API key or password, like Apple. Null when there is neither.

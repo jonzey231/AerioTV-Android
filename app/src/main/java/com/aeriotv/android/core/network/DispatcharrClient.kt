@@ -378,6 +378,38 @@ class DispatcharrClient @Inject constructor() {
      * derives it from the level). Null on ANY failure so a transient error
      * never clobbers a persisted value. Mirrors iOS DispatcharrUser 5d7763e.
      */
+    /** Outcome of [checkApiKey]. */
+    sealed interface KeyCheck {
+        data object Accepted : KeyCheck
+        /** 401/403, or a key the gate already holds as rejected (nothing sent). */
+        data object Rejected : KeyCheck
+        /** No verdict: [retryAfterSeconds] set for a 429, null for a network error or any other status. */
+        data class Unknown(val retryAfterSeconds: Long?) : KeyCheck
+    }
+
+    /**
+     * One authenticated GET of /api/accounts/users/me/ (the lightest call
+     * that needs a valid key; already in the README path tables) with
+     * exactly [apiKey]. The "Set up another device" sender runs it before
+     * handing a key over, so it never sends one the server refuses.
+     */
+    suspend fun checkApiKey(baseUrl: String, apiKey: String): KeyCheck = try {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") { applyAuth(apiKey) }
+        when (response.status.value) {
+            in 200..299 -> KeyCheck.Accepted.also { DispatcharrRequestGate.clearKey(apiKey) }
+            401, 403 -> KeyCheck.Rejected
+            else -> KeyCheck.Unknown(null)
+        }
+    } catch (c: kotlinx.coroutines.CancellationException) {
+        throw c
+    } catch (k: DispatcharrError.KeyRejected) {
+        KeyCheck.Rejected
+    } catch (r: DispatcharrError.RateLimited) {
+        KeyCheck.Unknown(r.retryAfterSeconds)
+    } catch (t: Throwable) {
+        KeyCheck.Unknown(null)
+    }
+
     /** Profiles: the full /api/accounts/users/me/ record for the user [apiKey]
      *  authenticates as, or null on any failure. */
     suspend fun fetchMe(baseUrl: String, apiKey: String): MeResponse? = runCatching {

@@ -88,6 +88,8 @@ class UserQrViewModel @Inject constructor(
     private val playlistDao: PlaylistDao,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
     private val prefs: com.aeriotv.android.core.preferences.AppPreferences,
+    private val dispatcharrClient: com.aeriotv.android.core.network.DispatcharrClient,
+    private val repository: com.aeriotv.android.core.data.repository.PlaylistRepository,
 ) : ViewModel() {
     data class Target(val playlistId: String, val profileId: String, val username: String)
 
@@ -127,6 +129,21 @@ class UserQrViewModel @Inject constructor(
                 val ids = src.choices.filter { !it.isDefault && it.credentialLabel != null }.map { it.profileId }.toSet()
                 val payload = sender.buildPayload(t.playlistId, ids, turnOnSync = src.isDispatcharr && src.syncOnHere)
                     ?: return@send com.aeriotv.android.core.setup.SetupSender.SendResult.Failed("This playlist could not be read.")
+                // Same pre-flight as the Set up another device sheet: never
+                // hand over a key the server refuses.
+                val sendKey = payload.playlist.credential?.apiKey
+                if (payload.playlist.type == "dispatcharr" && sendKey != null) {
+                    val base = playlistDao.byId(t.playlistId)?.let { repository.effectiveBaseUrl(it) } ?: payload.playlist.url
+                    val verdict = com.aeriotv.android.core.setup.preflightSetupKey(
+                        check = { dispatcharrClient.checkApiKey(base, sendKey) },
+                        onCountdown = { _, _ -> },
+                    )
+                    if (verdict == com.aeriotv.android.core.setup.SetupKeyVerdict.Rejected) {
+                        return@send com.aeriotv.android.core.setup.SetupSender.SendResult.Failed(
+                            com.aeriotv.android.core.setup.SETUP_KEY_REJECTED_MESSAGE,
+                        )
+                    }
+                }
                 val target = com.aeriotv.android.core.setup.SetupTarget(link.name.ifBlank { "AerioTV" }, link.ip, link.port, link.pk, code = link.code)
                 sender.send(target, link.code, payload)
             },
