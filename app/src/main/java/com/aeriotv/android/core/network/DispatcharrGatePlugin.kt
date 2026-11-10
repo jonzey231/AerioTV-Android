@@ -30,6 +30,16 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
         val path = built.encodedPath
         val isTokenEndpoint = path.contains("/api/accounts/token/")
         val server = DispatcharrRequestGate.serverKey(built.toString())
+        // Built with a key a re-sign-in has since replaced: send the current
+        // one (never logged), not a counted failure on a dead key.
+        requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
+            ?.let { old -> DispatcharrRequestGate.replacementFor(old)?.let { old to it } }
+            ?.let { (old, new) ->
+                val (x, auth) = swappedAuthHeaders(request.headers["X-API-Key"], request.headers["Authorization"], old, new)
+                x?.let { request.headers["X-API-Key"] = it }
+                auth?.let { request.headers["Authorization"] = it }
+                Log.i(TAG, "[AUTH] ${request.method.value} $path: sent with the re-issued key")
+            }
         if (!request.attributes.contains(BypassKeyGate)) {
             val key = requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
             if (key != null && DispatcharrRequestGate.isKeyRejected(key)) {
@@ -65,6 +75,21 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
 
 /** Set on an explicit key check (verifyConnection, Edit Playlist, the setup sender) so a rejected key can be tried again on purpose. */
 internal val BypassKeyGate = AttributeKey<Boolean>("DispatcharrBypassKeyGate")
+
+/**
+ * New values for the auth headers that carry [old]: X-API-Key, and an
+ * `ApiKey` or `Bearer` Authorization with the same scheme. Null = leave that
+ * header as it is (absent, or carrying something else such as a JWT).
+ */
+internal fun swappedAuthHeaders(xApiKey: String?, authorization: String?, old: String, new: String): Pair<String?, String?> {
+    val o = old.trim()
+    val x = xApiKey?.takeIf { it.trim() == o }?.let { new }
+    val parts = authorization?.trim()?.split(Regex("\\s+"), limit = 2)
+    val auth = if (parts != null && parts.size == 2 && parts[1] == o &&
+        (parts[0].equals("ApiKey", true) || parts[0].equals("Bearer", true))
+    ) "${parts[0]} $new" else null
+    return x to auth
+}
 
 /** The API key a request carries: X-API-Key, else `Authorization: ApiKey <k>` or `Bearer <k>`. */
 internal fun requestApiKey(xApiKey: String?, authorization: String?): String? {

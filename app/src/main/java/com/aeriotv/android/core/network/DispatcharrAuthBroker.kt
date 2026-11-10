@@ -102,6 +102,14 @@ class DispatcharrAuthBroker @Inject constructor(
             // rejected: the hold is in place, so no probe of our own.
             if (DispatcharrRequestGate.isKeyRejected(initialKey)) throw DispatcharrError.KeyRejected()
             invalidateRow(playlistId)
+            // The key was replaced while this call was in flight (another
+            // caller's re-sign-in, or an Edit Playlist save): retry with the
+            // current key. Probing or re-signing in for a key that is already
+            // gone would spend failed-key attempts for nothing.
+            currentKeyIfReplaced(playlistId, initialKey)?.let { current ->
+                Log.i(TAG, "401 for ${playlistId.take(8)} used a replaced key; retrying with the current one (no probe)")
+                return block(current)
+            }
             // Task #49 (iOS verifyConnection v1.6.20 parity): before assuming
             // the KEY was rotated, check whether the 401 is a header-SHAPE
             // rejection -- some deployments (reverse proxies, hardened
@@ -159,6 +167,14 @@ class DispatcharrAuthBroker @Inject constructor(
             }
             block(freshKey)
         }
+    }
+
+    /** The playlist's key now, when it is no longer [usedKey] (and not itself held), else null. */
+    private suspend fun currentKeyIfReplaced(playlistId: String, usedKey: String): String? {
+        val stored = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { dao.byId(playlistId) }
+            ?.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+        val current = stored ?: DispatcharrRequestGate.replacementFor(usedKey)
+        return currentKeyAfterSwap(usedKey, current, DispatcharrRequestGate::isKeyRejected)
     }
 
     private fun gateRejectedKey(playlist: PlaylistEntity, key: String, passwordToo: Boolean) {
@@ -222,6 +238,8 @@ class DispatcharrAuthBroker @Inject constructor(
             tokenStore.store(row.id, pair.access, pair.refresh)
             val newKey = client.fetchCurrentUserApiKey(row.urlString, pair.access)
             dao.update(row.copy(apiKey = newKey))
+            // Requests already built with the old key go out with the new one.
+            row.apiKey?.let { DispatcharrRequestGate.noteKeyReplaced(it, newKey) }
             invalidateRow(row.id)
             Log.i(TAG, "silentRebootstrap OK for ${playlist.id.take(8)}")
             newKey

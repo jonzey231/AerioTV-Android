@@ -253,11 +253,61 @@ object DispatcharrRequestGate {
         return (left + 999) / 1000
     }
 
+    // ---- Replaced keys (a silent re-sign-in swapped the key) ----
+
+    /** How long requests built with a replaced key are rewritten to the new one. */
+    const val REPLACED_KEY_TTL_MS = 600_000L
+
+    /** Old key hash -> the key that replaced it, and until when (on [clock]). */
+    private val replaced = ConcurrentHashMap<String, Pair<String, Long>>()
+
+    /**
+     * A re-sign-in replaced [old] with [new]. Requests already built with
+     * [old] (a sweep or poll that captured the key, a call in flight) go out
+     * with [new] for [REPLACED_KEY_TTL_MS] instead of spending a counted
+     * failed-key attempt each on a key the server no longer knows.
+     */
+    fun noteKeyReplaced(old: String, new: String) {
+        val o = old.trim()
+        val n = new.trim()
+        if (o.isEmpty() || n.isEmpty() || o == n) return
+        replaced[keyHash(o)] = n to clock() + REPLACED_KEY_TTL_MS
+    }
+
+    /** The current key for [key] when it was replaced in the last [REPLACED_KEY_TTL_MS] (follows a chain), else null. */
+    fun replacementFor(key: String): String? {
+        var current = key.trim()
+        var found: String? = null
+        repeat(4) {
+            val h = keyHash(current)
+            val entry = replaced[h] ?: return found
+            if (clock() >= entry.second) {
+                replaced.remove(h, entry)
+                return found
+            }
+            found = entry.first
+            current = entry.first
+        }
+        return found
+    }
+
     /** Test hook: forget every pause. */
     fun resetForTests() {
         pausedUntil.clear()
         rejected.clear()
         rechecks.clear()
+        replaced.clear()
         _prompt.value = null
     }
+}
+
+/**
+ * Pure rule for a 401 on [usedKey]: retry with [current] when the playlist's
+ * key has changed since the call was built and the new key is not itself held
+ * as rejected; null = the key did not change, so probe it as usual.
+ */
+internal fun currentKeyAfterSwap(usedKey: String, current: String?, isRejected: (String) -> Boolean): String? {
+    val c = current?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (c == usedKey.trim() || isRejected(c)) return null
+    return c
 }
