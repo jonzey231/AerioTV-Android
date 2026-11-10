@@ -1,6 +1,9 @@
 package com.aeriotv.android.core.security
 
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
+import java.io.IOException
 import java.net.Socket
 import java.security.KeyStore
 import java.security.Principal
@@ -9,6 +12,7 @@ import java.security.cert.X509Certificate
 import java.util.Date
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManagerFactory
@@ -96,23 +100,73 @@ object ClientCertificates {
      * one" where a TLS 1.2 server answers both with bad_certificate.
      */
     fun describe(t: Throwable, host: String?): String? {
-        val text = generateSequence(t) { it.cause }.take(8).joinToString(" ") { it.message.orEmpty() }
-        val required = "CERTIFICATE_REQUIRED" in text
-        val refused = REFUSED_ALERTS.any { it in text }
+        val alert = alertIn(t) ?: return null
         val hasCertificate = host?.lowercase()?.let(lookup) != null
-        return when {
-            required || (refused && !hasCertificate) ->
-                "The server asks for a client certificate (mTLS). Add one under Client Certificate."
-            refused ->
-                "The server didn't accept the client certificate (unknown CA, expired or revoked)."
-            else -> null
+        return if (alert == REQUIRED_ALERT || !hasCertificate) {
+            "The server asks for a client certificate (mTLS). Add one under Client Certificate."
+        } else {
+            "The server didn't accept the client certificate (unknown CA, expired or revoked)."
         }
     }
 
-    private val REFUSED_ALERTS = listOf(
-        "ALERT_BAD_CERTIFICATE", "ALERT_UNKNOWN_CA", "ALERT_CERTIFICATE_EXPIRED",
+    private const val REQUIRED_ALERT = "ALERT_CERTIFICATE_REQUIRED"
+    private val ALERTS = listOf(
+        REQUIRED_ALERT, "ALERT_BAD_CERTIFICATE", "ALERT_UNKNOWN_CA", "ALERT_CERTIFICATE_EXPIRED",
         "ALERT_CERTIFICATE_REVOKED", "ALERT_CERTIFICATE_UNKNOWN", "ALERT_ACCESS_DENIED",
     )
+
+    /** The certificate alert BoringSSL names in [t]'s chain, if any. */
+    private fun alertIn(t: Throwable): String? {
+        val text = generateSequence(t) { it.cause }.take(8).joinToString(" ") { it.message.orEmpty() }
+        return ALERTS.firstOrNull { it in text }
+    }
+
+    /** Host -> the certificate alert it last sent (null: a probe found none), and when. */
+    private val recentAlerts = java.util.concurrent.ConcurrentHashMap<String, Pair<String?, Long>>()
+
+    /**
+     * Keeps the alert attached to every failure it causes. A TLS 1.3 server
+     * sends it after the handshake, as the request is already on its way, so
+     * a request often sees only "Socket closed" (a broken pipe to curl).
+     * Then one TLS 1.2 handshake asks again, at most every [ALERT_TTL_MS] per
+     * host: in TLS 1.2 the alert ends the handshake itself. A bare I/O failure
+     * to a host that sent an alert within that window is rethrown carrying
+     * it, the original as cause.
+     */
+    internal object AlertInterceptor : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val url = chain.request().url
+            try {
+                return chain.proceed(chain.request())
+            } catch (e: IOException) {
+                val now = System.currentTimeMillis()
+                alertIn(e)?.let { recentAlerts[url.host] = it to now; throw e }
+                if (!url.isHttps || chain.call().isCanceled()) throw e
+                val seen = recentAlerts[url.host]?.takeIf { now - it.second <= ALERT_TTL_MS }
+                    ?: (probe(url.host, url.port) to now).also { recentAlerts[url.host] = it }
+                val alert = seen.first ?: throw e
+                throw SSLException("$alert (the server's certificate check)", e)
+            }
+        }
+
+        /** The alert a TLS 1.2 handshake with [host] ends in, or null when it completes or fails otherwise. */
+        private fun probe(host: String, port: Int): String? = try {
+            val plain = Socket().apply {
+                connect(java.net.InetSocketAddress(host, port), PROBE_TIMEOUT_MS)
+                soTimeout = PROBE_TIMEOUT_MS
+            }
+            (socketFactory.createSocket(plain, host, port, true) as SSLSocket).use {
+                it.enabledProtocols = arrayOf("TLSv1.2")
+                it.startHandshake()
+            }
+            null
+        } catch (e: IOException) {
+            alertIn(e)
+        }
+    }
+
+    private const val ALERT_TTL_MS = 30_000L
+    private const val PROBE_TIMEOUT_MS = 5_000
 
     /**
      * Alias = the peer host. The server's key types and CA list are not
@@ -140,3 +194,4 @@ object ClientCertificates {
 /** Offers the matching client certificate to a playlist's server (see [ClientCertificates]). */
 fun OkHttpClient.Builder.clientCertificates(): OkHttpClient.Builder =
     sslSocketFactory(ClientCertificates.socketFactory, ClientCertificates.trustManager)
+        .addInterceptor(ClientCertificates.AlertInterceptor)
