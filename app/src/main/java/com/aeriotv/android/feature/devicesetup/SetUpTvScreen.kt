@@ -84,6 +84,7 @@ class SetUpTvViewModel @Inject constructor(
     prefs: AppPreferences,
     private val repository: PlaylistRepository,
     private val dispatcharrClient: com.aeriotv.android.core.network.DispatcharrClient,
+    certificates: com.aeriotv.android.core.security.ClientCertificateStore,
 ) : ViewModel() {
 
     sealed interface Step {
@@ -106,7 +107,7 @@ class SetUpTvViewModel @Inject constructor(
     }
 
     val discovery = SetupDiscovery(context)
-    private val sender = SetupSender(profiles, prefs)
+    private val sender = SetupSender(profiles, prefs, certificates)
 
     private val _step = MutableStateFlow<Step>(Step.Pick)
     val step: StateFlow<Step> = _step.asStateFlow()

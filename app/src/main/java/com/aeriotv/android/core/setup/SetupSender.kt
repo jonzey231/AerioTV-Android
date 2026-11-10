@@ -10,6 +10,8 @@ import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.profiles.PinRules
 import com.aeriotv.android.core.profiles.ProfileManager
 import com.aeriotv.android.core.profiles.effectiveRole
+import com.aeriotv.android.core.security.ClientCertificateStore
+import com.aeriotv.android.core.security.ClientCertificates
 import com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -165,6 +167,7 @@ class SetupDiscovery(private val context: Context) {
 class SetupSender(
     private val profiles: ProfileManager,
     private val prefs: AppPreferences,
+    private val certificates: ClientCertificateStore,
 ) {
     data class ProfileChoice(
         val profileId: String,
@@ -238,6 +241,8 @@ class SetupSender(
                 username = row.username?.takeIf { it.isNotBlank() },
                 password = row.password?.takeIf { it.isNotBlank() },
             ).takeIf { it.apiKey != null || it.username != null || it.password != null },
+            clientCertificate = ClientCertificates.hostOf(row.urlString)?.let(certificates::export)
+                ?.let { (p12, password) -> SetupProtocol.ClientCertificatePart(SetupCrypto.b64(p12), password) },
         )
         if (type != "dispatcharr") return SetupProtocol.Payload(playlist = playlist)
         val parts = profiles.setupSources(playlistId).withIndex()

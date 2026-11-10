@@ -69,6 +69,14 @@ class SetupProtocolTest {
     }
 
     @Test
+    fun clientCertificateRidesAlongAndOlderPayloadsLackIt() {
+        val cert = SetupProtocol.ClientCertificatePart(p12 = SetupCrypto.b64(byteArrayOf(0x30, 0x82.toByte())), password = "secret")
+        val withCert = payload.copy(playlist = payload.playlist.copy(clientCertificate = cert))
+        assertEquals(cert, SetupProtocol.decodePayload(SetupProtocol.encodePayload(withCert))!!.playlist.clientCertificate)
+        assertNull(SetupProtocol.decodePayload(SetupProtocol.encodePayload(payload))!!.playlist.clientCertificate)
+    }
+
+    @Test
     fun sealOpenRoundTripAndWrongCode() {
         val tv = SetupCrypto.newKeyPair()
         val env = SetupProtocol.sealForTv(payload, tv.publicKey, "042917")
