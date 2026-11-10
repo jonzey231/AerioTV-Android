@@ -98,6 +98,16 @@ internal fun isDispatcharrInvalidKeyBody(body: String): Boolean =
         body.contains("User inactive", ignoreCase = true)
 
 /**
+ * A best-effort call's [runCatching] result as "no answer" (null), except a
+ * rejected key and a cancellation: those are rethrown, so the key broker can
+ * hold a rejected key and a cancelled caller really stops.
+ */
+internal fun <T> Result<T?>.orNullKeepingAuthFailures(): T? = getOrElse { t ->
+    if (t is DispatcharrError.Unauthorized || t is kotlinx.coroutines.CancellationException) throw t
+    null
+}
+
+/**
  * One in-flight run per key: concurrent callers for the same key await the
  * first caller's result instead of running their own (owner 2026-11-10: only
  * one caller probes a given key at a time). A leader that is cancelled hands
@@ -643,9 +653,25 @@ class DispatcharrClient @Inject constructor() {
         val channelProfiles: List<Int>,
     )
 
+    /**
+     * The account's /me/ facts, or null when the server gives no usable
+     * answer. A 401 is NOT folded into null: it is thrown as
+     * [DispatcharrError.Unauthorized] so the caller's
+     * [DispatcharrAuthBroker.withApiKeyRetry] probes the key once and holds
+     * it if the server rejected it. Swallowing it let the DVR tab's 30 s
+     * refresh re-run this check with a dead key, one counted failed-key
+     * attempt every 30 s that never started the hold (Nothing Phone,
+     * 2026-11-10). A key the gate already holds fails the same way, with no
+     * request.
+     */
     suspend fun fetchAccountSnapshot(baseUrl: String, apiKey: String): AccountSnapshot? = runCatching {
         val url = "${baseUrl.trimEnd('/')}/api/accounts/users/me/"
         val response = client.get(url) { applyAuth(apiKey) }
+        if (response.status.value == 401) {
+            throw DispatcharrError.Unauthorized(
+                "Dispatcharr rejected the api_key for $url (HTTP 401). Admin probably rotated it.",
+            )
+        }
         if (!response.status.isSuccess()) return@runCatching null
         val me: MeResponse = response.body()
         // A Django superuser / staff account is a functional admin even when
@@ -668,7 +694,7 @@ class DispatcharrClient @Inject constructor() {
             customPropertiesJson = me.customProperties?.toString().orEmpty(),
             channelProfiles = me.channelProfiles,
         )
-    }.getOrNull()
+    }.orNullKeepingAuthFailures()
 
     /** /api/accounts/users/ is IsAdmin-gated: a 2xx proves this account is admin. */
     private suspend fun probeAdminByUsersList(baseUrl: String, apiKey: String): Boolean =
