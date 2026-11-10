@@ -124,6 +124,9 @@ class CastHlsProxySession @Inject constructor(
             // receiver had drained (2026-09-27 10:51:16 to 10:52:16).
             .readTimeout(15, TimeUnit.SECONDS)
             .followRedirects(true)
+            // No ingest opens while the server is paused after a 429; a lockout
+            // 429 pauses it (StreamGate).
+            .addInterceptor(com.aeriotv.android.core.playback.StreamGate.interceptor)
             // Ingest network policy (iOS incident 2026-09-25, Apple 2ceaaed):
             // logging only. The client is not bound to a Network, so the
             // socket rides the default network, cellular included.
@@ -576,6 +579,9 @@ class CastHlsProxySession @Inject constructor(
         var audioOnlyPolicy = TsToFmp4Remuxer.AudioOnlyPolicy.AUTO
         ingestJob = ingestScope.launch {
             var consecutiveFailures = 0
+            // Rate-limit waits spent (StreamGate): count down the server's
+            // pause and retry once, at most MAX_AUTO_RETRIES times.
+            var rateLimitWaits = 0
             var connected = false
             // Clean end (Dispatcharr ended this client, e.g. terminate on limit
             // exceeded): keep reconnecting on the shared escalating backoff
@@ -787,6 +793,7 @@ class CastHlsProxySession @Inject constructor(
                 var transcodeFallback = false
                 var endedCleanly = false
                 var localEnded = false
+                var rateLimitWaited = false
                 try {
                     if (localSource != null) {
                         // Local composite: no HTTP, no reconnect policy. A
@@ -847,6 +854,7 @@ class CastHlsProxySession @Inject constructor(
                         }
                         connected = true
                         consecutiveFailures = 0
+                        rateLimitWaits = 0
                         connectedAtSec = System.currentTimeMillis() / 1000.0
                         val buf = ByteArray(64 * 1024)
                         while (currentCoroutineContext().isActive) {
@@ -861,6 +869,20 @@ class CastHlsProxySession @Inject constructor(
                             }
                         }
                     }
+                } catch (e: com.aeriotv.android.core.playback.StreamRateLimitedException) {
+                    // Dispatcharr rate-limited this network (or the gate is
+                    // paused after a 429): no open until the pause ends, then
+                    // one retry; never the plain reconnect backoff.
+                    rateLimitWaits++
+                    if (rateLimitWaits > com.aeriotv.android.core.playback.StreamGate.MAX_AUTO_RETRIES) {
+                        debugLogWarn(context, TAG, "[RATE] ingest rate-limited (${e.reason}); giving up")
+                        sessionError.value = com.aeriotv.android.core.network.RateLimitRetry.RateLimitedFinal(e.seconds, e, e.reason)
+                        return@launch
+                    }
+                    val wait = com.aeriotv.android.core.playback.StreamGate.waitSeconds(url, e)
+                    debugLogWarn(context, TAG, "[RATE] ingest rate-limited (${e.reason}); retrying once in ${wait}s")
+                    delay(wait * 1_000L)
+                    rateLimitWaited = true
                 } catch (e: CastVideoTranscodeException) {
                     // Fallback: a fresh remuxer, built with the plan
                     // disabled, passes the source through from the next IDR.
@@ -895,6 +917,10 @@ class CastHlsProxySession @Inject constructor(
                     continue
                 }
                 if (transcodeFallback) {
+                    currentGen = server.beginGeneration()
+                    continue
+                }
+                if (rateLimitWaited) {
                     currentGen = server.beginGeneration()
                     continue
                 }

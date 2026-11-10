@@ -253,7 +253,14 @@ class SetUpTvViewModel @Inject constructor(
                     check = { dispatcharrClient.checkApiKey(base, key) },
                     onCountdown = { left, limited ->
                         _step.value = Step.Checking(
-                            if (limited) com.aeriotv.android.core.network.serverBusyCountdown(left) else CHECKING_LINE,
+                            if (limited) {
+                                com.aeriotv.android.core.network.serverBusyCountdown(
+                                    left,
+                                    com.aeriotv.android.core.network.DispatcharrRequestGate.pausedReason(
+                                        com.aeriotv.android.core.network.DispatcharrRequestGate.serverKey(base),
+                                    ),
+                                )
+                            } else CHECKING_LINE,
                         )
                     },
                 )

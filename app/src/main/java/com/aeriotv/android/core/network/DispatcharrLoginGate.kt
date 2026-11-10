@@ -53,12 +53,19 @@ object DispatcharrLoginGate {
         return if (left > 0) (left + 999) / 1000 else 0
     }
 
+    /** Reason of the 429 that parked each server's logins. */
+    private val serverParkedReason = ConcurrentHashMap<String, RateLimitReason>()
+
     /** Record a 429 from the login (or refresh) endpoint. */
-    fun parkServer(baseUrl: String, retryAfterSeconds: Long?) {
+    fun parkServer(baseUrl: String, retryAfterSeconds: Long?, reason: RateLimitReason = RateLimitReason.SignInLockout) {
         val secs = retryAfterSeconds?.takeIf { it > 0 } ?: DEFAULT_RETRY_AFTER_S
         serverParkedUntil[hostKey(baseUrl)] = now() + secs * 1000
-        Log.w(TAG, "[AUTH] login throttled by the server; next attempt in ${secs}s")
+        serverParkedReason[hostKey(baseUrl)] = reason
+        Log.w(TAG, "[AUTH] login throttled by the server ($reason); next attempt in ${secs}s")
     }
+
+    /** Why [baseUrl]'s logins are parked. */
+    fun parkedReason(baseUrl: String): RateLimitReason = serverParkedReason[hostKey(baseUrl)] ?: RateLimitReason.SignInLockout
 
     /**
      * Run [attempt] (a silent re-login that returns the fresh api_key, or

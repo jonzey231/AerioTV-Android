@@ -161,6 +161,8 @@ object ForceHls {
             .followSslRedirects(false)
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            // The session resolve is a stream open too (StreamGate).
+            .addInterceptor(StreamGate.interceptor)
             .build()
     }
 

@@ -239,11 +239,18 @@ object DispatcharrRequestGate {
         return secs.coerceIn(1, MAX_RETRY_AFTER_S)
     }
 
+    /** Why each server is paused: the reason of its latest 429. */
+    private val pausedReasons = ConcurrentHashMap<String, RateLimitReason>()
+
     /** Park [serverKey] for [seconds] (a later, longer 429 extends it; a shorter one never shortens it). */
-    fun pause(serverKey: String, seconds: Long) {
+    fun pause(serverKey: String, seconds: Long, reason: RateLimitReason = RateLimitReason.Other) {
         val until = clock() + seconds.coerceIn(1, MAX_RETRY_AFTER_S) * 1000
         pausedUntil.merge(serverKey, until) { old, new -> maxOf(old, new) }
+        pausedReasons[serverKey] = reason
     }
+
+    /** The reason of the 429 that paused [serverKey] ([RateLimitReason.Other] when unknown). */
+    fun pausedReason(serverKey: String): RateLimitReason = pausedReasons[serverKey] ?: RateLimitReason.Other
 
     /** Seconds left on [serverKey]'s pause, 0 when requests may go out. */
     fun pausedSeconds(serverKey: String): Long {
@@ -294,6 +301,7 @@ object DispatcharrRequestGate {
     /** Test hook: forget every pause. */
     fun resetForTests() {
         pausedUntil.clear()
+        pausedReasons.clear()
         rejected.clear()
         rechecks.clear()
         replaced.clear()

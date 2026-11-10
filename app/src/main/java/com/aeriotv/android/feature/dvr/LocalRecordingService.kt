@@ -91,6 +91,8 @@ class LocalRecordingService : Service() {
             .followSslRedirects(true)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            // No recording opens while the server is paused after a 429 (StreamGate).
+            .addInterceptor(com.aeriotv.android.core.playback.StreamGate.interceptor)
             // OkHttp strips Authorization on cross-host redirects by default,
             // but NOT custom headers. Strip X-API-Key too so a 302 to an
             // attacker host cannot harvest the credential.

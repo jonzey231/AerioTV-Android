@@ -7,6 +7,7 @@ import com.aeriotv.android.DeepLinkTarget
 import com.aeriotv.android.core.network.RateLimitRetry
 import com.aeriotv.android.core.network.rateLimitSeconds
 import com.aeriotv.android.core.network.rateLimitedMessage
+import com.aeriotv.android.core.network.rateLimitReason
 import com.aeriotv.android.core.network.serverBusyCountdown
 import com.aeriotv.android.core.data.EPGProgramme
 import com.aeriotv.android.core.data.guideMatchKey
@@ -1174,7 +1175,7 @@ class PlaylistViewModel @Inject constructor(
                 epgRetentionDays = s.epgRetentionDays,
             )
             RateLimitRetry.run(
-                onCountdown = { left -> _state.update { it.copy(busyMessage = serverBusyCountdown(left)) } },
+                onCountdown = { left, reason -> _state.update { it.copy(busyMessage = serverBusyCountdown(left, reason)) } },
                 onRetry = { _state.update { it.copy(busyMessage = null) } },
             ) {
                 repository.loadAndPersist(request, existingId = s.draftPlaylistId)
@@ -1275,10 +1276,10 @@ class PlaylistViewModel @Inject constructor(
      */
     private fun loadFailureMessage(prefix: String, t: Throwable): String =
         if (t is RateLimitRetry.RateLimitedFinal) {
-            t.message ?: rateLimitedMessage(t.seconds)
+            t.message ?: rateLimitedMessage(t.seconds, t.reason)
         } else if (t.rateLimitSeconds() != null) {
             // A 429 names the rate limit, never "Could not connect: HTTP 429".
-            rateLimitedMessage(t.rateLimitSeconds()!!)
+            rateLimitedMessage(t.rateLimitSeconds()!!, t.rateLimitReason())
         } else if (t is OutOfMemoryError) {
             "$prefix: playlist is too large for this device's memory. If this is an " +
                 "Xtream Codes get.php link, add it with the Xtream Codes source type instead."
@@ -2886,7 +2887,7 @@ class PlaylistViewModel @Inject constructor(
             Log.i(TAG, "testConnection: probing ${active.urlString}")
             _state.update { it.copy(testStatus = ActionStatus.Running) }
             RateLimitRetry.run(
-                onCountdown = { left -> _state.update { it.copy(testStatus = ActionStatus.Waiting(serverBusyCountdown(left))) } },
+                onCountdown = { left, reason -> _state.update { it.copy(testStatus = ActionStatus.Waiting(serverBusyCountdown(left, reason))) } },
                 onRetry = { _state.update { it.copy(testStatus = ActionStatus.Running) } },
             ) { repository.refresh(active) }.fold(
                 onSuccess = { channels ->
@@ -2905,7 +2906,7 @@ class PlaylistViewModel @Inject constructor(
                         it.copy(
                             testStatus = ActionStatus.Failure(
                                 t.rateLimitSeconds()?.let { secs ->
-                                    (t as? RateLimitRetry.RateLimitedFinal)?.message ?: rateLimitedMessage(secs)
+                                    (t as? RateLimitRetry.RateLimitedFinal)?.message ?: rateLimitedMessage(secs, t.rateLimitReason())
                                 } ?: "Connection failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
                             ),
                         )

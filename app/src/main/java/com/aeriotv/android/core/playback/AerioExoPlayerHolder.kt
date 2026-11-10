@@ -2547,6 +2547,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 )
                 return
             }
+            if (handleStreamRateLimit(error)) return
             if (handleConnectionLimit(error)) return
             // Android companion to the frame-stall path: a terminal source/HTTP
             // error. Re-prime under the same cooldown + reload cap. If a LAN/WAN
@@ -2751,6 +2752,9 @@ class AerioExoPlayerHolder @Inject constructor(
         override fun onRenderedFirstFrame() {
             videoFrameRendered = true
             noFrameHealAttempts = 0
+            // Playing again: the next rate-limit wait gets the full retry budget.
+            rateLimitRetries = 0
+            rateLimitKey = null
             codecRebuildsThisTune = 0
             // GH #107: video that has been painting steadily for a while means
             // the surface and codec are genuinely healthy again, so the rebuild
@@ -4239,7 +4243,8 @@ class AerioExoPlayerHolder @Inject constructor(
                 ?.value
                 ?.let(factory::setUserAgent)
         }
-        return factory
+        // Same 429 rules as the OkHttp live path (StreamGate).
+        return StreamGate.Factory(factory)
     }
 
     /** OkHttp-backed [DataSource.Factory] for live raw-TS playback (GH #32).
@@ -4453,6 +4458,9 @@ class AerioExoPlayerHolder @Inject constructor(
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(liveReadTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            // No stream opens while the server is paused after a 429, and a
+            // lockout 429 on a stream pauses it (StreamGate, shared spec).
+            .addInterceptor(StreamGate.interceptor)
             // A second open to a channel another player still holds waits up
             // to 3 s for that connection to go ([SINGLE-CONN]).
             .addInterceptor(LiveConnectionRegistry.interceptor)
@@ -5386,10 +5394,95 @@ class AerioExoPlayerHolder @Inject constructor(
         return true
     }
 
+    /** The running rate-limit countdown (one per holder). */
+    private var rateLimitJob: Job? = null
+    /** Automatic retries spent on [rateLimitKey]'s rate-limit waits. */
+    private var rateLimitRetries = 0
+    private var rateLimitKey: String? = null
+
+    /**
+     * Stream rate-limited (shared spec 2026-11-10): the server's API key
+     * lockout answered the open, or the request gate was already paused after
+     * a 429 so the open never went out. Stop the pipeline (no reload ladder,
+     * no failover walk: no stream may open while the gate is paused), count
+     * down the pause on the limit card with the API 429 wording, then retry
+     * once; after [StreamGate.MAX_AUTO_RETRIES] show the rate-limit copy and
+     * wait for Retry. Returns true when this holder now owns the error.
+     */
+    private fun handleStreamRateLimit(error: Throwable): Boolean {
+        val rl = StreamGate.find(error) ?: return false
+        if (isTimeshifting) return false
+        val current = _connectionLimit.value
+        if (current != null) return true
+        val url = lastPlayUrl
+        val catchup = isCatchup
+        val key = if (catchup) lastCatchupUrl else url
+        if (key == null) return false
+        if (key != rateLimitKey) {
+            rateLimitKey = key
+            rateLimitRetries = 0
+        }
+        val wait = StreamGate.waitSeconds(key, rl)
+        Log.w(TAG, "[RATE] stream rate-limited (${rl.reason}) ch=$currentChannelId wait=${wait}s retries=$rateLimitRetries/${StreamGate.MAX_AUTO_RETRIES}; stopping, no failover")
+        tracer.recover("stream rate-limited; waiting ${wait}s")
+        stoppingRetryJob?.cancel()
+        stoppingRetryJob = null
+        if (!catchup) {
+            reconnectUrl = url ?: reconnectUrl
+            reconnectChannelId = currentChannelIdForRebuild ?: currentChannelId ?: reconnectChannelId
+        }
+        connectionLimitWasCatchup = catchup
+        liveFailover.resetWalk()
+        liveFailover.publishServerStatus(null)
+        rateLimitJob?.cancel()
+        if (rateLimitRetries >= StreamGate.MAX_AUTO_RETRIES) {
+            _connectionLimit.value = StreamGate.finalNotice(wait, rl.reason)
+            stop()
+            return true
+        }
+        rateLimitRetries++
+        _connectionLimit.value = StreamGate.countdownNotice(wait, rl.reason)
+        stop()
+        rateLimitJob = watchdogScope.launch {
+            var left = wait
+            while (true) {
+                while (left > 0) {
+                    if (_connectionLimit.value?.kind != DispatcharrConnectionLimit.Kind.RATE_LIMITED) return@launch
+                    _connectionLimit.value = StreamGate.countdownNotice(left, rl.reason)
+                    delay(1_000)
+                    left--
+                }
+                // A later 429 (an API call meanwhile) can extend the pause.
+                left = StreamGate.pausedSeconds(key)
+                if (left <= 0) break
+            }
+            if (_connectionLimit.value?.kind != DispatcharrConnectionLimit.Kind.RATE_LIMITED) return@launch
+            Log.i(TAG, "[RATE] pause over; retrying once ch=${reconnectChannelId ?: currentChannelId}")
+            retryAfterRateLimit()
+        }
+        return true
+    }
+
+    private fun retryAfterRateLimit() {
+        if (_connectionLimit.value == null) return
+        _connectionLimit.value = null
+        if (connectionLimitWasCatchup) {
+            val cu = lastCatchupUrl ?: return
+            playCatchup(cu, lastCatchupTitle, lastCatchupSubtitle, lastCatchupArtworkUri)
+        } else {
+            retryUnavailable()
+        }
+    }
+
     /** Retry button of the connection-limit notice: one fresh tune of what
      *  was refused. */
     fun retryConnectionLimit() {
         if (_connectionLimit.value == null) return
+        // A user Retry after a rate-limit give-up earns the retry budget again.
+        if (_connectionLimit.value?.kind == DispatcharrConnectionLimit.Kind.RATE_LIMITED) {
+            rateLimitJob?.cancel()
+            rateLimitRetries = 0
+        }
         _connectionLimit.value = null
         if (connectionLimitWasCatchup) {
             val cu = lastCatchupUrl ?: return
@@ -5712,12 +5805,19 @@ class AerioExoPlayerHolder @Inject constructor(
             // the "Channel Unavailable ... Retrying in 4s" card).
             val limit = DispatcharrConnectionLimit.parse(error)
             val is503 = Dispatcharr503.parse(error) != null
-            if (wasCanceled && !is503 && limit == null) return
+            val rateLimited = StreamGate.find(error) != null
+            if (wasCanceled && !is503 && limit == null && !rateLimited) return
             Log.w(
                 TAG,
                 "load error uri=${loadEventInfo.uri} " +
                     "${error.javaClass.simpleName}: ${error.message}${causeChain(error)}",
             )
+            // Rate-limited (API key lockout, or the gate paused after a 429):
+            // wait it out and retry once; no ladder, no failover walk.
+            if (rateLimited) {
+                handleStreamRateLimit(error)
+                return
+            }
             // A connection-limit refusal owns the error outright: the 503 flavor
             // of it must not start the stopping ladder or the failover walk.
             if (limit != null) {

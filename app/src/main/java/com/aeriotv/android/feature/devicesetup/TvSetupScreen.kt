@@ -260,11 +260,11 @@ class TvSetupViewModel @Inject constructor(
                 customUserAgent = pl.userAgent?.takeIf { isDispatcharr },
             )
         val entity = com.aeriotv.android.core.network.RateLimitRetry.run(
-            onCountdown = { left ->
+            onCountdown = { left, reason ->
                 if (left == com.aeriotv.android.core.network.DispatcharrRequestGate.MAX_RETRY_AFTER_S || left % 10 == 0L) {
-                    Log.i(TAG, "[SETUP] server rate-limited the playlist add; retrying in ${left}s")
+                    Log.i(TAG, "[SETUP] server rate-limited the playlist add ($reason); retrying in ${left}s")
                 }
-                _phase.value = Phase.Applying(com.aeriotv.android.core.network.serverBusyCountdown(left))
+                _phase.value = Phase.Applying(com.aeriotv.android.core.network.serverBusyCountdown(left, reason))
             },
             onRetry = { _phase.value = Phase.Applying(applyingLine) },
         ) { add(request, replaceId) }.getOrElse {

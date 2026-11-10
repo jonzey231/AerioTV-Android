@@ -136,7 +136,7 @@ object MultiviewBackground {
                             .build()
                         volume = if (focused) 1f else 0f
                         val player = this
-                        val dsf = com.aeriotv.android.core.playback.ServerHlsGuard.Factory(DefaultDataSource.Factory(app, http))
+                        val dsf = com.aeriotv.android.core.playback.ServerHlsGuard.Factory(DefaultDataSource.Factory(app, com.aeriotv.android.core.playback.StreamGate.Factory(http)))
                         var cleanEnds = 0
                         var lastReconnectAt = 0L
                         addListener(object : androidx.media3.common.Player.Listener {

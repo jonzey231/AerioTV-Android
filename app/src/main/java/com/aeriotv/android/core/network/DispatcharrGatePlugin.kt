@@ -50,8 +50,9 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
         if (!isTokenEndpoint) {
             val left = DispatcharrRequestGate.pausedSeconds(server)
             if (left > 0) {
-                Log.i(TAG, "[RATE] skipped ${request.method.value} $path: server paused after a 429, ${left}s left")
-                throw DispatcharrError.RateLimited(left)
+                val reason = DispatcharrRequestGate.pausedReason(server)
+                Log.i(TAG, "[RATE] skipped ${request.method.value} $path: server paused after a 429 ($reason), ${left}s left")
+                throw DispatcharrError.RateLimited(left, reason)
             }
         }
         val call = proceed(request)
@@ -60,14 +61,15 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
             val secs = DispatcharrRequestGate.parseRetryAfter(retryAfterRaw)
             val serverHeader = call.response.headers["Server"]
             val body = runCatching { call.response.bodyAsText().take(200) }.getOrDefault("")
+            val reason = rateLimitReasonOf(body)
             Log.w(
                 TAG,
-                "[RATE] HTTP 429 for ${request.method.value} $path: Retry-After=${retryAfterRaw ?: "none"} " +
+                "[RATE] HTTP 429 for ${request.method.value} $path: reason=$reason Retry-After=${retryAfterRaw ?: "none"} " +
                     "(waiting ${secs}s) Server=${serverHeader ?: "none"} body=" +
                     LogSanitizer.redact(body.replace('\n', ' ')),
             )
-            DispatcharrRequestGate.pause(server, secs)
-            throw DispatcharrError.RateLimited(secs)
+            DispatcharrRequestGate.pause(server, secs, reason)
+            throw DispatcharrError.RateLimited(secs, reason)
         }
         call
     }

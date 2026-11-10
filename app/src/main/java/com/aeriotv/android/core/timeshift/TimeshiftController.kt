@@ -211,6 +211,8 @@ class TimeshiftController @Inject constructor(
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .followRedirects(true)
+            // No fill opens while the server is paused after a 429 (StreamGate).
+            .addInterceptor(com.aeriotv.android.core.playback.StreamGate.interceptor)
             .build()
     }
 

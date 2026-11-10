@@ -30,7 +30,12 @@ object DispatcharrConnectionLimit {
     /** [STREAM_ENDED] is not a server refusal: the live stream ended cleanly
      *  again right after its one reconnect (see AerioExoPlayerHolder
      *  onLiveCleanEnd). It reuses the same card and Retry plumbing. */
-    enum class Kind { USER_STREAM_LIMIT, PROVIDER_LIMIT, STREAM_ENDED }
+    enum class Kind {
+        USER_STREAM_LIMIT, PROVIDER_LIMIT, STREAM_ENDED,
+        /** Not a limit: the server is rate-limiting this network (API key
+         *  lockout, [StreamGate]). Same card: a countdown, then the give-up copy. */
+        RATE_LIMITED,
+    }
 
     data class Notice(
         val kind: Kind,
@@ -68,12 +73,17 @@ object DispatcharrConnectionLimit {
     /** Same match for a raw OkHttp response (cast ingest, retained fill). */
     fun fromResponse(code: Int, body: String): Notice? {
         if (!directConnectActive) return null
-        val reason = Dispatcharr503.errorField(body) ?: return null
+        // Timeshift answers the stream limit with 403 and a plain-text body.
+        val reason = Dispatcharr503.errorField(body)
+            ?: body.trim().takeIf { code == 403 && it.startsWith(USER_LIMIT_PREFIX, ignoreCase = true) && it.length <= 200 }
+            ?: return null
         return when {
-            code == 429 && reason.startsWith(USER_LIMIT_PREFIX, ignoreCase = true) -> Notice(
+            (code == 429 || code == 403) && reason.startsWith(USER_LIMIT_PREFIX, ignoreCase = true) -> Notice(
                 kind = Kind.USER_STREAM_LIMIT,
                 title = "Too many sessions playing",
-                message = userLimitMessage(reason),
+                // Shared spec 2026-11-10: the count read from the server's text
+                // ("Stream limit exceeded (2 concurrent streams allowed)").
+                message = com.aeriotv.android.core.network.streamLimitMessage(reason),
             )
             code == 503 && reason.startsWith(PROVIDER_LIMIT_PREFIX, ignoreCase = true) -> Notice(
                 kind = Kind.PROVIDER_LIMIT,
@@ -85,17 +95,6 @@ object DispatcharrConnectionLimit {
         }
     }
 
-    private fun userLimitMessage(reason: String): String {
-        val count = Regex("""\((\d+)""").find(reason)?.groupValues?.get(1)?.toIntOrNull()
-        val devices = when (count) {
-            null -> "a limited number of sessions"
-            1 -> "1 session"
-            else -> "$count sessions"
-        }
-        return "Your account can play $devices at once, and they are all in use. " +
-            "Stop something that is playing, or contact your server administrator."
-    }
-
     /** Load-error policy wrapper: a limit refusal is never retried by Media3
      *  itself; everything else defers to [base]. */
     class LoadErrorPolicy(
@@ -105,6 +104,7 @@ object DispatcharrConnectionLimit {
             loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo,
         ): Long {
             if (parse(loadErrorInfo.exception) != null) return C.TIME_UNSET
+            if (StreamGate.noRetry(loadErrorInfo.exception)) return C.TIME_UNSET
             if (ForceHls.findServerHlsRedirect(loadErrorInfo.exception) != null) return C.TIME_UNSET
             if (LiveRedirect.findUpstreamHls(loadErrorInfo.exception) != null) return C.TIME_UNSET
             return base.getRetryDelayMsFor(loadErrorInfo)

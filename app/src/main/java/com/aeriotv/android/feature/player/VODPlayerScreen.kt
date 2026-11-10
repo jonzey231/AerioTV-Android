@@ -1229,7 +1229,7 @@ fun VODPlayerScreen(
                 // auth headers. A bare DefaultHttpDataSource.Factory cannot open
                 // file://, so local recordings would otherwise fail to load.
                 val upstreamFactory: androidx.media3.datasource.DataSource.Factory =
-                    DefaultDataSource.Factory(ctx, dataSourceFactory).let { base ->
+                    DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(dataSourceFactory)).let { base ->
                         // Catch-up (task #133): a Dispatcharr /timeshift/ archive
                         // reports an estimated Content-Length and re-redirects to
                         // a fresh ?session_id on every connection, so ExoPlayer's
@@ -1247,6 +1247,9 @@ fun VODPlayerScreen(
                 val tracedFactory = tracer.wrapDataSourceFactory(upstreamFactory)
                 val mediaSourceFactory = DefaultMediaSourceFactory(ctx)
                     .setDataSourceFactory(tracedFactory)
+                    // A rate-limited or stream-limited open is never re-GET by
+                    // Media3 itself (StreamGate, VodStreamRefusal).
+                    .setLoadErrorHandlingPolicy(com.aeriotv.android.core.playback.StreamGate.LoadErrorPolicy())
 
                 // Phone mini expand (PhoneVodMini.kt): adopt the instance that
                 // kept playing in the floating mini instead of building one.
@@ -1272,6 +1275,15 @@ fun VODPlayerScreen(
 
                             override fun onPlayerError(error: PlaybackException) {
                                 Log.e(TAG, "VOD ExoPlayer error: ${error.errorCodeName}", error)
+                                // Stream 429 (shared spec 2026-11-10): Dispatcharr
+                                // rate-limited this network, or the stream limit.
+                                // Before the catch-up 4xx rules: timeshift says
+                                // "Stream limit exceeded" with a 403.
+                                VodStreamRefusal.onError(error, streamUrl)?.let { line ->
+                                    playbackErrorMessage = line
+                                    errorReconnecting = false
+                                    return
+                                }
                                 // Catch-up (task #136): a provider that flags
                                 // tv_archive but serves no archive answers the
                                 // timeshift URL with 404 "Catch-up not
@@ -1396,6 +1408,7 @@ fun VODPlayerScreen(
                                     dvrMigratedFromMs = -1L
                                 }
                                 if (playbackState == Player.STATE_READY) dvrStatusText = null
+                                if (playbackState == Player.STATE_READY) VodStreamRefusal.reset()
                                 if (playbackState == Player.STATE_READY &&
                                     playbackErrorMessage != null
                                 ) {
@@ -2252,15 +2265,24 @@ fun VODPlayerScreen(
         playbackErrorMessage?.let { errMsg ->
             LaunchedEffect(errorRetrySerial) {
                 errorReconnecting = false
+                // Stream limit, or the rate-limit budget is spent: no auto retry.
+                if (VodStreamRefusal.noAutoRetry) {
+                    errorRetryCountdown = 0
+                    return@LaunchedEffect
+                }
+                // Rate-limited: count the server's pause down, then ONE retry.
+                val rateWait = VodStreamRefusal.countdownSeconds()
                 // 5s, 10s, 20s, then 30s forever.
-                var remaining = minOf(30, 5 shl minOf(errorRetrySerial, 3))
+                var remaining = rateWait?.toInt() ?: minOf(30, 5 shl minOf(errorRetrySerial, 3))
                 while (remaining > 0) {
                     errorRetryCountdown = remaining
+                    if (rateWait != null) playbackErrorMessage = VodStreamRefusal.countdownText(remaining.toLong())
                     delay(1_000L)
                     remaining -= 1
                 }
                 errorRetryCountdown = 0
                 errorReconnecting = true
+                if (rateWait != null) VodStreamRefusal.noteRetry()
                 errorRetrySerial += 1
                 doErrorRetry()
             }
@@ -2292,6 +2314,8 @@ fun VODPlayerScreen(
                 Text(
                     text = when {
                         errorReconnecting -> "Reconnecting…"
+                        // The rate-limit line above already counts down.
+                        VodStreamRefusal.countdownSeconds() != null -> " "
                         errorRetryCountdown > 0 -> "Retrying in ${errorRetryCountdown}s"
                         else -> " "
                     },
@@ -2331,6 +2355,7 @@ fun VODPlayerScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
                         onClick = {
+                            VodStreamRefusal.manualRetry()
                             errorReconnecting = true
                             errorRetrySerial += 1
                             doErrorRetry()
@@ -2458,7 +2483,7 @@ fun VODPlayerScreen(
     }
 
     DisposableEffect(Unit) {
-        onDispose { /* AndroidView.onRelease handles native cleanup. */ }
+        onDispose { VodStreamRefusal.reset() /* AndroidView.onRelease handles native cleanup. */ }
     }
 }
 

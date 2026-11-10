@@ -90,22 +90,26 @@ class DispatcharrRateLimitTest {
         RateLimitRetry.tick = {}
         val shown = mutableListOf<Long>()
         var attempts = 0
-        val r = RateLimitRetry.run<Int>(onCountdown = { shown += it }) {
+        val reasons = mutableSetOf<RateLimitReason>()
+        val r = RateLimitRetry.run<Int>(onCountdown = { left, reason -> shown += left; reasons += reason }) {
             attempts++
-            Result.failure(DispatcharrError.RateLimited(3))
+            Result.failure(DispatcharrError.RateLimited(3, RateLimitReason.ApiKeyLockout))
         }
         assertEquals(3, attempts)
         assertEquals(listOf(3L, 2L, 1L, 3L, 2L, 1L), shown)
+        assertEquals(setOf(RateLimitReason.ApiKeyLockout), reasons)
         val msg = r.exceptionOrNull()!!.message!!
-        assertTrue(msg, msg.contains("rate-limiting"))
-        assertTrue(msg, !msg.contains("Could not connect"))
+        assertEquals(
+            "Dispatcharr rate-limited this network after too many failed API key attempts. Wait 3 seconds and try again.",
+            msg,
+        )
     }
 
     @Test fun countdownStopsOnSuccess() = runBlocking {
         RateLimitRetry.tick = {}
         var attempts = 0
         var retried = 0
-        val r = RateLimitRetry.run(onCountdown = {}, onRetry = { retried++ }) {
+        val r = RateLimitRetry.run(onCountdown = { _, _ -> }, onRetry = { retried++ }) {
             attempts++
             if (attempts == 1) Result.failure(DispatcharrError.RateLimited(1)) else Result.success(7)
         }
@@ -116,7 +120,7 @@ class DispatcharrRateLimitTest {
 
     @Test fun otherFailuresAreNotRetried() = runBlocking {
         var attempts = 0
-        val r = RateLimitRetry.run<Int>(onCountdown = {}) {
+        val r = RateLimitRetry.run<Int>(onCountdown = { _, _ -> }) {
             attempts++
             Result.failure(DispatcharrError.Unauthorized("HTTP 401"))
         }
@@ -125,7 +129,7 @@ class DispatcharrRateLimitTest {
     }
 
     @Test fun countdownCopy() {
-        assertEquals("The server is busy. Trying again in 45 seconds.", serverBusyCountdown(45))
-        assertEquals("The server is busy. Trying again in 1 second.", serverBusyCountdown(1))
+        assertEquals("Dispatcharr rate-limited this network (HTTP 429). Trying again in 45 seconds.", serverBusyCountdown(45))
+        assertEquals("Dispatcharr rate-limited this network (HTTP 429). Trying again in 1 second.", serverBusyCountdown(1))
     }
 }

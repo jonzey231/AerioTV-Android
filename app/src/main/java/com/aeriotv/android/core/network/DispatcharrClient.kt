@@ -232,8 +232,9 @@ class DispatcharrClient @Inject constructor() {
         // A 429 earlier in the throttle window: do not spend another attempt
         // (each one re-arms nothing but still counts against the user's IP).
         DispatcharrLoginGate.serverParkedSeconds(baseUrl).takeIf { it > 0 }?.let { left ->
-            android.util.Log.i("DispatcharrAuthBroker", "[AUTH] login throttled by the server; next attempt in ${left}s")
-            throw DispatcharrError.LoginThrottled(left)
+            val reason = DispatcharrLoginGate.parkedReason(baseUrl)
+            android.util.Log.i("DispatcharrAuthBroker", "[AUTH] login throttled by the server ($reason); next attempt in ${left}s")
+            throw DispatcharrError.LoginThrottled(left, reason)
         }
         val response: HttpResponse = try {
             client.post("${baseUrl.trimEnd('/')}/api/accounts/token/") {
@@ -263,8 +264,9 @@ class DispatcharrClient @Inject constructor() {
             // iOS twin fixed the same day). Self-clearing: say WAIT, and
             // park every login to this server until Retry-After.
             val secs = DispatcharrRequestGate.parseRetryAfter(response.headers["Retry-After"])
-            DispatcharrLoginGate.parkServer(baseUrl, secs)
-            throw DispatcharrError.LoginThrottled(secs)
+            val reason = rateLimitReasonOf(runCatching { response.bodyAsText().take(300) }.getOrNull())
+            DispatcharrLoginGate.parkServer(baseUrl, secs, reason)
+            throw DispatcharrError.LoginThrottled(secs, reason)
         }
         if (!response.status.isSuccess()) {
             throw DispatcharrError.Transport("Login transport error: HTTP $code")
@@ -318,8 +320,9 @@ class DispatcharrClient @Inject constructor() {
         }
         if (code == 429) {
             val secs = DispatcharrRequestGate.parseRetryAfter(response.headers["Retry-After"])
-            DispatcharrLoginGate.parkServer(baseUrl, secs)
-            throw DispatcharrError.LoginThrottled(secs)
+            val reason = rateLimitReasonOf(runCatching { response.bodyAsText().take(300) }.getOrNull())
+            DispatcharrLoginGate.parkServer(baseUrl, secs, reason)
+            throw DispatcharrError.LoginThrottled(secs, reason)
         }
         if (!response.status.isSuccess()) {
             throw DispatcharrError.Transport("Refresh transport error: HTTP $code")

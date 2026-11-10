@@ -2341,6 +2341,9 @@ private fun ExoTile(
     // Reset by Retry, by a swap, and by 60 s of healthy playback.
     // [3] = clean ends in a row whose session delivered under 256 KB.
     val tileCleanEnd = remember { longArrayOf(0L, 0L, 0L, 0L) }
+    // Rate-limit waits spent on this tile (StreamGate): [0] count; reset when
+    // the tile plays again.
+    val tileRateWaits = remember { intArrayOf(0) }
     val tileRetrySerial = remember { mutableIntStateOf(0) }
     // Live tile stream walk and 503 handling (Apple TSHLSRemuxer tile
     // parity): the player's LiveStreamFailover, one per tile, walking on the
@@ -2457,7 +2460,7 @@ private fun ExoTile(
             // only; it counts bytes and changes nothing about the transfer.
             val vodDataSourceFactory: androidx.media3.datasource.DataSource.Factory? =
                 if (isVod || tile.kind == TileKind.Dvr) {
-                    tracer.wrapDataSourceFactory(DefaultDataSource.Factory(ctx, httpFactory))
+                    tracer.wrapDataSourceFactory(DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(httpFactory)))
                 } else {
                     null
                 }
@@ -2736,6 +2739,7 @@ private fun ExoTile(
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) {
+                        tileRateWaits[0] = 0
                         consecutiveRetries = 0
                         tile503[0] = 0L
                         tile503[1] = 0L
@@ -2859,6 +2863,36 @@ private fun ExoTile(
                         player.prepare()
                         player.playWhenReady = !paused
                         noteLiveReprime(userInitiated = false)
+                        return
+                    }
+                    // Dispatcharr rate-limited this network (StreamGate): count the
+                    // pause down on the tile, retry once, never the tile ladder
+                    // or a member-stream walk.
+                    com.aeriotv.android.core.playback.StreamGate.find(error)?.let { rl ->
+                        tileError.value = null
+                        failover.halt("rate limited")
+                        liveCalls.stop(player)
+                        val wait = com.aeriotv.android.core.playback.StreamGate.waitSeconds(retryUrl, rl)
+                        if (tileRateWaits[0] >= com.aeriotv.android.core.playback.StreamGate.MAX_AUTO_RETRIES) {
+                            Log.w(TAG, "[RATE] tile $channelName rate-limited (${rl.reason}); waiting for Retry")
+                            tileLimit.value = com.aeriotv.android.core.playback.StreamGate.finalNotice(wait, rl.reason)
+                            return
+                        }
+                        tileRateWaits[0] += 1
+                        Log.w(TAG, "[RATE] tile $channelName rate-limited (${rl.reason}); retrying once in ${wait}s")
+                        failoverScope.launch {
+                            var left = wait
+                            while (left > 0) {
+                                if (tileLimit.value?.kind != com.aeriotv.android.core.playback.DispatcharrConnectionLimit.Kind.RATE_LIMITED &&
+                                    left != wait
+                                ) return@launch
+                                tileLimit.value = com.aeriotv.android.core.playback.StreamGate.countdownNotice(left, rl.reason)
+                                kotlinx.coroutines.delay(1_000L)
+                                left--
+                            }
+                            if (tileLimit.value?.kind != com.aeriotv.android.core.playback.DispatcharrConnectionLimit.Kind.RATE_LIMITED) return@launch
+                            tileRetryRef.value?.invoke()
+                        }
                         return
                     }
                     if (!isVod && tile.kind != TileKind.Dvr) {
@@ -3065,7 +3099,7 @@ private fun ExoTile(
                                 if (headers.isNotEmpty()) {
                                     swapHttp.setDefaultRequestProperties(headers)
                                 }
-                                DefaultDataSource.Factory(view.context, swapHttp)
+                                DefaultDataSource.Factory(view.context, com.aeriotv.android.core.playback.StreamGate.Factory(swapHttp))
                             } else {
                                 // DefaultHttpDataSource defaults: 8 s connect + read.
                                 com.aeriotv.android.core.playback.ServerHlsGuard.Factory(
@@ -3231,6 +3265,8 @@ private fun ExoTile(
             compact = true,
             onRetry = {
                 tileRetrySerial.intValue += 1
+                // A manual Retry earns the rate-limit retry budget again.
+                tileRateWaits[0] = 0
                 // Retry is a fresh tune: the walk starts over.
                 failover.resetWalk()
                 tileRetryRef.value?.invoke()

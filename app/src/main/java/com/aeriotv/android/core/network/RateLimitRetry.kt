@@ -22,21 +22,25 @@ object RateLimitRetry {
      * status line back. The last failure is rewritten to the rate-limit copy.
      */
     suspend fun <T> run(
-        onCountdown: (secondsLeft: Long) -> Unit,
+        /** [reason]: what the server said the 429 was for; the caller shows
+         *  [serverBusyCountdown] (secondsLeft, reason). */
+        onCountdown: (secondsLeft: Long, reason: RateLimitReason) -> Unit,
         onRetry: () -> Unit = {},
         attempt: suspend () -> Result<T>,
     ): Result<T> {
         var retries = 0
         while (true) {
             val r = attempt()
-            val wait = r.exceptionOrNull()?.rateLimitSeconds() ?: return r
+            val err = r.exceptionOrNull()
+            val wait = err?.rateLimitSeconds() ?: return r
+            val reason = err.rateLimitReason()
             if (retries >= MAX_AUTO_RETRIES) {
-                return Result.failure(RateLimitedFinal(wait, r.exceptionOrNull()))
+                return Result.failure(RateLimitedFinal(wait, err, reason))
             }
             retries++
             var left = wait.coerceIn(1, DispatcharrRequestGate.MAX_RETRY_AFTER_S)
             while (left > 0) {
-                onCountdown(left)
+                onCountdown(left, reason)
                 tick()
                 left--
             }
@@ -45,6 +49,9 @@ object RateLimitRetry {
     }
 
     /** The give-up failure: its message is the user-facing rate-limit copy. */
-    class RateLimitedFinal(val seconds: Long, cause: Throwable?) :
-        Exception(rateLimitedMessage(seconds), cause)
+    class RateLimitedFinal(
+        val seconds: Long,
+        cause: Throwable?,
+        val reason: RateLimitReason = cause?.rateLimitReason() ?: RateLimitReason.Other,
+    ) : Exception(rateLimitedMessage(seconds, reason), cause)
 }

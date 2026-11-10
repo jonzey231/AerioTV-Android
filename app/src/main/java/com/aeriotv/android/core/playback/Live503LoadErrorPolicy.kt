@@ -34,6 +34,9 @@ class Live503LoadErrorPolicy : DefaultLoadErrorHandlingPolicy() {
         // A Dispatcharr connection-limit 429 is not transient either; the
         // holder shows the limit notice with Retry instead.
         if (DispatcharrConnectionLimit.parse(loadErrorInfo.exception) != null) return C.TIME_UNSET
+        // A rate-limited open (API key lockout, or the gate paused after a
+        // 429): the holder waits it out and retries once, Media3 never does.
+        if (StreamGate.noRetry(loadErrorInfo.exception)) return C.TIME_UNSET
         return super.getRetryDelayMsFor(loadErrorInfo)
     }
 }

@@ -139,6 +139,9 @@ internal class TileLiveCalls {
                 // holds waits up to 3 s for that connection to go
                 // ([SINGLE-CONN], a Multiview rebuild mounts fresh tiles while
                 // the old tiles' ingests are still open).
+                // No open while the server is paused after a 429; a lockout
+                // 429 pauses it (StreamGate).
+                .addInterceptor(com.aeriotv.android.core.playback.StreamGate.interceptor)
                 .addInterceptor(com.aeriotv.android.core.playback.LiveConnectionRegistry.interceptor)
                 .eventListener(com.aeriotv.android.core.playback.LiveConnectionRegistry.eventListener)
                 // Mirrors setAllowCrossProtocolRedirects(true).
@@ -206,6 +209,9 @@ internal class TileLiveLoadErrorPolicy(
     override fun getRetryDelayMsFor(
         loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo,
     ): Long {
+        if (com.aeriotv.android.core.playback.StreamGate.noRetry(loadErrorInfo.exception)) {
+            return androidx.media3.common.C.TIME_UNSET
+        }
         if (com.aeriotv.android.core.playback.DispatcharrConnectionLimit.parse(loadErrorInfo.exception) == null &&
             com.aeriotv.android.core.playback.Dispatcharr503.parse(loadErrorInfo.exception) != null
         ) return androidx.media3.common.C.TIME_UNSET

@@ -51,7 +51,7 @@ fun ConnectionLimitCard(
         ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
+        if (notice.title.isNotBlank()) Text(
             text = notice.title,
             style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.headlineSmall,
             color = Color.White,
@@ -70,7 +70,9 @@ fun ConnectionLimitCard(
         ) {
             Text("Retry")
         }
-        if (!compact && notice.kind != DispatcharrConnectionLimit.Kind.STREAM_ENDED) {
+        if (!compact && notice.kind != DispatcharrConnectionLimit.Kind.STREAM_ENDED &&
+            notice.kind != DispatcharrConnectionLimit.Kind.RATE_LIMITED
+        ) {
             Text(
                 text = "Close another stream, then press Retry.",
                 style = MaterialTheme.typography.bodySmall,
