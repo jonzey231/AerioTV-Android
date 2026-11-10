@@ -10,6 +10,7 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.request.prepareGet
 import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.feature.ondemand.vodMeasuredDescriptors
+import com.aeriotv.android.core.security.clientCertificates
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -186,6 +187,7 @@ class DispatcharrClient @Inject constructor() {
             // here keeps every code path well-behaved without scattering
             // Semaphore.withPermit{} across 20+ call sites.
             config {
+                clientCertificates()
                 dispatcher(
                     Dispatcher().apply {
                         // Cap TOTAL concurrent requests at 4 (covers the rare
@@ -209,6 +211,7 @@ class DispatcharrClient @Inject constructor() {
      * are configured, so we drop down to OkHttp directly for this one call.
      */
     private val noRedirectOkHttp: OkHttpClient = OkHttpClient.Builder()
+        .clientCertificates()
         .followRedirects(false)
         .followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS)

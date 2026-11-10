@@ -20,6 +20,7 @@ import com.aeriotv.android.R
 import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
 import com.aeriotv.android.core.data.db.entity.LocalRecordingEntity
 import com.aeriotv.android.core.preferences.AppPreferences
+import com.aeriotv.android.core.security.clientCertificates
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.text.SimpleDateFormat
@@ -87,6 +88,7 @@ class LocalRecordingService : Service() {
 
     private val okHttp: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .clientCertificates()
             .followRedirects(true)
             .followSslRedirects(true)
             .connectTimeout(15, TimeUnit.SECONDS)

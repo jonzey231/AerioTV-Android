@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.playback
 
 import android.util.Log
+import com.aeriotv.android.core.security.clientCertificates
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -157,6 +158,7 @@ object ForceHls {
 
     private val resolveClient: okhttp3.OkHttpClient by lazy {
         okhttp3.OkHttpClient.Builder()
+            .clientCertificates()
             .followRedirects(false)
             .followSslRedirects(false)
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)

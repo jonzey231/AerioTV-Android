@@ -32,6 +32,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import com.aeriotv.android.core.security.clientCertificates
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import com.aeriotv.android.BuildConfig
@@ -4451,6 +4452,7 @@ class AerioExoPlayerHolder @Inject constructor(
      *  used. followSslRedirects mirrors setAllowCrossProtocolRedirects. */
     private val liveHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .clientCertificates()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(liveReadTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
             // A second open to a channel another player still holds waits up

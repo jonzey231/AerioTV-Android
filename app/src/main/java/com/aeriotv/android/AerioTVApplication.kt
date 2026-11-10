@@ -24,6 +24,7 @@ import com.aeriotv.android.core.network.ActivePlaylistCredentials
 import com.aeriotv.android.core.network.DispatcharrImageAuthInterceptor
 import com.aeriotv.android.core.network.DispatcharrWarmupCoordinator
 import com.aeriotv.android.core.security.SafeUrlInterceptor
+import com.aeriotv.android.core.security.clientCertificates
 import okhttp3.OkHttpClient
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.feature.multiview.MultiviewStore
@@ -74,6 +75,8 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var aerioDatabase: AerioDatabase
     @Inject lateinit var driveSync: com.aeriotv.android.core.sync.DriveSyncManager
     @Inject lateinit var timeshiftStore: com.aeriotv.android.core.timeshift.TimeshiftBufferStore
+    /** Injected so its init hands the mTLS key manager its lookup before any request goes out. */
+    @Inject lateinit var clientCertificateStore: com.aeriotv.android.core.security.ClientCertificateStore
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -104,6 +107,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // Header injection is scoped via ActivePlaylistCredentials so a
         // third-party tvg-logo CDN doesn't see the key.
         val imageHttp = OkHttpClient.Builder()
+            .clientCertificates()
             .addInterceptor(DispatcharrImageAuthInterceptor(activeCredentials))
             .build()
         return ImageLoader.Builder(context)
@@ -144,6 +148,9 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
 
     override fun onCreate() {
         super.onCreate()
+        // Client certificates (mTLS) for HttpURLConnection too: Media3's
+        // DefaultHttpDataSource and the LAN probe have no factory setter.
+        com.aeriotv.android.core.security.ClientCertificates.installDefault()
         // Profiles: restore the active Dispatcharr profile's scope before any
         // scoped read (favorites, recents, view prefs) can run, then start the
         // one-time default-profile migration and active-playlist tracking.

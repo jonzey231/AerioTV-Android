@@ -1273,8 +1273,10 @@ class PlaylistViewModel @Inject constructor(
      * allocate a 103877413 byte allocation..." reads like a crash, not
      * guidance (Discord report, Onn 4K, 2026-07-29).
      */
-    private fun loadFailureMessage(prefix: String, t: Throwable): String =
-        if (t is RateLimitRetry.RateLimitedFinal) {
+    private fun loadFailureMessage(prefix: String, t: Throwable): String {
+        val mtls = com.aeriotv.android.core.security.ClientCertificates
+            .describe(t, com.aeriotv.android.core.security.ClientCertificates.hostOf(_state.value.url))
+        return if (t is RateLimitRetry.RateLimitedFinal) {
             t.message ?: rateLimitedMessage(t.seconds)
         } else if (t.rateLimitSeconds() != null) {
             // A 429 names the rate limit, never "Could not connect: HTTP 429".
@@ -1282,9 +1284,12 @@ class PlaylistViewModel @Inject constructor(
         } else if (t is OutOfMemoryError) {
             "$prefix: playlist is too large for this device's memory. If this is an " +
                 "Xtream Codes get.php link, add it with the Xtream Codes source type instead."
+        } else if (mtls != null) {
+            "$prefix: $mtls"
         } else {
             "$prefix: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}"
         }
+    }
 
     private var epgLoadJob: kotlinx.coroutines.Job? = null
     private var epgLoadPlaylistId: String? = null

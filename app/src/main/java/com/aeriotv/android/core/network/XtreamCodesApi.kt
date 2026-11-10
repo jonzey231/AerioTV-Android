@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.network
 
 import android.util.Log
+import com.aeriotv.android.core.security.clientCertificates
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
@@ -85,6 +86,7 @@ class XtreamCodesApi @Inject constructor() {
         }
         engine {
             config {
+                clientCertificates()
                 // Concurrency gate. Dispatcharr's XC bridge needs per-category
                 // enumeration (hundreds of small JSON requests for a full VOD +
                 // series library), so allow a few more in flight than the
