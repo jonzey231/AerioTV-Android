@@ -346,8 +346,13 @@ fun AerioTVNavHost(
     val dlLaunchPicker by profileManagerForNav.launchPicker.collectAsStateWithLifecycle()
     val dlSwitching by profileManagerForNav.switching.collectAsStateWithLifecycle()
     val dlIsTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val setupMarkerContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     setupLink?.let { link ->
-        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = null, link = link, onDismiss = { setupLink = null })
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = null, link = link, onDismiss = {
+            // Cancelled unless it was sent: a fresh scan of the same code may open it again.
+            com.aeriotv.android.core.setup.SetupLinkMarker.markClosed(setupMarkerContext, link)
+            setupLink = null
+        })
     }
     if (dlGraphEntry != null) {
         val dlVm: PlaylistViewModel = hiltViewModel(dlGraphEntry)
@@ -500,6 +505,11 @@ fun AerioTVNavHost(
             when (action) {
                 com.aeriotv.android.feature.devicesetup.SetupLinkAction.Hold -> Unit
                 com.aeriotv.android.feature.devicesetup.SetupLinkAction.Open -> {
+                    // A newer link replaces the open one: the old one counts as cancelled.
+                    setupLink?.takeIf { it != link }?.let {
+                        com.aeriotv.android.core.setup.SetupLinkMarker.markClosed(setupMarkerContext, it)
+                    }
+                    com.aeriotv.android.core.setup.SetupLinkMarker.markOpen(setupMarkerContext, link)
                     setupLink = link
                     pendingSetupLink = null
                 }

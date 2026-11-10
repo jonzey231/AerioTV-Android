@@ -268,6 +268,8 @@ class SetUpTvViewModel @Inject constructor(
                 SetupSender.SendResult.Ok -> {
                     // Never offered again under this key, even if the advert goodbye is lost.
                     SetupDockDismissals.dismiss(t)
+                    // A camera link for this code is never opened again (SetupLinkMarker).
+                    com.aeriotv.android.core.setup.SetupLinkMarker.markSent(context, code, target.pk)
                     Step.Sent
                 }
                 SetupSender.SendResult.WrongCode -> Step.Code(t.copy(code = null), "The device did not accept that code. Check the code on the device and try again.")

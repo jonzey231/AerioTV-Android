@@ -628,7 +628,7 @@ class MainActivity : ComponentActivity() {
         // singleTop means a second LAUNCH/aeriotv:// intent arrives here
         // instead of recreating the activity. Capture the URI for the
         // Compose tree.
-        captureDeepLinkFrom(intent)
+        captureDeepLinkFrom(intent, coldLaunch = false)
     }
 
     /**
@@ -636,12 +636,19 @@ class MainActivity : ComponentActivity() {
      * `aeriotv`. Supported hosts: `channel`, `vod`, `guide`, `settings`. Path is the id /
      * uuid / guideMatchKey. Anything else is ignored.
      */
-    private fun captureDeepLinkFrom(intent: Intent?) {
+    private fun captureDeepLinkFrom(intent: Intent?, coldLaunch: Boolean) {
         val data = intent?.data ?: return
         if (!data.scheme.equals("aeriotv", ignoreCase = true)) return
         val host = data.host?.lowercase() ?: return
         if (host == "setup") {
-            deepLinkTarget.value = DeepLinkTarget.DeviceSetup(data.toString())
+            val link = data.toString()
+            // The same link twice: its sheet is open, it was sent, or a cold
+            // launch is replaying the task's old intent. Never log the link.
+            if (com.aeriotv.android.core.setup.SetupLinkMarker.ignore(this, link, coldLaunch)) {
+                Log.i("AerioSetup", "[SETUP] camera link ignored: already handled (cold=$coldLaunch)")
+                return
+            }
+            deepLinkTarget.value = DeepLinkTarget.DeviceSetup(link)
             return
         }
         val path = data.pathSegments?.firstOrNull()?.takeIf { it.isNotBlank() }
@@ -1383,7 +1390,14 @@ class MainActivity : ComponentActivity() {
         // Audit task #47: parse the launching intent's data URI for a
         // aeriotv:// deep link. The Compose tree consumes deepLinkTarget
         // via a top-level effect, navigates, then clears it.
-        if (!castLaunch) captureDeepLinkFrom(intent)
+        // A launch intent the system rebuilt (from Recents, or a restore with
+        // saved state) is not a new request: replaying its link reopened an
+        // old Set up sheet after the process was killed (Nothing Phone,
+        // 2026-11-10). SetupLinkMarker covers the launcher case, which
+        // carries no such flag.
+        val replayed = savedInstanceState != null ||
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (!castLaunch && !replayed) captureDeepLinkFrom(intent, coldLaunch = true)
         setContent {
             val theme by appPreferences.selectedTheme.collectAsState(initial = AppTheme.Aerio)
             // DEFAULT MUST be Dark: the initial (pre-first-emission) value AND
