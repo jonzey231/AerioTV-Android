@@ -338,6 +338,13 @@ fun AerioTVNavHost(
     }
     // Set up a TV opened from a scanned aeriotv://setup link (docs/DeviceSetupHandoff.md).
     var setupLink by remember { mutableStateOf<String?>(null) }
+    // A camera link waiting for its gate (SetupLinkRules): held while the
+    // launch PIN screen / picker is up or the active playlist is not known
+    // yet, then opened only if the profile now active may set up a device.
+    var pendingSetupLink by remember { mutableStateOf<String?>(null) }
+    val dlLaunchGate by profileManagerForNav.launchGate.collectAsStateWithLifecycle()
+    val dlLaunchPicker by profileManagerForNav.launchPicker.collectAsStateWithLifecycle()
+    val dlSwitching by profileManagerForNav.switching.collectAsStateWithLifecycle()
     val dlIsTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
     setupLink?.let { link ->
         com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = null, link = link, onDismiss = { setupLink = null })
@@ -414,8 +421,9 @@ fun AerioTVNavHost(
                     onDeepLinkConsumed()
                 }
                 is DeepLinkTarget.DeviceSetup -> {
-                    // A phone camera scanned a TV's setup QR code. TVs ignore it.
-                    if (!dlIsTv) setupLink = target.link
+                    // A phone camera scanned a TV's setup QR code. The gate
+                    // below decides (TVs, locked app, Child profile).
+                    pendingSetupLink = target.link
                     onDeepLinkConsumed()
                 }
                 is DeepLinkTarget.OpenMultiview -> {
@@ -470,6 +478,32 @@ fun AerioTVNavHost(
                     }
                     // else: channels still loading; leave the target pending.
                 }
+            }
+        }
+        // Setup link gate (security, 2026-11-10): the Settings entry is
+        // offered only to an Admin or default profile, and the camera link
+        // must follow the same rule. Held while locked or starting; then
+        // opened (or handed to the open sheet, which replaces its device) or
+        // dropped without a word.
+        val dlActivePid = dlState.playlist?.id
+        val dlStarting = dlState.phase == PlaylistViewModel.Phase.Bootstrapping
+        val dlLocked = dlLaunchGate != null || dlLaunchPicker != null || dlSwitching
+        LaunchedEffect(pendingSetupLink, dlLocked, dlStarting, dlActivePid) {
+            val link = pendingSetupLink ?: return@LaunchedEffect
+            val action = com.aeriotv.android.feature.devicesetup.setupLinkAction(
+                isTv = dlIsTv,
+                locked = dlLocked,
+                starting = dlStarting,
+                canSetUpTv = dlActivePid?.let(profileManagerForNav::canSetUpTv) ?: false,
+            )
+            android.util.Log.i("AerioSetup", "[SETUP] camera link: $action")
+            when (action) {
+                com.aeriotv.android.feature.devicesetup.SetupLinkAction.Hold -> Unit
+                com.aeriotv.android.feature.devicesetup.SetupLinkAction.Open -> {
+                    setupLink = link
+                    pendingSetupLink = null
+                }
+                com.aeriotv.android.feature.devicesetup.SetupLinkAction.Drop -> pendingSetupLink = null
             }
         }
     }
