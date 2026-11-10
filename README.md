@@ -370,7 +370,7 @@ the single `/api/*` rule.
 ### Client certificate (mTLS)
 
 If the proxy in front of Dispatcharr asks for a client certificate (mutual
-TLS: Pangolin, Traefik, nginx, Caddy), AerioTV 0.5.15 or later presents
+TLS: Pangolin, Traefik, nginx, Caddy), AerioTV TODO or later presents
 one. Every device that connects needs that version.
 
 - **Phone and tablet:** in Add Playlist or Edit Playlist, under
