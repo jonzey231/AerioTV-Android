@@ -85,9 +85,55 @@ const val AUTH_MODE_BEARER = "bearer"
  *  cursor. Hitting the cap logs a warning rather than failing. */
 private const val MAX_LIST_PAGES = 200
 
-/** Dispatcharr's own answer for an unknown key (ApiKeyAuthentication: "Invalid API key"). */
+/**
+ * Dispatcharr's own key check refused the key (ApiKeyAuthentication): "Invalid
+ * API key" for an unknown key, "User inactive" for the key of a deactivated
+ * account. Both are final for every header shape, and the server counts each
+ * one against its per-IP failed-key limit (10 per minute), so the probe stops
+ * at the first. Trying the other shapes for "User inactive" cost two more
+ * counted failures per call and could lock out every device on the network.
+ */
 internal fun isDispatcharrInvalidKeyBody(body: String): Boolean =
-    body.contains("Invalid API key", ignoreCase = true)
+    body.contains("Invalid API key", ignoreCase = true) ||
+        body.contains("User inactive", ignoreCase = true)
+
+/**
+ * One in-flight run per key: concurrent callers for the same key await the
+ * first caller's result instead of running their own (owner 2026-11-10: only
+ * one caller probes a given key at a time). A leader that is cancelled hands
+ * the run to the next waiter rather than failing the others.
+ */
+internal class SingleFlight<K : Any, V> {
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<K, kotlinx.coroutines.CompletableDeferred<V>>()
+
+    suspend fun run(key: K, block: suspend () -> V): V {
+        while (true) {
+            val mine = kotlinx.coroutines.CompletableDeferred<V>()
+            val running = inFlight.putIfAbsent(key, mine)
+            if (running == null) {
+                try {
+                    val value = block()
+                    mine.complete(value)
+                    return value
+                } catch (t: Throwable) {
+                    mine.completeExceptionally(t)
+                    throw t
+                } finally {
+                    inFlight.remove(key, mine)
+                }
+            }
+            try {
+                return running.await()
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                // Our own cancellation ends here; the leader's means run it ourselves.
+                if (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == false) throw c
+            }
+        }
+    }
+
+    /** Runs in flight right now (tests). */
+    val size: Int get() = inFlight.size
+}
 
 @Singleton
 class DispatcharrClient @Inject constructor() {
@@ -820,7 +866,17 @@ class DispatcharrClient @Inject constructor() {
      * 401 does not come from Dispatcharr's key check (a reverse proxy).
      * A 429 propagates as [DispatcharrError.RateLimited].
      */
-    suspend fun probeApiKey(baseUrl: String, apiKey: String): KeyProbe {
+    suspend fun probeApiKey(baseUrl: String, apiKey: String): KeyProbe =
+        // Every caller that hit a 401 with this key at the same moment (the
+        // channel refresh, the guide, On Demand lanes, a poll) shares ONE
+        // probe; each would otherwise spend its own counted failures.
+        keyProbes.run(DispatcharrRequestGate.serverKey(baseUrl) + "|" + DispatcharrRequestGate.keyHash(apiKey)) {
+            probeApiKeyUnshared(baseUrl, apiKey)
+        }
+
+    private val keyProbes = SingleFlight<String, KeyProbe>()
+
+    private suspend fun probeApiKeyUnshared(baseUrl: String, apiKey: String): KeyProbe {
         val url = "${baseUrl.trimEnd('/')}/api/core/version/"
         var sawAuthFailure = false
         for (mode in listOf(AUTH_MODE_BOTH, AUTH_MODE_XAPIKEY, AUTH_MODE_BEARER)) {

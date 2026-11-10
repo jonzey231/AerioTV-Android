@@ -98,6 +98,9 @@ class DispatcharrAuthBroker @Inject constructor(
             block(initialKey)
         } catch (e: DispatcharrError.Unauthorized) {
             if (e is DispatcharrError.KeyRejected) throw e
+            // A 401 that lands after another caller already proved this key
+            // rejected: the hold is in place, so no probe of our own.
+            if (DispatcharrRequestGate.isKeyRejected(initialKey)) throw DispatcharrError.KeyRejected()
             invalidateRow(playlistId)
             // Task #49 (iOS verifyConnection v1.6.20 parity): before assuming
             // the KEY was rotated, check whether the 401 is a header-SHAPE
@@ -107,7 +110,8 @@ class DispatcharrAuthBroker @Inject constructor(
             // from an endpoint-specific 401/403 for a key that still works,
             // and it stops at Dispatcharr's "Invalid API key" answer, so a
             // bad key costs the server's failed-key budget two attempts here,
-            // not four.
+            // not four. Concurrent 401s for the same key share one probe
+            // (DispatcharrClient.probeApiKey is single-flight per key).
             val probe = client.probeApiKey(playlist.urlString, initialKey)
             if (probe is DispatcharrClient.KeyProbe.Accepted) {
                 val detected = persistAuthModeIfChanged(playlist, probe.mode)

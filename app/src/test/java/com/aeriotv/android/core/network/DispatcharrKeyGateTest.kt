@@ -75,6 +75,8 @@ class DispatcharrKeyGateTest {
 
     @Test fun dispatcharrInvalidKeyBodyRecognized() {
         assertTrue(isDispatcharrInvalidKeyBody("{\"detail\":\"Invalid API key\"}"))
+        // A deactivated account's key: final for every header shape, and counted by the server.
+        assertTrue(isDispatcharrInvalidKeyBody("{\"detail\":\"User inactive\"}"))
         assertFalse(isDispatcharrInvalidKeyBody("{\"detail\":\"Authentication credentials were not provided.\"}"))
         assertFalse(isDispatcharrInvalidKeyBody(""))
     }
