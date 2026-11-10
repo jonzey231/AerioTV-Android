@@ -362,6 +362,11 @@ fun ChannelListScreen(
         }
     }
     val filtered = liveSearch.channels
+    // The half-folded player's Guide panel follows this order (active group
+    // and sort), never a search's results.
+    androidx.compose.runtime.LaunchedEffect(filtered, state.searchQuery) {
+        if (state.searchQuery.isBlank()) com.aeriotv.android.feature.player.LiveChannelOrder.publish(filtered.map { it.id })
+    }
     // Live TV search "Programs" section (Logan 2026-11-04, Apple parity):
     // title matches across the whole loaded guide for every channel in the
     // playlist, now forward. Debounced and scanned off the main thread; the

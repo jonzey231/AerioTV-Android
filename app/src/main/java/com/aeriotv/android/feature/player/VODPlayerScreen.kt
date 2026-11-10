@@ -1175,7 +1175,8 @@ fun VODPlayerScreen(
         }
 
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            // Half folded: the top half only (HalfFoldPlayer.kt).
+            modifier = halfFoldVideoModifier(isTvForm),
             factory = { ctx ->
                 // VOD-friendly buffer windows. Bigger than the live numbers
                 // in AerioExoPlayerHolder because VOD users tolerate a
@@ -1912,8 +1913,11 @@ fun VODPlayerScreen(
             scrubLastDirection = 0
         }
 
+        // Half folded: the controls fill the bottom-half panel and stay up
+        // (no Guide on VOD, DVR, or catch-up). HalfFoldPlayer.kt.
+        HalfFoldVodChrome(isTvForm) { halfFoldForce ->
         AnimatedVisibility(
-            visible = chromeVisible && !inPip,
+            visible = (chromeVisible || halfFoldForce) && !inPip,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
@@ -2086,6 +2090,7 @@ fun VODPlayerScreen(
                         .align(Alignment.BottomCenter),
                 )
             }
+        }
         }
 
         // Audio-only notice. Playback is healthy, so this is deliberately not

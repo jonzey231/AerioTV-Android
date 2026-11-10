@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -295,10 +297,15 @@ fun BoxScope.phoneMiniFrameModifier(
     val k = if (liveDrag && fullH > 0f) (dragPx / fullH).coerceIn(0f, 1f) else 0f
     val dragW = fullW * (1f - 0.5f * k)
     val dragH = fullH * (1f - 0.5f * k)
+    // Half folded (HalfFoldPlayer.kt): the full-screen live window is the
+    // top half only, above the crease; the panel takes the bottom half.
+    val halfFoldH = HalfFoldVideo.height.value
+        ?.takeIf { mode == ExoWindowState.Mode.Fullscreen && !liveDrag && !inPip }
+        ?.let { with(density) { it.toPx() } }
     val tx = when { miniTarget -> cornerX; liveDrag -> (fullW - dragW) / 2f; else -> 0f }
     val ty = when { miniTarget -> cornerY; liveDrag -> dragPx; else -> 0f }
     val tw = when { miniTarget -> miniW; liveDrag -> dragW; else -> fullW }
-    val th = when { miniTarget -> miniH; liveDrag -> dragH; else -> fullH }
+    val th = when { miniTarget -> miniH; liveDrag -> dragH; halfFoldH != null -> halfFoldH; else -> fullH }
 
     val ax = remember { Animatable(0f) }
     val ay = remember { Animatable(0f) }
@@ -373,6 +380,15 @@ fun BoxScope.phoneMiniFrameModifier(
         } else null
     }
     val animating = abs(aw.value - fullW) > 0.5f || abs(ay.value) > 0.5f || abs(ax.value) > 0.5f
+    // Half folded: the top half, full width, under the routes like the plain
+    // full-screen frame (the panel draws in the bottom half, nothing on top).
+    if (halfFoldH != null && !miniUp && !animating) {
+        return Modifier
+            .align(Alignment.TopStart)
+            .fillMaxWidth()
+            .height(with(density) { ah.value.toDp() })
+            .background(Color.Black)
+    }
     if (!miniUp && !liveDrag && !animating) return null
     val radius = if (miniUp || animating) MINI_RADIUS else 0.dp
     return Modifier

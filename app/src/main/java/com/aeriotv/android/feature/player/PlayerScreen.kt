@@ -2002,6 +2002,7 @@ fun PlayerScreen(
                 val idx = channels.indexOfFirst { it.id == id }
                 if (idx >= 0 && idx != currentIndex) currentIndex = idx
             },
+            epgByChannel = epgByChannel,
         )
 
         // Remote Control: Left-press Channels overlay (GH #54), drawn above
@@ -2832,8 +2833,14 @@ private fun LiveRewindChromeSection(
     onClose: () -> Unit,
     /** Keep Recent Channels Live: tune a kept channel from the Options menu. */
     onTuneChannelId: (String) -> Unit = {},
+    /** Half-folded Guide panel: now / next per channel. */
+    epgByChannel: Map<String, List<EPGProgramme>> = emptyMap(),
 ) {
     val context = LocalContext.current
+    // Half folded (HalfFoldPlayer.kt): video in the top half, this chrome or
+    // the Guide in the bottom half. Null = the usual full-screen chrome.
+    val halfFold = rememberHalfFold(isTvForm)
+    HalfFoldVideoFrame(halfFold)
     val keptLive by timeshiftController.retainedChannels.collectAsStateWithLifecycle()
     // Own collector: this section is where the ticking window state is READ
     // at composition, so its emissions invalidate only this scope.
@@ -2935,6 +2942,20 @@ private fun LiveRewindChromeSection(
         showProgramSubtitle = cardShowProgramSubtitle,
         showProgramDescription = cardShowProgramDescription,
     )
+    HalfFoldChromeHost(
+        fold = halfFold,
+        // Live TV only: a catch-up replay shows Controls alone.
+        guide = if (isCatchupMode) null else {
+            {
+                HalfFoldGuidePanel(
+                    channels = channels,
+                    currentChannelId = currentChannel?.id,
+                    epgByChannel = epgByChannel,
+                    onSelect = { ch -> onTuneChannelId(ch.id) },
+                )
+            }
+        },
+    ) { halfFoldForce ->
     PlayerChromeOverlay(
         channel = currentChannel,
         nowProgramme = nowProgramme,
@@ -3015,8 +3036,8 @@ private fun LiveRewindChromeSection(
                 scrubTargetWallMs = null
             }
         },
-        chromeVisible = chromeVisible,
-        pillVisible = pillVisible,
+        chromeVisible = chromeVisible || halfFoldForce,
+        pillVisible = pillVisible || halfFoldForce,
         isTv = isTvForm,
         // Cast Connect (GH #33): phone/tablet Cast button, only on a build
         // with a registered Cast App ID. Live channels cast their identity to
@@ -3182,6 +3203,7 @@ private fun LiveRewindChromeSection(
         // they arrive as focus events rather than keys on some remotes.
         onInteraction = reportInteraction,
     )
+    }
 }
 
 // Leaving a catch-up replay (Back, or Go Back on the unavailable card): the

@@ -379,6 +379,11 @@ fun GuideScreen(
         }
     }
     val groupedChannels = guideSearch.channels
+    // The half-folded player's Guide panel follows this order (active group
+    // and sort), never a search's results.
+    androidx.compose.runtime.LaunchedEffect(groupedChannels, state.searchQuery) {
+        if (state.searchQuery.isBlank()) com.aeriotv.android.feature.player.LiveChannelOrder.publish(groupedChannels.map { it.id })
+    }
     // Guide view "Programs" section (Logan 2026-11-05, Apple parity): the
     // List view's program search, shown under the grid on phones and
     // tablets. Same scan, cards, taps, and copy; TV keeps its Search tab.

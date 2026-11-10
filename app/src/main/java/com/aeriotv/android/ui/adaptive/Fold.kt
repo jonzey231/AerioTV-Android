@@ -70,6 +70,12 @@ data class FoldInfo(
     val isOccluding: Boolean,
     val start: Dp,
     val end: Dp,
+    /**
+     * The device is partly folded (FoldingFeature.State.HALF_OPENED): tabletop
+     * or book posture, as opposed to open flat. The half-folded player keys on
+     * this together with a [FoldAxis.HORIZONTAL] crease.
+     */
+    val halfOpened: Boolean = false,
 ) {
     /** Extent of the crease itself; 0 on a seamless flat fold. */
     val gap: Dp get() = (end - start).coerceAtLeast(0.dp)
@@ -141,6 +147,7 @@ fun rememberFoldInfo(): FoldInfo? {
             isOccluding = f.occlusionType == FoldingFeature.OcclusionType.FULL,
             start = (if (vertical) bounds.left else bounds.top).toDp(),
             end = (if (vertical) bounds.right else bounds.bottom).toDp(),
+            halfOpened = f.state == FoldingFeature.State.HALF_OPENED,
         )
     }
 }
