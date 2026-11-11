@@ -170,6 +170,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** The user chose Upload Again: the next pull seeds from local as a first read does. */
         @Volatile var missingUpload = false
         val serverBytes = HashMap<String, Long>()
+        /** Bucket wire name -> the server's value as the last refresh before a PUT read it (null = none there). */
+        val fetchedRaw = HashMap<String, JsonObject?>()
         /** Bucket wire name -> list `bytes` when that bucket was last fetched. */
         val fetchedBytes = HashMap<String, Long>()
         /** Categories present inside their v2 key on the server. */
@@ -335,12 +337,13 @@ class DispatcharrSyncManager @Inject constructor(
     private fun onProfilesMutated(playlistId: String, username: String, what: String, stampAt: Long = 0L) {
         // Called from UI actions on the main thread: all disk work happens on IO.
         // A roster add keeps the row's own stamp (stampAt); every real edit stamps now.
-        if (what == "undo-add") {
-            // Roster undo: local only. No tombstone, no pending mark, no push;
-            // the server row the add came from stays as other devices wrote it.
+        if (what == "undo-add" || what == "local-remove") {
+            // Roster undo, or removing a profile held after a server change:
+            // local only. No tombstone, no pending mark, no push; the server
+            // row stays as other devices wrote it.
             rosterAdds.remove(rowKey(playlistId, username))
             state.edit().remove(rowKey(playlistId, username)).remove(customKey(playlistId, username)).commit()
-            Log.i(TAG, "[DSYNC] profiles: undo add $username; server row left as is")
+            Log.i(TAG, "[DSYNC] profiles: ${if (what == "undo-add") "undo add" else "removed held profile"} $username on this device only; server row left as is")
             return
         }
         val now = if (stampAt > 0) stampAt else System.currentTimeMillis() / 1000
@@ -1002,10 +1005,13 @@ class DispatcharrSyncManager @Inject constructor(
         val item = com.aeriotv.android.core.sync.SyncItemCatalog.itemForDsync(key.suffix)
         val on = item == null || prefs.syncScopesOnce()[item.id] != com.aeriotv.android.core.sync.SyncScope.Off
         if (!on) return false
-        return when (key) {
+        val base = when (key) {
             DsyncKey.Profiles -> isAdmin(s)
             else -> true
         }
+        // `profiles` pauses in both directions while a profile on this
+        // playlist is held after a server change (A-APP-1 follow-up, item 4).
+        return com.aeriotv.android.core.profiles.RosterPause.syncs(key, base, profileManager.get().isRosterPaused(s.playlistId))
     }
 
     /**
@@ -1651,6 +1657,11 @@ class DispatcharrSyncManager @Inject constructor(
         // No byte guard before the PUT: send the full value; trim only on a 413.
         var value = DsyncV2.encodeBucket(bucketRaw(s, b), deviceId, BuildConfig.VERSION_NAME, now, mapOf(key to sub))
         value = withProviders(s, value)
+        // Roster paused: `profiles` goes up exactly as the server holds it now
+        // (or not at all), never local rows or a copy saved from an earlier server.
+        if (profileManager.get().isRosterPaused(s.playlistId)) {
+            value = com.aeriotv.android.core.profiles.RosterPause.withServerProfiles(value, s.fetchedRaw[wire(s, b)])
+        }
         var step = 0
         while (true) {
             when (put(s, c, b, key, value, data)) {
@@ -1734,10 +1745,11 @@ class DispatcharrSyncManager @Inject constructor(
         val f = fetchBucket(c, wire(s, b))
         val got = when (f) {
             Fetched.Failed -> return Refresh.Unreachable
-            Fetched.Absent, Fetched.Malformed -> return Refresh.Ok
+            Fetched.Absent, Fetched.Malformed -> { s.fetchedRaw[wire(s, b)] = null; return Refresh.Ok }
             is Fetched.TooNew -> { s.blocked += b.keys; return Refresh.RemoteTook }
             is Fetched.Got -> f
         }
+        s.fetchedRaw[wire(s, b)] = got.bucket.raw
         saveBucketRaw(s, b, got.bucket.raw)
         s.serverBytes[wire(s, b)] = got.bytes.toLong()
         foldProviders(s, got.bucket)

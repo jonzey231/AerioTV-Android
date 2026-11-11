@@ -152,8 +152,11 @@ class ProfileManager @Inject constructor(
      */
     fun restoreSync() {
         // First: a sign-in held after a server address change never goes out
-        // after a relaunch, whatever was active when the app stopped.
+        // after a relaunch, whatever was active when the app stopped, and
+        // those playlists' roster sync stays paused.
         ProfileScope.held = hostHolds.heldProfileIds()
+        _rosterPaused.value = hostHolds.pausedPlaylists()
+        _rosterPaused.value.forEach { Log.i(TAG, "[PROFILE-HOST] roster sync paused playlist=${it.take(8)}") }
         ProfileScope.onOverlayChanged = { o -> store.update(o.profileId) { it.withOverlay(o) } }
         ProfileScope.activeUserIdLookup = { pid -> activeProfileIdNow(pid)?.let(store::byId)?.userId ?: 0 }
         scope.launch {
@@ -814,7 +817,11 @@ class ProfileManager @Inject constructor(
      * device. Null = a plain add.
      */
     private fun rosterRowForManualAdd(playlistId: String, username: String): com.aeriotv.android.core.sync.dsync.ProfileRow? =
-        ProfileRoster.rowForManualAdd(_roster.value[playlistId].orEmpty(), store.forPlaylist(playlistId).map { it.username }, username)
+        ProfileRoster.rowForManualAdd(
+            RosterPause.visibleRows(_roster.value[playlistId].orEmpty(), hostHolds.isPaused(playlistId)),
+            store.forPlaylist(playlistId).map { it.username },
+            username,
+        )
             ?.also { Log.i(TAG, "[DSYNC] profiles: manual add of ${it.username} is in the synced roster; finishing as a roster add") }
 
     /**
@@ -943,6 +950,12 @@ class ProfileManager @Inject constructor(
         // applies to this id, and its tag is the server it signed in at.
         dropHold(id, "added")
         runCatching { tagLive(playlistId, id, base) }
+        // Added while the roster sync is paused: it could not see the roster.
+        // The first pull after the pause applies its row, if there is one.
+        if (seed == null && hostHolds.isPaused(playlistId)) {
+            hostHolds.markPausedAdd(id)
+            Log.i(TAG, "[PROFILE-HOST] ${user.username} added during the roster pause on ${playlistId.take(8)}")
+        }
         if (needsPinAfterAdd(playlistId, id)) pendingPinAdds.add(id)
         appPreferences.seedProfileSettings(id)
         if (seed != null) {
@@ -1014,6 +1027,13 @@ class ProfileManager @Inject constructor(
         removedAt: (String) -> Long = { 0L },
         customized: (String, String, AvatarSpec?) -> Boolean = { _, _, _ -> true },
     ): Int {
+        // Paused (a profile here is held after a server change): the server's
+        // rows, tombstones, and suggestions stay out. Sync never calls this
+        // while paused; this is the backstop.
+        if (hostHolds.isPaused(playlistId)) {
+            Log.i(TAG, "[PROFILE-HOST] roster rows not applied: roster sync paused playlist=${playlistId.take(8)}")
+            return 0
+        }
         publishRoster(playlistId, rows)
         val plan = ProfileRoster.plan(rows, store.forPlaylist(playlistId).map { it.username })
         Log.i(TAG, "[DSYNC] profiles: ${plan.available.size} roster rows available, not added (opt-in)")
@@ -1026,6 +1046,9 @@ class ProfileManager @Inject constructor(
             // offered under "From your other devices" until chosen.
             if (local == null) return@forEach
             val id = local.id
+            // Added during a roster pause: it never saw this row, so it takes it
+            // now, row stamp and all, as a manual add of a roster user does.
+            val pausedAdd = hostHolds.isPausedAdd(id)
             if (local.userId == 0 && r.userId > 0) store.update(id) { it.copy(userId = r.userId) }
             val mine = localUpdatedAt(local.username)
             // No local claim on name/avatar (never renamed or given an avatar
@@ -1036,7 +1059,7 @@ class ProfileManager @Inject constructor(
                 Log.i(TAG, "[DSYNC] profiles: adopted synced name/avatar for ${local.username}")
                 local = store.byId(id) ?: local
             }
-            val repair = ProfileRoster.repair(local.displayName, local.avatar, mine, r)
+            val repair = if (pausedAdd) ProfileRoster.Repair.None else ProfileRoster.repair(local.displayName, local.avatar, mine, r)
             if (repair == ProfileRoster.Repair.ResendLocal) {
                 Log.i(TAG, "[DSYNC] profiles: server row ${local.username} looks stripped; re-sending local")
                 mutated(id, "repair")
@@ -1044,10 +1067,11 @@ class ProfileManager @Inject constructor(
             }
             if (repair == ProfileRoster.Repair.ApplyServer) {
                 Log.i(TAG, "[DSYNC] profiles: local row ${local.username} is stripped; applying server name/avatar")
-            } else if (!com.aeriotv.android.core.sync.dsync.DsyncGate.profileRowWins(mine, r)) {
+            } else if (!RosterPause.rowApplies(pausedAdd, mine, r)) {
                 Log.i(TAG, "[DSYNC] profiles: keep local row for ${local.username} (local $mine >= server ${r.updatedAt})")
                 return@forEach
             }
+            if (pausedAdd) Log.i(TAG, "[PROFILE-HOST] ${local.username} added during the roster pause takes its roster row")
             if (r.displayName.isNotBlank() && r.displayName != local.displayName) {
                 store.update(id) { it.copy(displayName = r.displayName) }
             }
@@ -1070,8 +1094,9 @@ class ProfileManager @Inject constructor(
             }
             val type = PinRules.typeFromWire(r.pinType)
             if (type == null) {
-                // A v1 PIN set on this device before sync stays until re-entered.
-                if (pinStore.hasPin(id) && !pinStore.isLegacy(id)) {
+                // A v1 PIN set on this device before sync stays until re-entered,
+                // and so does a PIN set right after an add during the pause.
+                if (!pausedAdd && pinStore.hasPin(id) && !pinStore.isLegacy(id)) {
                     pinStore.remove(id)
                     Log.i(TAG, "[DSYNC] profiles: pin removed for ${local.username} (server row newer)")
                 }
@@ -1080,6 +1105,9 @@ class ProfileManager @Inject constructor(
             }
             adopted(local.username, r.updatedAt)
         }
+        // Every profile added during the pause has now met the roster: one with
+        // a row took it above; one without stays a plain add.
+        store.forPlaylist(playlistId).filter { hostHolds.isPausedAdd(it.id) }.forEach { hostHolds.clearPausedAdd(it.id) }
         refreshActiveRole()
         return added
     }
@@ -1096,8 +1124,11 @@ class ProfileManager @Inject constructor(
      * with Dispatcharr Sync off); updates when it does.
      */
     fun rosterSuggestions(playlistId: String): Flow<List<com.aeriotv.android.core.sync.dsync.ProfileRow>> =
-        combine(_roster, store.profiles) { r, local ->
-            ProfileRoster.suggestions(r[playlistId].orEmpty(), local.filter { it.playlistId == playlistId }.map { it.username })
+        combine(_roster, store.profiles, _rosterPaused) { r, local, paused ->
+            ProfileRoster.suggestions(
+                RosterPause.visibleRows(r[playlistId].orEmpty(), playlistId in paused),
+                local.filter { it.playlistId == playlistId }.map { it.username },
+            )
         }.distinctUntilChanged()
 
     /**
@@ -1438,10 +1469,16 @@ class ProfileManager @Inject constructor(
         runCatching { pinStore.remove(profileId) }
         runCatching { snapshotStamps.remove("${p.playlistId}@$profileId") }
         runCatching { vodCatalogStore.deleteForPlaylistUser(p.playlistId, p.username) }
-        if (tombstone) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove", 0L) }
+        // A held profile is removed on this device only: its row was never on
+        // the new server's roster, and a tombstone sent there after the pause
+        // could delete a same-named profile on that server's devices.
+        val held = hostHolds.isHeld(profileId)
+        if (RosterPause.writesTombstone(tombstone, held)) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove", 0L) }
+        else if (held && !fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "local-remove", 0L) }
         else if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "undo-add", 0L) }
         dropHold(profileId, "removed")
         hostHolds.tag(profileId, null)
+        hostHolds.clearPausedAdd(profileId)
         store.remove(profileId)
         Log.i(TAG, "[PROFILE] removed ${p.username} on ${p.playlistId.take(8)}; local state deleted${if (fromSync) " (synced removal)" else ""}")
     }
@@ -1686,6 +1723,30 @@ class ProfileManager @Inject constructor(
 
     fun isSignInHeld(profileId: String): Boolean = hostHolds.isHeld(profileId)
 
+    /** Playlists whose Dispatcharr Sync `profiles` category is paused (some profile on them is held). */
+    private val _rosterPaused = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+    /** [playlistId]'s roster sync is paused in both directions (item 4): read by Dispatcharr Sync. */
+    fun isRosterPaused(playlistId: String): Boolean = hostHolds.isPaused(playlistId)
+
+    /**
+     * After any hold change: the held set the overlay checks, and the roster
+     * pause per playlist. A pause that ends asks for a profiles pull right
+     * away, so the roster merges and the edits that waited go out now.
+     */
+    private fun heldChanged() {
+        ProfileScope.held = hostHolds.heldProfileIds()
+        val now = hostHolds.pausedPlaylists()
+        val before = _rosterPaused.value
+        if (now == before) return
+        _rosterPaused.value = now
+        (now - before).forEach { Log.i(TAG, "[PROFILE-HOST] roster sync paused playlist=${it.take(8)}") }
+        (before - now).forEach { pid ->
+            Log.i(TAG, "[PROFILE-HOST] roster sync resumed playlist=${pid.take(8)}")
+            notePickerOpened(pid, "roster-resumed")
+        }
+    }
+
     /** [profileId]'s Dispatcharr username (the held sign-in form's prefill), or "". */
     fun profileUsername(profileId: String): String = store.byId(profileId)?.username.orEmpty()
 
@@ -1741,7 +1802,7 @@ class ProfileManager @Inject constructor(
         // Memory first: from here no row is overlaid with a held sign-in.
         ProfileScope.held = ProfileScope.held + ids
         val rec = hostHolds.hold(playlistId, ids, priorRoutes, expected) ?: return false
-        ProfileScope.held = hostHolds.heldProfileIds()
+        heldChanged()
         Log.i(TAG, "[PROFILE-HOST] hold playlist=${playlistId.take(8)} profiles=${rec.profileIds.size}")
         if (activeId != null && hostHolds.isHeld(activeId)) {
             store.setActiveProfileId(playlistId, null)
@@ -1879,7 +1940,7 @@ class ProfileManager @Inject constructor(
     /** Lifts the held profiles whose tag is the snapshot; the rest stay held and ask to sign in. */
     private fun liftHeld(playlistId: String, current: Set<String>, reason: String) {
         val ids = hostHolds.liftMatching(playlistId, current)
-        ProfileScope.held = hostHolds.heldProfileIds()
+        heldChanged()
         if (ids.isEmpty()) return
         val kept = hostHolds.hold(playlistId)?.profileIds?.size ?: 0
         Log.i(TAG, "[PROFILE-HOST] lifted playlist=${playlistId.take(8)} profiles=${ids.size} kept=$kept reason=$reason")
@@ -1888,7 +1949,7 @@ class ProfileManager @Inject constructor(
     /** [profileId] signed in again, was removed, or was just added: it is no longer held. */
     private fun dropHold(profileId: String, reason: String) {
         val pid = hostHolds.liftProfile(profileId) ?: return
-        ProfileScope.held = hostHolds.heldProfileIds()
+        heldChanged()
         Log.i(TAG, "[PROFILE-HOST] lifted playlist=${pid.take(8)} profiles=1 reason=$reason")
     }
 
@@ -1901,7 +1962,7 @@ class ProfileManager @Inject constructor(
         val moved = hostHolds.hold(playlistId)?.profileIds.orEmpty()
             .filter { id -> store.byId(id)?.playlistId?.let { it != playlistId } == true }.toSet()
         hostHolds.forgetPlaylist(playlistId, moved)
-        ProfileScope.held = hostHolds.heldProfileIds()
+        heldChanged()
     }
 
     /** Cancel on the form: stay on the current profile. */

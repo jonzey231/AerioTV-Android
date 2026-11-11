@@ -1,7 +1,12 @@
 package com.aeriotv.android.core.profiles
 
+import com.aeriotv.android.core.sync.dsync.DsyncGate
+import com.aeriotv.android.core.sync.dsync.DsyncKey
+import com.aeriotv.android.core.sync.dsync.DsyncV2
+import com.aeriotv.android.core.sync.dsync.ProfileRow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Profile sign-ins after a server address change (security fix A-APP-1,
@@ -121,6 +126,51 @@ object ProfileHostHold {
     }
 }
 
+/**
+ * Dispatcharr Sync's `profiles` category pauses for a playlist while any
+ * profile on it is held after a server change (item 4 of the profile
+ * follow-ups, B13, 2026-11-11): the roster (names, roles, avatars, and PIN
+ * hashes) never goes to an unproven server, and that server's rows and
+ * tombstones never apply here. Every other category syncs as usual. Pure.
+ */
+object RosterPause {
+    /** [key] syncs (pull and push) for a playlist: `profiles` never while [paused]. */
+    fun syncs(key: DsyncKey, enabled: Boolean, paused: Boolean): Boolean = enabled && !(paused && key == DsyncKey.Profiles)
+
+    /** Roster rows offered under "From your other devices", or matched by a manual add: none while paused. */
+    fun visibleRows(rows: List<ProfileRow>, paused: Boolean): List<ProfileRow> = if (paused) emptyList() else rows
+
+    /**
+     * A pulled row applies over a local profile when it is newer, as always,
+     * or when the profile was added during the pause: it never saw the row,
+     * so it takes it the way a manual add of a roster user does (item 1).
+     */
+    fun rowApplies(addedDuringPause: Boolean, localAt: Long, row: ProfileRow): Boolean =
+        addedDuringPause || DsyncGate.profileRowWins(localAt, row)
+
+    /**
+     * Whether removing a profile writes a tombstone: only when the caller asks
+     * for one and the profile is not held. A held profile's row was never on
+     * the new server's roster, and a tombstone sent there after the pause
+     * could delete a same-named profile on that server's devices.
+     */
+    fun writesTombstone(requested: Boolean, held: Boolean): Boolean = requested && !held
+
+    /**
+     * A PUT made while paused (for any other category): its `profiles`
+     * category is exactly the server's, as [server] (the key as just read)
+     * holds it, in value and type, or absent when the server has none. Never
+     * this device's rows, and never a copy saved from an earlier server.
+     */
+    fun withServerProfiles(value: JsonObject, server: JsonObject?): JsonObject {
+        val name = DsyncKey.Profiles.suffix
+        val cats = LinkedHashMap(value[DsyncV2.CATEGORIES] as? JsonObject ?: JsonObject(emptyMap()))
+        val theirs = (server?.get(DsyncV2.CATEGORIES) as? JsonObject)?.get(name)
+        if (theirs == null) cats.remove(name) else cats[name] = theirs
+        return JsonObject(LinkedHashMap(value).apply { put(DsyncV2.CATEGORIES, JsonObject(cats)) })
+    }
+}
+
 /** A switch to a held profile: nothing was sent, and the "Sign in to Dispatcharr" form opens instead. */
 class ProfileSignInHeld : IllegalStateException("Sign in again to use this profile.")
 
@@ -161,6 +211,12 @@ data class HostHoldState(
      * only when its tag equals the identity recorded before the change.
      */
     val tags: Map<String, RecordedIdentity> = emptyMap(),
+    /**
+     * Profiles added while their playlist's roster sync was paused: they
+     * could not see the roster, so the first pull after the pause applies
+     * their username's row, if any, the way a manual add of a roster user does.
+     */
+    val pausedAdds: Set<String> = emptySet(),
 )
 
 /**
@@ -197,6 +253,19 @@ class HostHoldBook(private val backing: Backing) {
     fun isHeld(profileId: String): Boolean = state.holds.values.any { profileId in it.profileIds }
 
     fun hold(playlistId: String): HostHoldRecord? = state.holds[playlistId]
+
+    /** The playlist's `profiles` sync is paused: some profile on it is held. */
+    fun isPaused(playlistId: String): Boolean = playlistId in state.holds
+
+    fun pausedPlaylists(): Set<String> = state.holds.keys
+
+    fun isPausedAdd(profileId: String): Boolean = profileId in state.pausedAdds
+
+    @Synchronized
+    fun markPausedAdd(profileId: String) { commit(state.copy(pausedAdds = state.pausedAdds + profileId)) }
+
+    @Synchronized
+    fun clearPausedAdd(profileId: String) { commit(state.copy(pausedAdds = state.pausedAdds - profileId)) }
 
     fun recorded(playlistId: String): ProfileHostHold.Identity? =
         state.identities[playlistId]?.identity()
