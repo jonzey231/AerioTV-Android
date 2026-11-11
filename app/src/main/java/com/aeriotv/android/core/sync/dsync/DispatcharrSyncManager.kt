@@ -128,7 +128,8 @@ class DispatcharrSyncManager @Inject constructor(
 
     // ---- session ----
 
-    private data class Target(val playlistId: String, val profileToken: String)
+    /** [routeGen] moves when a server address change lands, so the session restarts at the current address. */
+    private data class Target(val playlistId: String, val profileToken: String, val routeGen: Long = 0L)
     private val HOLD = Target("\u0000hold", "")
 
     /**
@@ -141,6 +142,8 @@ class DispatcharrSyncManager @Inject constructor(
         /** The live session, or a picker peek while no session runs (one writer at a time). */
         fun live(): Boolean = session === this || (peek && session == null)
         @Volatile var bound: Conn? = null
+        /** Retired by a server address change: it reads and writes nothing more (its connection is the old address). */
+        @Volatile var retired = false
         /** This session's App Data key, `<user>.aeriotv` (DsyncKeyName), once /me/ answered. */
         @Volatile var userKey: String? = null
         /** Keys deferred because their id cache was not built (DsyncReadiness), with the local row count waiting. */
@@ -224,6 +227,7 @@ class DispatcharrSyncManager @Inject constructor(
         }
         profileManager.get().onProfilesMutated = { pid, user, what, at -> onProfilesMutated(pid, user, what, at) }
         profileManager.get().onPickerOpened = { pid, reason -> onPickerOpened(pid, reason) }
+        profileManager.get().onRouteChange = { pid, landed -> onRouteChange(pid, landed) }
         registerNetworkCallback()
         watchBetweenSessions()
         scope.launch {
@@ -234,10 +238,11 @@ class DispatcharrSyncManager @Inject constructor(
                 // The picker reason only: an in-app PIN pad (Set Admin PIN, Add Profile)
                 // used to end the session here, and edits made under the pad had no session.
                 kotlinx.coroutines.flow.combine(profileManager.get().switching, com.aeriotv.android.core.app.LaunchWorkHold.pickerHold) { sw, held -> sw || held },
-            ) { dsyncOn, pid, token, switching ->
+                routeGen,
+            ) { dsyncOn, pid, token, switching, gen ->
                 // A profile switch (or the TV launch picker) is in flight: hold until its sign-in and
                 // permissions are in place (the scrim drops), then start.
-                if (switching) HOLD else if (dsyncOn && pid != null) Target(pid, token) else null
+                if (switching) HOLD else if (dsyncOn && pid != null) Target(pid, token, gen) else null
             }
                 .distinctUntilChanged()
                 .collectLatest { t ->
@@ -1033,16 +1038,55 @@ class DispatcharrSyncManager @Inject constructor(
 
     /** The session's own credential, captured while its profile was active. */
     private suspend fun conn(s: Session): Conn? {
+        if (!addressSettled(s)) return null
         s.bound?.let { return it }
         if (ProfileScope.token.value != s.token) return null
         return freshConn(s)?.also { s.bound = it }
     }
 
     private suspend fun freshConn(s: Session): Conn? {
+        if (!addressSettled(s)) return null
         if (ProfileScope.token.value != s.token) return null
         val row = playlistDao.byId(s.playlistId) ?: return null
         val key = row.apiKey?.takeIf { it.isNotBlank() } ?: return null
         return Conn(repository.get().effectiveBaseUrl(row), key, row)
+    }
+
+    // ---- server address change (item 6 of the profile follow-ups) ----
+
+    /** Playlists whose server address is changing: no session or peek reads or writes for them until it lands. */
+    private val routeChanging = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val routeGen = MutableStateFlow(0L)
+
+    /** False while [s]'s playlist is moving, or once [s] was retired by a move: it then gets no connection. */
+    private fun addressSettled(s: Session): Boolean = !s.retired && s.playlistId !in routeChanging
+
+    /**
+     * A server address change on [playlistId] (ProfileManager, every path).
+     * Before anything goes to the new address: the saved server copy is
+     * dropped for every profile of the playlist, the live session (bound to
+     * the old address) is retired, and nothing reads or writes until it
+     * lands. When it lands: any copy saved meanwhile is dropped again and a
+     * new session starts at the playlist's current address, where the first
+     * sync reads before it writes. Local data and local change marks stay.
+     */
+    private fun onRouteChange(playlistId: String, landed: Boolean) {
+        if (!landed) {
+            routeChanging += playlistId
+            session?.takeIf { it.playlistId == playlistId }?.retired = true
+        }
+        val keys = DsyncServerCopy.keys(state.all.keys, playlistId)
+        if (keys.isNotEmpty()) {
+            val e = state.edit()
+            keys.forEach { e.remove(it) }
+            e.commit()
+        }
+        if (!landed) {
+            Log.i(TAG, "[PROFILE-HOST] sync copy discarded playlist=${playlistId.take(8)}")
+            return
+        }
+        routeChanging -= playlistId
+        if (lastTarget?.playlistId == playlistId) routeGen.value = routeGen.value + 1
     }
 
     // ---- persisted per (playlist, profile, key) state ----

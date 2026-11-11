@@ -1757,8 +1757,8 @@ class DriveSyncManager @Inject constructor(
                     current.urlString, merged.urlString, current.lanUrlString, merged.lanUrlString,
                 )
             ) {
-                profileManager.get().holdSignInsForRouteChange(entry.id, current.urlString, current.lanUrlString, merged.urlString, merged.lanUrlString)
                 moved += entry.id
+                profileManager.get().holdSignInsForRouteChange(entry.id, current.urlString, current.lanUrlString, merged.urlString, merged.lanUrlString)
             }
             playlistDao.upsert(merged)
             SyncStamps.settleTouched(SyncStamps.Cat.Playlists, entry.id, stamp)

@@ -646,7 +646,7 @@ class PlaylistRepository @Inject constructor(
         )
         updated
         }.onFailure { Log.w(TAG_SAVE, "plan=InstantUpdate failed", it) }
-            .also { if (routeMoved) runCatching { profileManager.get().routeChangeSettled(existingId, reloadUi = true) } }
+            .also { if (routeMoved || plan.lanUrlChanged) runCatching { profileManager.get().routeChangeSettled(existingId, reloadUi = true) } }
     }
 
     suspend fun loadAndPersist(
@@ -672,6 +672,8 @@ class PlaylistRepository @Inject constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (t: Throwable) {
+            // A change that had started is closed again (nothing was saved).
+            existingId?.let { runCatching { profileManager.get().routeChangeSettled(it, reloadUi = true) } }
             return Result.failure(t)
         }
         // Where the seconds go, per stage, so a slow save can be attributed

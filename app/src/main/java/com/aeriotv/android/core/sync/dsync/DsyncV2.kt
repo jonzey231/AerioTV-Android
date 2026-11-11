@@ -35,6 +35,25 @@ enum class DsyncBucket(val local: String, val keys: List<DsyncKey>) {
  * Collisions cannot mix data: App Data is stored per user. Apple
  * Shared/Dsync/DsyncV2.swift DsyncKeyName is identical.
  */
+/**
+ * The saved copy of the server's record that a PUT starts from (item 6 of
+ * the profile follow-ups, 2026-11-11): the whole bucket ("braw") and each
+ * category's last server envelope, data, and stamps ("raw", "data", "at",
+ * "dev"), kept per playlist and profile but not per server. A server
+ * address change drops them for every profile of the playlist, so the first
+ * sync at the new address reads before it writes and never carries the old
+ * server's categories there. Local data and local change marks stay. Pure.
+ */
+object DsyncServerCopy {
+    val NAMES: Set<String> = setOf("braw", "raw", "data", "at", "dev")
+
+    /** The saved-state keys ("name|playlist|profile[|...]") that hold [playlistId]'s server copy, for every profile. */
+    fun keys(all: Collection<String>, playlistId: String): List<String> = all.filter { key ->
+        val parts = key.split('|')
+        parts.size >= 3 && parts[0] in NAMES && parts[1] == playlistId
+    }
+}
+
 object DsyncKeyName {
     /** The key every release before 2026-11-05 used, plus its `.`-suffixed v1 and v2 keys. */
     const val LEGACY_MAIN = "app.molinete.aerio"

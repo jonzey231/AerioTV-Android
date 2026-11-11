@@ -1733,6 +1733,15 @@ class ProfileManager @Inject constructor(
     private val _heldSignIn = kotlinx.coroutines.flow.MutableStateFlow<HeldSignIn?>(null)
     val heldSignIn: kotlinx.coroutines.flow.StateFlow<HeldSignIn?> = _heldSignIn
 
+    /**
+     * Dispatcharr Sync hook (set by DispatcharrSyncManager): a server address
+     * change on a playlist starts (landed false, before anything is sent to
+     * the new address) or lands (true). Sync drops its saved server copy for
+     * every profile of that playlist and restarts at the current address.
+     */
+    @Volatile var onRouteChange: ((playlistId: String, landed: Boolean) -> Unit)? = null
+    private val routeChangeStarted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     /** Playlists whose live profile a hold left for the default one; their screen reloads once the change lands. */
     private val leftLive = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val checks = HashMap<String, kotlinx.coroutines.Job>()
@@ -1782,6 +1791,10 @@ class ProfileManager @Inject constructor(
      */
     fun holdSignInsForRouteChange(playlistId: String, oldBase: String?, oldLan: String?, newBase: String?, newLan: String?): Boolean {
         if (!ProfileHostHold.routeChanged(oldBase, newBase, oldLan, newLan)) return false
+        // Dispatcharr Sync drops its saved copy of the old server's record for
+        // every profile here, whether or not any profile is held (item 6).
+        routeChangeStarted += playlistId
+        runCatching { onRouteChange?.invoke(playlistId, false) }
         val ids = ProfileHostHold.toHold(store.forPlaylist(playlistId))
         if (ids.isEmpty() && hostHolds.hold(playlistId) == null) return false
         return placeHold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan), hostHolds.recorded(playlistId))
@@ -1843,6 +1856,7 @@ class ProfileManager @Inject constructor(
      * default one. Then the same-server check runs.
      */
     fun routeChangeSettled(playlistId: String, reloadUi: Boolean) {
+        if (routeChangeStarted.remove(playlistId)) runCatching { onRouteChange?.invoke(playlistId, true) }
         if (leftLive.remove(playlistId) && reloadUi) {
             scope.launch { reloads.send(Reload(playlistId, switchGen.get(), fromSwitch = false)) }
         }
