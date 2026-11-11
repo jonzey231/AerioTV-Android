@@ -643,18 +643,24 @@ fun PlayerChromeOverlay(
                 // there; it returns in landscape / on tablets / unfolded where the
                 // row has room for both.
                 val compactTopBar = LocalConfiguration.current.screenWidthDp < 500
-                if (!compactTopBar) {
-                    channel?.let { ch ->
-                        Spacer(Modifier.width(12.dp))
-                        InfoCard(
-                            channel = ch,
-                            programme = nowProgramme,
-                            sleepRemainingMillis = sleepRemainingMillis,
-                            infoCardPrefs = infoCardPrefs,
-                        )
+                // The card takes ONLY the space between the left and right
+                // button groups (weight), and its lines truncate: it can never
+                // run under Fullscreen / More / Cast / PiP / Add (2026-11-10:
+                // a long title was drawn across the icons). Same Box keeps the
+                // right group pinned to the trailing edge either way.
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (!compactTopBar) {
+                        channel?.let { ch ->
+                            InfoCard(
+                                channel = ch,
+                                programme = nowProgramme,
+                                sleepRemainingMillis = sleepRemainingMillis,
+                                infoCardPrefs = infoCardPrefs,
+                                modifier = Modifier.padding(start = 12.dp, end = 12.dp),
+                            )
+                        }
                     }
                 }
-                Spacer(Modifier.weight(1f))
                 CircleIconButton(
                     icon = if (forcedLandscape) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
                     contentDescription = if (forcedLandscape) "Exit fullscreen" else "Fullscreen",
@@ -861,6 +867,12 @@ fun PlayerChromeOverlay(
     // (device pass cc2c37c7: portrait tap showed controls with no card).
     val compactCardUnderBar = !isTv && chromeVisible &&
         LocalConfiguration.current.screenWidthDp < 500
+    // Where the card sits is decided by the WIDTH alone, never by
+    // chromeVisible: keyed on chromeVisible, the card jumped up into the top
+    // bar (the TV hint position) for the length of its fade-out, drawn across
+    // the bar's icons (2026-11-10, b-01). Touch devices only ever show this
+    // card under the bar ([chromeCardUnderBar]).
+    val cardUnderBar = chromeCardUnderBar(isTv, LocalConfiguration.current.screenWidthDp)
     AnimatedVisibility(
         visible = if (isTv) (pillVisible && !inPip)
         else (pillVisible && (!chromeVisible || compactCardUnderBar) && !inPip),
@@ -872,12 +884,12 @@ fun PlayerChromeOverlay(
             .padding(
                 top = when {
                     isTv -> 24.dp
-                    compactCardUnderBar -> 76.dp
+                    cardUnderBar -> 76.dp
                     else -> 14.dp
                 },
                 start = when {
                     isTv -> 28.dp
-                    compactCardUnderBar -> 12.dp
+                    cardUnderBar -> 12.dp
                     else -> 70.dp
                 },
             ),
@@ -1446,6 +1458,7 @@ private fun InfoCard(
     programme: EPGProgramme?,
     sleepRemainingMillis: Long?,
     infoCardPrefs: PlayerInfoCardPrefs = PlayerInfoCardPrefs(),
+    modifier: Modifier = Modifier,
 ) {
     // Nothing enabled that has data to show: draw no card at all rather than
     // an empty pill (the sleep badge alone still earns the card).
@@ -1470,6 +1483,7 @@ private fun InfoCard(
     Surface(
         color = Color.Black.copy(alpha = 0.55f),
         shape = RoundedCornerShape(INFO_CARD_CORNER),
+        modifier = modifier,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1523,7 +1537,9 @@ private fun InfoCard(
                 // (tvOS reference proportions). Without this cap, weight(1f)
                 // -> Column would stretch the entire pill to fit any width
                 // Compose hands it from the parent.
-                modifier = Modifier.widthIn(max = 320.dp),
+                // weight(fill = false): inside a narrow top bar the column
+                // shrinks (its lines truncate) and the sleep badge keeps its room.
+                modifier = Modifier.weight(1f, fill = false).widthIn(max = 320.dp),
             ) {
                 if (infoCardPrefs.showChannelName) {
                     val nameLine = channel.channelNumber?.let { "$it  ${channel.name}" }
@@ -1534,6 +1550,7 @@ private fun InfoCard(
                         color = Color.White,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                 }
                 if (programme != null) {
@@ -1543,6 +1560,7 @@ private fun InfoCard(
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White,
                             maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
                     if (infoCardPrefs.showProgramSubtitle && subtitleText != null) {
@@ -1551,6 +1569,7 @@ private fun InfoCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.85f),
                             maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
                     if (infoCardPrefs.showProgramTime) {
@@ -1560,6 +1579,8 @@ private fun InfoCard(
                             text = "$timeRange  ·  $duration",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
                     if (infoCardPrefs.showProgramDescription && descriptionText != null) {
@@ -2648,3 +2669,11 @@ internal fun RestoreOrientationOnExit(activity: android.app.Activity?) {
 /** The in-player info card's own corner radius. The card and the channel logo
  *  inside it both read this, so the two shapes cannot drift. */
 private val INFO_CARD_CORNER = 12.dp
+
+/**
+ * Pure rule for the standalone channel card's position (2026-11-10): on a
+ * touch device it only ever sits UNDER the top bar, on compact widths, and
+ * that position depends on the width alone. Any other answer put the card in
+ * the bar's row, across its icons, while the chrome faded out.
+ */
+internal fun chromeCardUnderBar(isTv: Boolean, screenWidthDp: Int): Boolean = !isTv && screenWidthDp < 500
