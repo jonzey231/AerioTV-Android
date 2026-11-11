@@ -307,6 +307,42 @@ class ProfileHostHoldTest {
         assertNull(book.hold("P1"))
     }
 
+    // ---- A sync merge moving profiles between playlists that share a server URL ----
+
+    @Test fun mergedPlaylistsWithTheSameLocalUrlMoveNothingToANewAddress() {
+        assertFalse(ProfileHostHold.routeChanged(oldServer, oldServer, oldLan, oldLan))
+        assertTrue(ProfileHostHold.routeChanged(oldServer, oldServer, oldLan, "http://192.168.1.20:9191"))
+        assertTrue(ProfileHostHold.routeChanged(oldServer, oldServer, null, oldLan))
+    }
+
+    @Test fun movedProfilesAreCheckedAgainstTheIdentityOfThePlaylistTheyCameFrom() {
+        val book = HostHoldBook(MemoryBacking())
+        // The winner's own record is someone else entirely; the loser's server answered as admin.
+        book.record("W", stranger, ProfileHostHold.routeKey(oldServer))
+        book.tag("M", admin)
+        val winnerLan = "http://192.168.1.20:9191"
+        val rec = book.hold("W", setOf("M"), ProfileHostHold.routes(oldServer, oldLan), expected = admin)!!
+        assertEquals(admin, rec.expected())
+        val now = ProfileHostHold.routes(oldServer, winnerLan)
+        assertEquals(setOf(ProfileHostHold.routeKey(winnerLan)), ProfileHostHold.unproven(now, rec.trusted))
+        // Another server behind the winner's local URL: held.
+        assertEquals(HostHoldBook.Outcome.Failed("different-user"), book.onAnswer("W", ProfileHostHold.routeKey(winnerLan), now, Answer.Me(stranger)))
+        assertTrue(book.liftMatching("W", now).isEmpty())
+        // The same server there: the moved profile lifts.
+        assertEquals(HostHoldBook.Outcome.Proven, book.onAnswer("W", ProfileHostHold.routeKey(winnerLan), now, Answer.Me(admin)))
+        assertEquals(setOf("M"), book.liftMatching("W", now))
+    }
+
+    @Test fun aSignInLiftsAProfileFromEveryHoldThatHasIt() {
+        val book = HostHoldBook(MemoryBacking())
+        book.hold("L", setOf("M"), ProfileHostHold.routes(oldServer, null), expected = admin)
+        book.hold("W", setOf("M", "N"), ProfileHostHold.routes(oldServer, null), expected = admin)
+        assertEquals("L", book.liftProfile("M"))
+        assertFalse(book.isHeld("M"))
+        assertNull(book.hold("L"))
+        assertEquals(setOf("N"), book.hold("W")?.profileIds)
+    }
+
     // ---- A held sign-in never goes out ----
 
     @Test fun aHeldProfileIsNeverLaidOverRequestsOrSyncSessions() {

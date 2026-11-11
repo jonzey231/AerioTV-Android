@@ -235,17 +235,22 @@ class HostHoldBook(private val backing: Backing) {
      * the snapshot every check compares against; a hold already in place
      * keeps both and only gains profiles. Null when there is nothing to hold.
      * Callers place it before the change sends anything, so no users/me made
-     * by the change itself can reach the record first.
+     * by the change itself can reach the record first. [expected] overrides
+     * the snapshot of a new hold (profiles a sync merge moved in from another
+     * playlist are checked against that playlist's record).
      */
     @Synchronized
-    fun hold(playlistId: String, profileIds: Set<String>, priorRoutes: Set<String>): HostHoldRecord? {
+    fun hold(
+        playlistId: String,
+        profileIds: Set<String>,
+        priorRoutes: Set<String>,
+        expected: ProfileHostHold.Identity? = recorded(playlistId),
+    ): HostHoldRecord? {
         val existing = state.holds[playlistId]
         val ids = existing?.profileIds.orEmpty() + profileIds
         if (ids.isEmpty()) return null
-        val rec = existing?.copy(profileIds = ids) ?: run {
-            val id = state.identities[playlistId]
-            HostHoldRecord(ids, priorRoutes, id?.userId ?: 0, id?.username.orEmpty())
-        }
+        val rec = existing?.copy(profileIds = ids)
+            ?: HostHoldRecord(ids, priorRoutes, expected?.userId ?: 0, expected?.username.orEmpty())
         commit(state.copy(holds = state.holds + (playlistId to rec)))
         return rec
     }
@@ -344,12 +349,21 @@ class HostHoldBook(private val backing: Backing) {
         return lift
     }
 
-    /** Lift [profileId] only (it signed in again, or it is gone); returns its playlist id when it was held. */
+    /**
+     * Lift [profileId] only (it signed in again, or it is gone), from every
+     * hold that has it (a sync merge can leave it in two); returns the first
+     * playlist id it was held on.
+     */
     @Synchronized
     fun liftProfile(profileId: String): String? {
-        val (pid, rec) = state.holds.entries.firstOrNull { profileId in it.value.profileIds }?.toPair() ?: return null
-        val left = rec.profileIds - profileId
-        commit(state.copy(holds = if (left.isEmpty()) state.holds - pid else state.holds + (pid to rec.copy(profileIds = left))))
-        return pid
+        val held = state.holds.filterValues { profileId in it.profileIds }
+        if (held.isEmpty()) return null
+        var holds = state.holds
+        for ((pid, rec) in held) {
+            val left = rec.profileIds - profileId
+            holds = if (left.isEmpty()) holds - pid else holds + (pid to rec.copy(profileIds = left))
+        }
+        commit(state.copy(holds = holds))
+        return held.keys.first()
     }
 }

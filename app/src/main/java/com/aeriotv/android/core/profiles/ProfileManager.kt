@@ -1707,11 +1707,40 @@ class ProfileManager @Inject constructor(
         if (!ProfileHostHold.routeChanged(oldBase, newBase, oldLan, newLan)) return false
         val ids = ProfileHostHold.toHold(store.forPlaylist(playlistId))
         if (ids.isEmpty() && hostHolds.hold(playlistId) == null) return false
+        return placeHold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan), hostHolds.recorded(playlistId))
+    }
+
+    /**
+     * A sync merge (PlaylistCollapse) moved [moved] profiles from
+     * [fromPlaylist] into [toPlaylist]. The two share a server URL, but their
+     * local URLs can differ, so the moved sign-ins can land on an address
+     * they were never used at. When either route differs they are held like
+     * a route change, trusted at the old playlist's routes and checked
+     * against the identity recorded for it. Profiles already held stay held.
+     * Synchronous, no network, no lock. True when a profile is held.
+     */
+    fun holdMergedSignIns(
+        fromPlaylist: String,
+        toPlaylist: String,
+        moved: Collection<String>,
+        fromBase: String?,
+        fromLan: String?,
+        toBase: String?,
+        toLan: String?,
+    ): Boolean {
+        if (!ProfileHostHold.routeChanged(fromBase, toBase, fromLan, toLan)) return false
+        val ids = ProfileHostHold.toHold(moved.mapNotNull(store::byId)).filterNot(hostHolds::isHeld).toSet()
+        if (ids.isEmpty()) return false
+        return placeHold(toPlaylist, ids, ProfileHostHold.routes(fromBase, fromLan), hostHolds.recorded(fromPlaylist))
+    }
+
+    /** Hold [ids] on [playlistId] before anything is sent, and leave a held active profile for the default one. */
+    private fun placeHold(playlistId: String, ids: Set<String>, priorRoutes: Set<String>, expected: ProfileHostHold.Identity?): Boolean {
         val activeId = store.activeProfileId(playlistId)
-        val live = ProfileScope.activeOverlay()?.let { it.playlistId == playlistId && it.profileId in ids } == true
+        val live = ProfileScope.activeOverlay()?.let { it.profileId in ids } == true
         // Memory first: from here no row is overlaid with a held sign-in.
         ProfileScope.held = ProfileScope.held + ids
-        val rec = hostHolds.hold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan)) ?: return false
+        val rec = hostHolds.hold(playlistId, ids, priorRoutes, expected) ?: return false
         ProfileScope.held = hostHolds.heldProfileIds()
         Log.i(TAG, "[PROFILE-HOST] hold playlist=${playlistId.take(8)} profiles=${rec.profileIds.size}")
         if (activeId != null && hostHolds.isHeld(activeId)) {

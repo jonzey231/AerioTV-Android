@@ -34,6 +34,8 @@ class PlaylistCollapse @Inject constructor(
     private val profileStore: ProfileStore,
     private val playlistRepository: Provider<com.aeriotv.android.core.data.repository.PlaylistRepository>,
     private val tokenStore: DispatcharrTokenStore,
+    /** Moved profiles' sign-ins are held when the winner's addresses differ (A-APP-1). Provider: no cycle here. */
+    private val profileManager: Provider<com.aeriotv.android.core.profiles.ProfileManager>,
 ) {
     private val mutex = Mutex()
 
@@ -146,6 +148,13 @@ class PlaylistCollapse @Inject constructor(
         }
         // 3. Profiles and per-playlist settings.
         profileStore.applyMerge(l, w, plan.profiles.move, plan.profiles.drop, takeActive = loser.isActive)
+        // One server URL, but the winner keeps its own local URL, which can
+        // differ from the loser's: the moved sign-ins are held until the
+        // winner's addresses prove to be their server. After the move, so a
+        // moved active profile is left for the default one.
+        val heldMoved = profileManager.get().holdMergedSignIns(
+            l, w, plan.profiles.move, loser.urlString, loser.lanUrlString, winner.urlString, winner.lanUrlString,
+        )
         val prefsMoved = runCatching { appPreferences.movePlaylistKeys(l, w) }.getOrDefault(0)
         // 4. The loser was the playlist in use here: the winner takes over.
         if (plan.activateWinner) playlistDao.switchActive(w)
@@ -156,6 +165,7 @@ class PlaylistCollapse @Inject constructor(
         val inUse = PlaylistMerges.uiBoundId == l
         if (!inUse) playlistRepository.get().deletePlaylist(l).getOrThrow()
         PlaylistMerges.emit(PlaylistMerges.Event(loserId = l, winnerId = w, deferredDelete = inUse))
+        if (heldMoved) profileManager.get().routeChangeSettled(w, reloadUi = true)
         Log.i(
             TAG,
             "[MERGE] playlist ${l.take(8)} -> ${w.take(8)} (one account, $why): progress=${moved[0]} reminders=${moved[1]} " +
