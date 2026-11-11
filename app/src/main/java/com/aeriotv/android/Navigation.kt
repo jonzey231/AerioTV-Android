@@ -507,6 +507,7 @@ fun AerioTVNavHost(
                 com.aeriotv.android.feature.devicesetup.SetupLinkAction.Open -> {
                     // A newer link replaces the open one: the old one counts as cancelled.
                     setupLink?.takeIf { it != link }?.let {
+                        android.util.Log.i("AerioSetup", "[SETUP] sheet switched to a newer link")
                         com.aeriotv.android.core.setup.SetupLinkMarker.markClosed(setupMarkerContext, it)
                     }
                     com.aeriotv.android.core.setup.SetupLinkMarker.markOpen(setupMarkerContext, link)

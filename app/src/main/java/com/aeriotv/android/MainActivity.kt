@@ -642,10 +642,11 @@ class MainActivity : ComponentActivity() {
         val host = data.host?.lowercase() ?: return
         if (host == "setup") {
             val link = data.toString()
-            // The same link twice: its sheet is open, it was sent, or a cold
-            // launch is replaying the task's old intent. Never log the link.
-            if (com.aeriotv.android.core.setup.SetupLinkMarker.ignore(this, link, coldLaunch)) {
-                Log.i("AerioSetup", "[SETUP] camera link ignored: already handled (cold=$coldLaunch)")
+            // An old link: already sent, or first seen more than 10 minutes ago
+            // (the TV's setup session has ended). A rescan of a live code always
+            // opens, cold start or not (Z Fold5, 2026-11-11). Never log the link.
+            com.aeriotv.android.core.setup.SetupLinkMarker.ignoreReason(this, link)?.let { why ->
+                Log.i("AerioSetup", "[SETUP] camera link ignored: $why (cold=$coldLaunch)")
                 return
             }
             deepLinkTarget.value = DeepLinkTarget.DeviceSetup(link)
@@ -1394,7 +1395,8 @@ class MainActivity : ComponentActivity() {
         // saved state) is not a new request: replaying its link reopened an
         // old Set up sheet after the process was killed (Nothing Phone,
         // 2026-11-10). SetupLinkMarker covers the launcher case, which
-        // carries no such flag.
+        // carries no such flag: a link already sent, or first seen more than
+        // 10 minutes ago, is ignored.
         val replayed = savedInstanceState != null ||
             (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
         if (!castLaunch && !replayed) captureDeepLinkFrom(intent, coldLaunch = true)

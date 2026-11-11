@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.preferences.AppPreferences
@@ -12,14 +15,11 @@ import com.aeriotv.android.core.profiles.ProfileManager
 import com.aeriotv.android.core.profiles.effectiveRole
 import com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.ArrayDeque
 
 /** A device offering setup: from NSD (key only) or from its QR code (code included). */
 data class SetupTarget(
@@ -40,98 +40,122 @@ data class SetupTarget(
 }
 
 /**
- * Phone side NSD browse for `_aeriotv-setup._tcp`. Only runs while the Set up
- * a TV screen is open; resolves one service at a time (NsdManager limit).
+ * Phone side NSD browse for `_aeriotv-setup._tcp`: the dock card and Settings
+ * banner while the app is in the foreground (MainScaffold), and the Set up
+ * another device screen. The browse, refresh, and resolve rules live in
+ * [SetupDiscoveryEngine] (pure, unit tested); this adapts it to NsdManager.
+ * Every engine call runs on the main thread.
  */
 class SetupDiscovery(private val context: Context) {
-    private val _tvs = MutableStateFlow<List<SetupTarget>>(emptyList())
-    val tvs: StateFlow<List<SetupTarget>> = _tvs.asStateFlow()
-
-    private var nsd: NsdManager? = null
-    private var listener: NsdManager.DiscoveryListener? = null
+    private val main = Handler(Looper.getMainLooper())
+    private val nsd: NsdManager? by lazy { context.getSystemService(Context.NSD_SERVICE) as? NsdManager }
     private var lock: WifiManager.MulticastLock? = null
-    private val queue = ArrayDeque<NsdServiceInfo>()
-    private var resolving = false
-    /** NSD instance name -> resolved target key, so a lost advert drops the right row. */
-    private val keysByService = HashMap<String, String>()
+    private val engine = SetupDiscoveryEngine(
+        platform = NsdPlatform(),
+        timers = { ms, block ->
+            val r = Runnable(block)
+            main.postDelayed(r, ms)
+            ({ main.removeCallbacks(r) })
+        },
+        isOwnPk = SetupReceiver::isOwnPk,
+        log = { Log.i(TAG, it) },
+    )
 
-    @Synchronized
-    fun start() {
-        if (listener != null) return
-        val mgr = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
-        nsd = mgr
+    val tvs: StateFlow<List<SetupTarget>> = engine.tvs
+
+    fun start() = onMain {
+        if (engine.isRunning || nsd == null) return@onMain
         lock = runCatching {
             (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
                 ?.createMulticastLock("aeriotv-setup-discover")?.apply { setReferenceCounted(false); acquire() }
         }.getOrNull()
-        val l = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(serviceType: String) {}
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { Log.w(TAG, "[SETUP] discovery failed $errorCode") }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
-            override fun onDiscoveryStopped(serviceType: String) {}
-            override fun onServiceFound(info: NsdServiceInfo) { enqueue(info) }
-            override fun onServiceLost(info: NsdServiceInfo) {
-                val k = synchronized(this@SetupDiscovery) { keysByService.remove(info.serviceName) }
-                _tvs.value = _tvs.value.filterNot { it.key == k || it.service == info.serviceName }
-            }
-        }
-        listener = l
-        runCatching { mgr.discoverServices(SetupProtocol.SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, l) }
+        engine.start()
     }
 
-    @Synchronized
-    fun stop() {
-        listener?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
-        listener = null
-        queue.clear()
-        keysByService.clear()
-        _tvs.value = emptyList()
-        resolving = false
+    fun stop() = onMain {
+        engine.stop()
         lock?.let { runCatching { if (it.isHeld) it.release() } }
         lock = null
     }
 
-    @Synchronized
-    private fun enqueue(info: NsdServiceInfo) { queue.add(info); pump() }
-
-    @Synchronized
-    private fun pump() {
-        if (resolving) return
-        val next = queue.poll() ?: return
-        val mgr = nsd ?: return
-        resolving = true
-        @Suppress("DEPRECATION")
-        val rl = object : NsdManager.ResolveListener {
-            override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) { done() }
-            override fun onServiceResolved(info: NsdServiceInfo) {
-                @Suppress("DEPRECATION")
-                val host = info.host?.hostAddress
-                val attrs = runCatching { info.attributes }.getOrNull().orEmpty()
-                fun attr(k: String) = attrs[k]?.let { String(it, Charsets.UTF_8) }
-                val pk = attr(SetupProtocol.TXT_PK)?.let(SetupCrypto::unb64)?.takeIf { it.size == 32 }
-                // role=source is a device showing a user QR (POST /user-qr), never a receiver.
-                val isSource = attr(SetupProtocol.TXT_ROLE) == SetupProtocol.ROLE_SOURCE
-                if (!isSource && host != null && pk != null && !SetupReceiver.isOwnPk(pk) && attr(SetupProtocol.TXT_VERSION) == SetupProtocol.VERSION.toString()) {
-                    val t = SetupTarget(
-                        name = attr(SetupProtocol.TXT_NAME)?.takeIf { it.isNotBlank() } ?: info.serviceName ?: "AerioTV",
-                        host = host,
-                        port = info.port,
-                        pk = pk,
-                        kind = SetupProtocol.normalizeKind(attr(SetupProtocol.TXT_KIND)),
-                        service = info.serviceName,
-                    )
-                    info.serviceName?.let { synchronized(this@SetupDiscovery) { keysByService[it] = t.key } }
-                    _tvs.value = (_tvs.value.filterNot { (t.service != null && it.service == t.service) || it.key == t.key } + t).sortedBy { it.name.lowercase() }
-                }
-                done()
-            }
-        }
-        @Suppress("DEPRECATION")
-        runCatching { mgr.resolveService(next, rl) }.onFailure { done() }
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
-    @Synchronized
-    private fun done() { resolving = false; pump() }
+    /** NsdManager behind the engine. Callbacks hop to the main thread before reaching it. */
+    private inner class NsdPlatform : SetupDiscoveryEngine.Platform {
+        private val listeners = HashMap<Int, NsdManager.DiscoveryListener>()
+        /** Browse id -> instance name -> the advert as that browse last reported it. */
+        private val adverts = HashMap<Int, HashMap<String, NsdServiceInfo>>()
+        private val resolvers = HashMap<Int, NsdManager.ResolveListener>()
+
+        override fun startBrowse(id: Int) {
+            val mgr = nsd ?: return
+            val seen = HashMap<String, NsdServiceInfo>()
+            val l = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(serviceType: String) {}
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    main.post { listeners.remove(id); adverts.remove(id); engine.browseFailed(id, errorCode) }
+                }
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                override fun onDiscoveryStopped(serviceType: String) {}
+                override fun onServiceFound(info: NsdServiceInfo) {
+                    val name = info.serviceName ?: return
+                    main.post { if (listeners.containsKey(id)) { seen[name] = info; engine.found(id, name) } }
+                }
+                override fun onServiceLost(info: NsdServiceInfo) {
+                    val name = info.serviceName ?: return
+                    main.post { if (listeners.containsKey(id)) { seen.remove(name); engine.lost(id, name) } }
+                }
+            }
+            listeners[id] = l
+            adverts[id] = seen
+            runCatching { mgr.discoverServices(SetupProtocol.SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, l) }
+                .onFailure { listeners.remove(id); adverts.remove(id); main.post { engine.browseFailed(id, -1) } }
+        }
+
+        override fun stopBrowse(id: Int) {
+            adverts.remove(id)
+            // A new listener per browse: NsdManager refuses a listener that is already in use.
+            listeners.remove(id)?.let { l -> runCatching { nsd?.stopServiceDiscovery(l) } }
+        }
+
+        override fun resolve(serial: Int, browse: Int, service: String) {
+            val mgr = nsd
+            val info = adverts[browse]?.get(service)
+            if (mgr == null || info == null) {
+                main.post { engine.resolveFailed(serial, "advert gone") }
+                return
+            }
+            @Suppress("DEPRECATION")
+            val rl = object : NsdManager.ResolveListener {
+                override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                    main.post { resolvers.remove(serial); engine.resolveFailed(serial, "error $errorCode") }
+                }
+                override fun onServiceResolved(info: NsdServiceInfo) {
+                    @Suppress("DEPRECATION")
+                    val host = info.host?.hostAddress
+                    val txt = runCatching { info.attributes }.getOrNull().orEmpty()
+                        .mapValues { (_, v) -> v?.let { String(it, Charsets.UTF_8) } }
+                    val t = SetupDiscoveryRules.receiverTarget(service, host, info.port, txt, SetupReceiver::isOwnPk)
+                    main.post { resolvers.remove(serial); engine.resolved(serial, t) }
+                }
+            }
+            resolvers[serial] = rl
+            @Suppress("DEPRECATION")
+            runCatching { mgr.resolveService(info, rl) }
+                .onFailure { e -> resolvers.remove(serial); main.post { engine.resolveFailed(serial, e.javaClass.simpleName) } }
+        }
+
+        override fun cancelResolve(serial: Int) {
+            val rl = resolvers.remove(serial) ?: return
+            // Android 14 can cancel a resolve; before that a timed-out one is only ignored,
+            // and the retry may meet "already active" until the system gives up on it.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                runCatching { nsd?.stopServiceResolution(rl) }
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "AerioSetup"

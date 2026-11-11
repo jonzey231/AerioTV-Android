@@ -302,13 +302,18 @@ fun SetUpTvDialog(playlistId: String?, link: String? = null, target: SetupTarget
     val isTv = androidx.compose.runtime.remember {
         ctx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
     }
+    // Every way the sheet closes is logged (2026-11-11), so a close is never silent.
+    val systemDismiss = {
+        android.util.Log.i("AerioSetup", "[SETUP] sheet closed: " + if (isTv) "Back" else "swipe down, outside tap, or Back")
+        onDismiss()
+    }
     if (isTv) {
-        Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Dialog(onDismissRequest = systemDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             SetUpTvScreen(playlistId, link, onDismiss, target = target)
         }
     } else {
         // The remote-session (Cast) sheet's container: black, drag handle, hugs its content.
-        com.aeriotv.android.ui.FormFactorModal(onDismiss = onDismiss, sheetContainerColor = androidx.compose.ui.graphics.Color.Black) {
+        com.aeriotv.android.ui.FormFactorModal(onDismiss = systemDismiss, sheetContainerColor = androidx.compose.ui.graphics.Color.Black) {
             androidx.compose.runtime.CompositionLocalProvider(LocalSetupSheetStyle provides true) {
                 SetUpTvScreen(playlistId, link, onDismiss, target = target, inSheet = true)
             }
@@ -319,8 +324,21 @@ fun SetUpTvDialog(playlistId: String?, link: String? = null, target: SetupTarget
 @Composable
 fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, target: SetupTarget? = null, inSheet: Boolean = false, vm: SetUpTvViewModel = hiltViewModel()) {
     LaunchedEffect(playlistId, link) { vm.load(playlistId, link, target) }
-    DisposableEffect(Unit) { vm.discovery.start(); onDispose { vm.discovery.stop(); vm.reset() } }
+    DisposableEffect(Unit) {
+        vm.discovery.start()
+        onDispose {
+            // Logged for every exit, including the caller removing the sheet without a close call.
+            android.util.Log.i("AerioSetup", "[SETUP] sheet gone step=${vm.step.value.logName}")
+            vm.discovery.stop()
+            vm.reset()
+        }
+    }
     val step by vm.step.collectAsStateWithLifecycle()
+    /** A close from inside the sheet, logged with the step it closed on (never codes or keys). */
+    val close: (String) -> Unit = { how ->
+        android.util.Log.i("AerioSetup", "[SETUP] sheet closed: $how step=${vm.step.value.logName}")
+        onClose()
+    }
     val source by vm.source.collectAsStateWithLifecycle()
     val tvs by vm.discovery.tvs.collectAsStateWithLifecycle()
 
@@ -367,7 +385,7 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                     Text(com.aeriotv.android.core.setup.SETUP_KEY_REJECTED_MESSAGE, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                     SetupPrimaryButton("Edit Playlist", onClick = {
                         com.aeriotv.android.feature.settings.EditPlaylistRequest.open(s.playlistId)
-                        onClose()
+                        close("Edit Playlist")
                     })
                 }
                 SetUpTvViewModel.Step.Sending -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -375,25 +393,41 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                 }
                 SetUpTvViewModel.Step.Sent -> {
                     Text("Sent. The device is finishing setup now.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                    SetupPrimaryButton("Done", onClick = onClose)
+                    SetupPrimaryButton("Done", onClick = { close("Done") })
                 }
                 is SetUpTvViewModel.Step.Error -> {
                     Text(s.message, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                     SetupPrimaryButton("Try Again", onClick = vm::back)
                 }
-                SetUpTvViewModel.Step.Refused -> LaunchedEffect(Unit) { onClose() }
+                SetUpTvViewModel.Step.Refused -> LaunchedEffect(Unit) { close("this profile may not set up another device") }
             }
             if (step !is SetUpTvViewModel.Step.Sent && step !is SetUpTvViewModel.Step.Sending &&
                 step !is SetUpTvViewModel.Step.Checking && step !is SetUpTvViewModel.Step.Refused
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (step !is SetUpTvViewModel.Step.Pick) SetupSecondaryButton("Back", onClick = vm::back, modifier = Modifier.weight(1f))
-                    SetupSecondaryButton("Cancel", onClick = onClose, modifier = Modifier.weight(1f))
+                    SetupSecondaryButton("Cancel", onClick = { close("Cancel") }, modifier = Modifier.weight(1f))
                 }
             }
         }
     }
 }
+
+/** The step's name for the close logs (release builds rename classes). Never codes or keys. */
+private val SetUpTvViewModel.Step.logName: String
+    get() = when (this) {
+        SetUpTvViewModel.Step.Pick -> "Pick"
+        is SetUpTvViewModel.Step.Scope -> "Scope"
+        is SetUpTvViewModel.Step.Credential -> "Credential"
+        is SetUpTvViewModel.Step.Code -> "Code"
+        is SetUpTvViewModel.Step.Choose -> "Choose"
+        SetUpTvViewModel.Step.Sending -> "Sending"
+        is SetUpTvViewModel.Step.Checking -> "Checking"
+        is SetUpTvViewModel.Step.KeyRejected -> "KeyRejected"
+        SetUpTvViewModel.Step.Sent -> "Sent"
+        is SetUpTvViewModel.Step.Error -> "Error"
+        SetUpTvViewModel.Step.Refused -> "Refused"
+    }
 
 @Composable
 private fun PickStep(tvs: List<SetupTarget>, onPick: (SetupTarget) -> Unit, onLink: (String) -> Unit) {
