@@ -139,7 +139,7 @@ class ProfilesViewModel @Inject constructor(
     fun pinsMissingForChild(playlistId: String, becomingChild: String? = null) = manager.pinsMissingForChild(playlistId, becomingChild)
     fun needsPinAfterAdd(playlistId: String, profileId: String) = manager.needsPinAfterAdd(playlistId, profileId)
     fun isPendingPinAdd(profileId: String) = manager.isPendingPinAdd(profileId)
-    suspend fun discardPendingAdds(playlistId: String) = manager.discardPendingAdds(playlistId)
+    suspend fun discardPendingAdds(playlistId: String, addedInAction: Collection<String>) = manager.discardPendingAdds(playlistId, addedInAction)
     val activeRole = com.aeriotv.android.core.profiles.ProfileRoles.active
 
     // Roles (phase 2b)
@@ -1079,7 +1079,9 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     var role by remember { mutableStateOf(com.aeriotv.android.core.profiles.ProfileRole.User) }
     // Assumption A: an Admin or Standard add while a Child exists sets its PIN right after.
     var pinAfterAdd by remember { mutableStateOf(false) }
-    fun added(p: DispatcharrProfile) { if (vm.needsPinAfterAdd(playlistId, p.id)) pinAfterAdd = true else onClose() }
+    // The profiles this dialog added: the only ones its PIN step's Cancel undoes.
+    val addedHere = remember { androidx.compose.runtime.mutableStateListOf<String>() }
+    fun added(p: DispatcharrProfile) { addedHere += p.id; if (vm.needsPinAfterAdd(playlistId, p.id)) pinAfterAdd = true else onClose() }
     LaunchedEffect(playlistId) {
         vm.notePickerOpened(playlistId, "addProfile")
         vm.addCandidates(playlistId).fold(
@@ -1093,7 +1095,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         )
     }
     if (pinAfterAdd) {
-        PinAfterAdd(playlistId, vm) { onClose() }
+        PinAfterAdd(playlistId, vm, addedHere.toList()) { onClose() }
         return
     }
     if (manual) {

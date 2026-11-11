@@ -318,9 +318,14 @@ class ProfileManager @Inject constructor(
     fun needsPinAfterAdd(playlistId: String, profileId: String): Boolean =
         anyChild(playlistId) && RoleRules.isFullAccess(roleOf(profileId)) && !pinStore.hasPin(profileId)
 
-    /** The PIN step after an add was cancelled: the add is undone (a Child exists, so a PIN is required). */
-    suspend fun discardPendingAdds(playlistId: String) {
-        val drop = store.forPlaylist(playlistId).filter { it.id in pendingPinAdds && !pinStore.hasPin(it.id) && !it.isDefault }
+    /**
+     * The PIN step after an add was cancelled: the adds [addedInAction] made
+     * are undone (a Child exists, so a PIN is required). Profiles other
+     * actions added, a setup handoff's included, stay pending as they were.
+     */
+    suspend fun discardPendingAdds(playlistId: String, addedInAction: Collection<String>) {
+        val ids = RoleRules.pinStepCancelDiscards(addedInAction, pendingPinAdds, pinStore::hasPin).toSet()
+        val drop = store.forPlaylist(playlistId).filter { it.id in ids && !it.isDefault }
         drop.forEach { p ->
             pendingPinAdds.remove(p.id)
             // A roster add goes on this device only, so it is offered again.

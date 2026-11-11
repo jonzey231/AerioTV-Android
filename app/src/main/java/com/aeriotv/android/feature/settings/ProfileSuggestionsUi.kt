@@ -266,7 +266,7 @@ internal fun RosterSuggestions(
         )
     }
     pinAfter?.let { (r, id) ->
-        PinAfterAdd(playlistId, vm) { ok ->
+        PinAfterAdd(playlistId, vm, listOf(id)) { ok ->
             pinAfter = null
             if (ok) { onAddedProfile(id); onAdded() } else {
                 addedIds.remove(r.username.lowercase())
@@ -363,13 +363,14 @@ internal fun RosterCredentialDialog(
 /**
  * Assumption A, add flow: an Admin or Standard profile added while a Child
  * exists sets its PIN right after the add (same sheets). Cancelling undoes
- * the add. onDone(true) = kept.
+ * only [addedIds], the adds of the action that opened this step; any other
+ * profile still waiting for its PIN stays as it was. onDone(true) = kept.
  */
 @Composable
-internal fun PinAfterAdd(playlistId: String, vm: ProfilesViewModel, onDone: (Boolean) -> Unit) {
+internal fun PinAfterAdd(playlistId: String, vm: ProfilesViewModel, addedIds: List<String>, onDone: (Boolean) -> Unit) {
     val scope = rememberCoroutineScope()
     ChildNeedsAdminPin(playlistId, vm) { ok ->
-        if (ok) onDone(true) else scope.launch { vm.discardPendingAdds(playlistId); onDone(false) }
+        if (ok) onDone(true) else scope.launch { vm.discardPendingAdds(playlistId, addedIds); onDone(false) }
     }
 }
 

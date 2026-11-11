@@ -115,13 +115,16 @@ class AddProfilesStepViewModel @Inject constructor(
         Step.Skip
     }
 
+    /** The profiles this step added: the only ones its PIN walk's Cancel undoes (a setup handoff's stay). */
+    val addedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
         (if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
         else manager.addProfileManual(playlistId, username, password, null, role))
-            .onSuccess { manager.markFreshAddUndoable(it.id) }
+            .onSuccess { manager.markFreshAddUndoable(it.id); addedIds += it.id }
 
     suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
-        manager.addProfile(playlistId, user, password, apiKey, role)
+        manager.addProfile(playlistId, user, password, apiKey, role).onSuccess { addedIds += it.id }
 
     private companion object { const val TAG = "AddProfilesStep" }
 }
@@ -148,7 +151,7 @@ fun AddProfilesStepScreen(
         if (pinVm.anyChild(playlistId) && pinVm.pinsMissingForChild(playlistId).isNotEmpty()) pinWalk = true else finishStep()
     }
     if (pinWalk) {
-        com.aeriotv.android.feature.settings.PinAfterAdd(playlistId, pinVm) { pinWalk = false; finishStep() }
+        com.aeriotv.android.feature.settings.PinAfterAdd(playlistId, pinVm, vm.addedIds.toList()) { pinWalk = false; finishStep() }
         return
     }
     var users by remember { mutableStateOf<List<DispatcharrUserSummary>?>(null) }

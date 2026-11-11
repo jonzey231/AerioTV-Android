@@ -63,6 +63,15 @@ fun DispatcharrProfile.effectiveRole(): ProfileRole = ProfileRole.resolve(userLe
  *    to any non-Child profile.
  */
 object RoleRules {
+    /**
+     * Cancel on "PIN Required" (item 7, 2026-11-11): the profiles to undo are
+     * only those the action that opened the step added, and only while they
+     * are still waiting for a PIN. Every other pending profile (one from a
+     * setup handoff, say) stays exactly as it was, and is asked for again.
+     */
+    fun pinStepCancelDiscards(addedInAction: Collection<String>, pending: Set<String>, hasPin: (String) -> Boolean): List<String> =
+        addedInAction.distinct().filter { it in pending && !hasPin(it) }
+
     /** Admin and Standard: full access in AerioTV. */
     fun isFullAccess(role: ProfileRole?): Boolean = role != null && role != ProfileRole.Child
 
