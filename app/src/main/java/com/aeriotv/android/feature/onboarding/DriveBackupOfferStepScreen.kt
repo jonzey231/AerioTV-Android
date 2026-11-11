@@ -49,6 +49,24 @@ fun DriveBackupOfferStepScreen(
 ) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // TV: the Apple TV prompt geometry the Dispatcharr Sync step before this
+    // one already uses (Apple's iCloud offer is the same 900 pt column with
+    // 66 pt buttons), centered with equal space above and below; the phone
+    // column below drew 54 dp buttons on a TV.
+    if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+        SyncPromptLayout(
+            title = DRIVE_OFFER_TITLE,
+            body = DRIVE_OFFER_BODY,
+            primaryLabel = "Sign in with Google",
+            secondaryLabel = "Not now",
+            onPrimary = { if (!busy) onSignIn() },
+            onSecondary = { if (!busy) onNotNow() },
+            busy = busy,
+            primaryFocus = focus,
+            footer = null,
+        )
+        return
+    }
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
     Box(
         modifier = Modifier

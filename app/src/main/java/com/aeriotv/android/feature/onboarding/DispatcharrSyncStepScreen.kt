@@ -332,13 +332,18 @@ private fun TvSyncPromptLayout(
         val density = androidx.compose.ui.platform.LocalDensity.current
         fun sp(points: Float) = with(density) { (u * points).toSp() }
         val column = maxWidth * (900f / 1920f)
+        val pageScroll = rememberScrollState()
+        // Focus back on a control near the top scrolls the page to its top
+        // (only matters when large text makes the prompt taller than the screen).
+        com.aeriotv.android.ui.tv.TvTopSnapPage(pageScroll) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(pageScroll)
                 .padding(horizontal = u * 80f, vertical = u * 60f),
             contentAlignment = Alignment.Center,
         ) {
+            Inside {
             Column(
                 modifier = Modifier.width(column),
                 verticalArrangement = Arrangement.spacedBy(u * 20f),
@@ -403,6 +408,8 @@ private fun TvSyncPromptLayout(
                     )
                 }
             }
+            }
+        }
         }
     }
 }

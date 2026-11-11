@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,6 +32,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.settings.dpadFocusRing
 
@@ -146,6 +148,44 @@ fun OnboardingPill(
                     contentColor = androidx.compose.ui.graphics.Color.White,
                 ),
                 content = content,
+            )
+        }
+    }
+}
+
+/**
+ * TV only: Apple TV's full-width OnboardingPillButton (60 pt tall, 24 pt
+ * semibold label, 3 pt focus ring) drawn with [OnboardingPill] at half
+ * scale for the 960 x 540 dp canvas: 30 dp, 12 sp, 1.5 dp. The phone
+ * Material buttons are 54 dp, which a 1080p TV draws 108 px tall.
+ */
+@Composable
+fun TvOnboardingPillButton(
+    label: String,
+    filled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    busy: Boolean = false,
+) {
+    OnboardingPill(
+        filled = filled,
+        onClick = onClick,
+        ringWidth = 1.5.dp,
+        modifier = modifier.fillMaxWidth().height(30.dp),
+    ) {
+        if (busy) {
+            androidx.compose.material3.CircularProgressIndicator(
+                Modifier.size(15.dp),
+                color = androidx.compose.ui.graphics.Color.White,
+                strokeWidth = 1.5.dp,
+            )
+        } else {
+            Text(
+                label,
+                fontSize = 12.sp,
+                letterSpacing = 0.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
             )
         }
     }

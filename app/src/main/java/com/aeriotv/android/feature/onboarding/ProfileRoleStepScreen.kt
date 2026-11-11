@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -90,18 +91,64 @@ fun ProfileRoleStepScreen(
     var choice by remember { mutableStateOf(ProfileRole.User) }
     var settingPin by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    ProfileRoleStepContent(
+        choice = choice,
+        onChoice = { choice = it },
+        error = error,
+        onContinue = {
+            error = null
+            if (choice == ProfileRole.Child) {
+                if (profilesVm.hasDeviceAdminPin(playlistId)) {
+                    profilesVm.makeBaseChild(playlistId).fold({ onDone(true) }, { error = it.message })
+                } else settingPin = true
+            } else onDone(false)
+        },
+    )
+    if (settingPin) {
+        com.aeriotv.android.feature.settings.DeviceAdminPinSetFlow(playlistId, profilesVm, onboarding = true) { err ->
+            settingPin = false
+            if (err != null) { error = err; return@DeviceAdminPinSetFlow }
+            if (!profilesVm.hasDeviceAdminPin(playlistId)) return@DeviceAdminPinSetFlow // cancelled
+            profilesVm.makeBaseChild(playlistId).fold({ onDone(true) }, { error = it.message })
+        }
+    }
+}
+
+/**
+ * The step's page. TV: Apple TV's ProfileRoleStepView at half scale on the
+ * 960 x 540 dp canvas (900 pt column, 20 pt gaps, 80 / 60 pt padding, the
+ * 60 pt Continue pill), with the first choice focused as tvOS focuses the
+ * topmost control. The phone 640 dp column and 54 dp button filled two
+ * thirds of a 1080p TV. On TV the block is centered with the same space
+ * above and below; the scroll keeps the screen height as the minimum, so
+ * that only applies when it fits (Logan, 2026-11-11).
+ */
+@Composable
+internal fun ProfileRoleStepContent(
+    choice: ProfileRole,
+    onChoice: (ProfileRole) -> Unit,
+    error: String?,
+    onContinue: () -> Unit,
+) {
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val firstFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    if (isTv) LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
+    val pageScroll = rememberScrollState()
+    // TV: focus back on a control near the top scrolls the page to its top.
+    com.aeriotv.android.ui.tv.TvTopSnapPage(pageScroll, enabled = isTv) {
     Box(
         Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = vp.gutter, vertical = 24.dp),
-        contentAlignment = Alignment.TopCenter,
+            .verticalScroll(pageScroll)
+            .padding(horizontal = vp.gutter, vertical = if (isTv) 30.dp else 24.dp),
+        contentAlignment = if (isTv) Alignment.Center else Alignment.TopCenter,
     ) {
+        Inside {
         Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.widthIn(max = if (isTv) 450.dp else 640.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(if (isTv) 10.dp else 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -117,12 +164,13 @@ fun ProfileRoleStepScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            listOf(ProfileRole.User, ProfileRole.Child).forEach { r ->
+            listOf(ProfileRole.User, ProfileRole.Child).forEachIndexed { index, r ->
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
                         .dpadFocusRing(RoundedCornerShape(12.dp), washTint = MaterialTheme.colorScheme.primary)
-                        .selectable(selected = r == choice, role = Role.RadioButton) { choice = r }
+                        .selectable(selected = r == choice, role = Role.RadioButton) { onChoice(r) }
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -139,15 +187,13 @@ fun ProfileRoleStepScreen(
                 }
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Button(
-                onClick = {
-                    error = null
-                    if (choice == ProfileRole.Child) {
-                        if (profilesVm.hasDeviceAdminPin(playlistId)) {
-                            profilesVm.makeBaseChild(playlistId).fold({ onDone(true) }, { error = it.message })
-                        } else settingPin = true
-                    } else onDone(false)
-                },
+            if (isTv) com.aeriotv.android.feature.onboarding.components.TvOnboardingPillButton(
+                label = "Continue",
+                filled = true,
+                onClick = onContinue,
+            )
+            else Button(
+                onClick = onContinue,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -155,13 +201,7 @@ fun ProfileRoleStepScreen(
                 ),
             ) { Text("Continue", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         }
-    }
-    if (settingPin) {
-        com.aeriotv.android.feature.settings.DeviceAdminPinSetFlow(playlistId, profilesVm, onboarding = true) { err ->
-            settingPin = false
-            if (err != null) { error = err; return@DeviceAdminPinSetFlow }
-            if (!profilesVm.hasDeviceAdminPin(playlistId)) return@DeviceAdminPinSetFlow // cancelled
-            profilesVm.makeBaseChild(playlistId).fold({ onDone(true) }, { error = it.message })
         }
+    }
     }
 }

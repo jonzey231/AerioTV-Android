@@ -54,6 +54,24 @@ fun BackupUpdateStepScreen(
 ) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // TV onboarding step: the Apple TV prompt geometry the Dispatcharr Sync
+    // step after this one uses (Apple's BackupUpdateStepView is the same 900
+    // pt column with 66 pt buttons), centered with equal space above and
+    // below. The Settings dialog keeps its content.
+    if (!inDialog && com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+        SyncPromptLayout(
+            title = SetupSourceChoice.UPDATE_TITLE,
+            body = SetupSourceChoice.UPDATE_BODY,
+            primaryLabel = SetupSourceChoice.UPDATE_ACCEPT,
+            secondaryLabel = SetupSourceChoice.UPDATE_NOT_NOW,
+            onPrimary = { if (!busy) onUpdate() },
+            onSecondary = { if (!busy) onNotNow() },
+            busy = busy,
+            primaryFocus = focus,
+            footer = null,
+        )
+        return
+    }
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
     val content: @Composable () -> Unit = {
         Column(

@@ -479,6 +479,81 @@ object TvLargeCardBringIntoViewSpec : androidx.compose.foundation.gestures.Bring
     }
 }
 
+/**
+ * TV onboarding pages that scroll as one (Logan, 2026-11-11): when D-pad
+ * focus comes back up to a control that fits on the page's first screen
+ * (the red minus, a card near the top), the page scrolls all the way to its
+ * top so the step's header ("Step 2 of 3", the title) shows again. Android
+ * TV's default focus scrolling keeps the focused control about a third of
+ * the way down instead, which left the header just above the screen edge.
+ * Anything further down scrolls as [fallback] does.
+ */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+class TvTopSnapBringIntoViewSpec(
+    private val scroll: androidx.compose.foundation.ScrollState,
+    private val fallback: androidx.compose.foundation.gestures.BringIntoViewSpec,
+) : androidx.compose.foundation.gestures.BringIntoViewSpec {
+    @Suppress("DEPRECATION")
+    override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float>
+        get() = fallback.scrollAnimationSpec
+
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float,
+    ): Float {
+        // [offset] is measured from the top of the visible page; adding the
+        // scroll gives the control's place on the page itself.
+        val onPage = offset + scroll.value
+        if (onPage + size <= containerSize) return -scroll.value.toFloat()
+        return fallback.calculateScrollDistance(offset, size, containerSize)
+    }
+}
+
+/** Receiver of [TvTopSnapPage]: [Inside] wraps the scroll container's children. */
+class TvTopSnapScope internal constructor(
+    private val outer: androidx.compose.foundation.gestures.BringIntoViewSpec?,
+) {
+    /**
+     * Gives the children back the spec that was in place outside the page,
+     * so their own scrollables (text fields, menus) never read the page's
+     * scroll position.
+     */
+    @kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+    @Composable
+    fun Inside(content: @Composable () -> Unit) {
+        if (outer == null) content()
+        else androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides outer,
+            content = content,
+        )
+    }
+}
+
+/**
+ * Puts [TvTopSnapBringIntoViewSpec] on the scroll container [page] builds
+ * with [scroll]. Off ([enabled] false, phones and tablets) it changes
+ * nothing.
+ */
+@kotlin.OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun TvTopSnapPage(
+    scroll: androidx.compose.foundation.ScrollState,
+    enabled: Boolean = true,
+    page: @Composable TvTopSnapScope.() -> Unit,
+) {
+    val outer = androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current
+    if (!enabled) {
+        androidx.compose.runtime.remember { TvTopSnapScope(null) }.page()
+        return
+    }
+    val snap = androidx.compose.runtime.remember(scroll, outer) { TvTopSnapBringIntoViewSpec(scroll, outer) }
+    val scope = androidx.compose.runtime.remember(outer) { TvTopSnapScope(outer) }
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides snap,
+    ) { scope.page() }
+}
+
 
 /**
  * Grid prefetch for the TV media pages: the default strategy prepares one
