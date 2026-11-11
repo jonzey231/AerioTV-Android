@@ -1142,6 +1142,9 @@ class ProfileManager @Inject constructor(
     /** The playlist row with the DEFAULT profile's credential (never a switched profile's). */
     suspend fun defaultPlaylistRow(playlistId: String): PlaylistEntity? = playlistDao.rawById(playlistId)
 
+    /** Every playlist row with the DEFAULT profile's credential (Fix Login's card rule). */
+    suspend fun defaultPlaylistRows(): List<PlaylistEntity> = playlistDao.rawAll()
+
     /** A local profile plus its v2 PIN record, for the setup payload. */
     data class SetupSource(val profile: DispatcharrProfile, val pin: ProfilePinStore.Record?)
 

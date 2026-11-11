@@ -115,6 +115,13 @@ class SetUpTvViewModel @Inject constructor(
     private var playlistId: String? = null
     private val _userOnly = MutableStateFlow(false)
     val userOnly: StateFlow<Boolean> = _userOnly.asStateFlow()
+    /**
+     * Fix Login (the device advertised `mode=fixlogin`): the device asking
+     * for this playlist's sign-in. Code, then send; no scope, profile, or
+     * sync choices. Null for a normal setup.
+     */
+    private val _fixLogin = MutableStateFlow<SetupTarget?>(null)
+    val fixLogin: StateFlow<SetupTarget?> = _fixLogin.asStateFlow()
 
     /**
      * Back to a fresh flow. Called when the sheet leaves (Done, Cancel, or a
@@ -126,6 +133,7 @@ class SetUpTvViewModel @Inject constructor(
     fun reset() {
         playlistId = null
         _userOnly.value = false
+        _fixLogin.value = null
         _step.value = Step.Pick
     }
 
@@ -141,6 +149,7 @@ class SetUpTvViewModel @Inject constructor(
             val id = pid ?: repository.activePlaylist()?.id
             playlistId = id
             _source.value = id?.let { sender.source(it) }
+            if (target?.isFixLogin == true) _fixLogin.value = target
             if (target != null) _step.value = afterTarget(target)
             link?.let(SetupProtocol::parseLink)?.let { l ->
                 val t = SetupTarget(l.name.ifBlank { "AerioTV" }, l.ip, l.port, l.pk, code = l.code)
@@ -173,6 +182,8 @@ class SetUpTvViewModel @Inject constructor(
 
     /** Scope applies to Dispatcharr only; other playlists go straight to the code. */
     private fun afterTarget(t: SetupTarget): Step = when {
+        // Fix Login: straight to the code; the playlist and its sign-in are already decided.
+        t.isFixLogin -> Step.Code(t)
         isDispatcharr -> Step.Scope(t)
         t.code != null -> Step.Choose(t, t.code)
         else -> Step.Code(t)
@@ -211,7 +222,8 @@ class SetUpTvViewModel @Inject constructor(
     fun back() {
         _step.value = when (val s = _step.value) {
             is Step.Choose -> if (s.target.code != null) afterTargetBack(s.target) else Step.Code(s.target)
-            is Step.Code -> afterTargetBack(s.target)
+            // Fix Login starts at the code: nothing before it to go back to.
+            is Step.Code -> if (s.target.isFixLogin) s else afterTargetBack(s.target)
             is Step.Credential -> Step.Scope(s.target)
             is Step.Error -> s.back
             is Step.KeyRejected -> s.back
@@ -222,6 +234,8 @@ class SetUpTvViewModel @Inject constructor(
     fun submitCode(t: SetupTarget, code: String) {
         val c = code.filter(Char::isDigit)
         if (c.length != 6) { _step.value = Step.Code(t, "Enter the 6-digit code shown on the other device."); return }
+        // Fix Login has nothing to choose: the code sends.
+        if (t.isFixLogin) { send(t, c, emptySet(), false); return }
         _step.value = Step.Choose(t, c)
     }
 
@@ -235,14 +249,18 @@ class SetUpTvViewModel @Inject constructor(
             _step.value = Step.Refused
             return
         }
-        val back = Step.Choose(target, code)
+        val back = if (target.isFixLogin) Step.Code(target) else Step.Choose(target, code)
         _step.value = Step.Sending
         viewModelScope.launch {
             // Resolve again right before every send: the device may have started a
             // new session (new port and key) since the card or list last saw it.
             val t = SetupDiscovery.fresh(context, target)
-            val payload = sender.buildPayload(id, profileIds, sync, userOnly = _userOnly.value)
+            // Fix Login: only this playlist's sign-in, addressed to the device's playlist id.
+            val fixFor = target.playlistId?.takeIf { target.isFixLogin }
+            val payload = (if (fixFor != null) sender.buildFixLoginPayload(id, fixFor)
+                else sender.buildPayload(id, profileIds, sync, userOnly = _userOnly.value))
                 ?: run { _step.value = Step.Error("This playlist could not be read.", back); return@launch }
+            if (fixFor != null) android.util.Log.i("AerioSetup", "[SETUP] fix login: sending ${id.take(8)}'s sign-in for ${fixFor.take(8)}")
             // Never hand over a key the server refuses (2026-11-09): one
             // authenticated request with exactly the key in the payload.
             val key = payload.playlist.credential?.apiKey
@@ -340,7 +358,11 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
         onClose()
     }
     val source by vm.source.collectAsStateWithLifecycle()
-    val tvs by vm.discovery.tvs.collectAsStateWithLifecycle()
+    // The list offers setup receivers only; a device asking for Fix Login is
+    // offered by the dock card and the Settings banner.
+    val tvs = vm.discovery.tvs.collectAsStateWithLifecycle().value.filter { it.mode == null }
+    val fixLogin by vm.fixLogin.collectAsStateWithLifecycle()
+    val sheetTitle = if (fixLogin != null) com.aeriotv.android.core.setup.FixLogin.SHEET_TITLE else "Set up another device"
 
     Column(
         (if (inSheet) Modifier.fillMaxWidth().imePadding()
@@ -357,11 +379,11 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                     androidx.compose.foundation.layout.Box(Modifier.height(56.dp), contentAlignment = Alignment.Center) {
                         Icon(t?.let { setupKindIcon(it.kind) } ?: Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(40.dp))
                     }
-                    Text("Set up another device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color.White, maxLines = 1)
+                    Text(sheetTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color.White, maxLines = 1)
                     if (t != null) Text(t.name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                 }
             } else {
-                Text("Set up another device", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                Text(sheetTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
             }
             when (val s = step) {
                 SetUpTvViewModel.Step.Pick -> PickStep(tvs, vm::pick, vm::useLink)
@@ -392,7 +414,10 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                     CircularProgressIndicator(Modifier.size(24.dp)); Text("Sending to the other device", color = MaterialTheme.colorScheme.onBackground)
                 }
                 SetUpTvViewModel.Step.Sent -> {
-                    Text("Sent. The device is finishing setup now.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        fixLogin?.let { com.aeriotv.android.core.setup.FixLogin.sentLine(it.name) } ?: "Sent. The device is finishing setup now.",
+                        style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground,
+                    )
                     SetupPrimaryButton("Done", onClick = { close("Done") })
                 }
                 is SetUpTvViewModel.Step.Error -> {
@@ -405,7 +430,8 @@ fun SetUpTvScreen(playlistId: String?, link: String?, onClose: () -> Unit, targe
                 step !is SetUpTvViewModel.Step.Checking && step !is SetUpTvViewModel.Step.Refused
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (step !is SetUpTvViewModel.Step.Pick) SetupSecondaryButton("Back", onClick = vm::back, modifier = Modifier.weight(1f))
+                    val fixAtCode = (step as? SetUpTvViewModel.Step.Code)?.target?.isFixLogin == true
+                    if (step !is SetUpTvViewModel.Step.Pick && !fixAtCode) SetupSecondaryButton("Back", onClick = vm::back, modifier = Modifier.weight(1f))
                     SetupSecondaryButton("Cancel", onClick = { close("Cancel") }, modifier = Modifier.weight(1f))
                 }
             }

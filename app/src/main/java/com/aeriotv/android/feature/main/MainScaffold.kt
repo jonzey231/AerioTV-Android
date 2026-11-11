@@ -707,22 +707,50 @@ fun MainScaffold(
     }
     val setupTvs by setupDiscovery.tvs.collectAsStateWithLifecycle()
     var setupDockTarget by remember { mutableStateOf<com.aeriotv.android.core.setup.SetupTarget?>(null) }
+    /** Fix Login: the playlist here whose sign-in the open sheet sends (null = a normal setup). */
+    var setupDockFixPid by remember { mutableStateOf<String?>(null) }
     val setupPm = remember {
         dagger.hilt.android.EntryPointAccessors.fromApplication(
             context.applicationContext, com.aeriotv.android.feature.settings.SetupEntryPoint::class.java,
         ).profileManager()
     }
-    // The one TV on offer (dock card AND Settings root banner): the first
-    // advertising TV not dismissed, hidden while its setup sheet is open.
-    // Phones and tablets, Admin or default profile.
+    // Fix Login adverts (mode=fixlogin): which playlist here each one can be
+    // fixed from (same id, or the same account; its own key not held here).
+    // Re-read when the adverts change, when a key is held or lifted here, and
+    // when the active playlist's row changes (an Edit Playlist save).
+    val setupHeldPrompt by com.aeriotv.android.core.network.DispatcharrRequestGate.prompt.collectAsStateWithLifecycle()
+    val setupFixMatches by androidx.compose.runtime.produceState(emptyMap<String, String>(), setupTvs, setupHeldPrompt, capsPlaylist) {
+        value = if (isTvShell || setupTvs.none { it.isFixLogin }) emptyMap()
+            else runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.aeriotv.android.core.setup.fixLoginMatches(setupTvs, setupPm)
+                }
+            }.getOrDefault(emptyMap())
+    }
+    // The one device on offer (dock card AND Settings root banner): the
+    // first advertising device not dismissed that this profile may send to,
+    // hidden while its sheet is open. Phones and tablets, Admin or default
+    // profile (for Fix Login, of the playlist whose sign-in is sent).
     val setupOfferPid = capsPlaylist?.id
-    val setupOfferTarget = if (isTvShell || setupOfferPid == null || !setupPm.canSetUpTv(setupOfferPid) || setupDockTarget != null) null
-        else setupTvs.firstOrNull { !com.aeriotv.android.feature.devicesetup.SetupDockDismissals.isDismissed(it) }
-    val setupOffer = setupOfferTarget?.let { t ->
+    val setupOfferPick = if (isTvShell || setupDockTarget != null) null
+        else setupTvs.asSequence()
+            .filter { !com.aeriotv.android.feature.devicesetup.SetupDockDismissals.isDismissed(it) }
+            .map { t ->
+                t to com.aeriotv.android.core.setup.FixLogin.offer(
+                    mode = t.mode,
+                    activePlaylistId = setupOfferPid,
+                    fixLoginPid = setupFixMatches[t.identity],
+                    canSetUp = setupPm::canSetUpTv,
+                )
+            }
+            .firstOrNull { it.second != com.aeriotv.android.core.setup.FixLogin.Offer.None }
+    val setupOffer = setupOfferPick?.let { (t, o) ->
+        val fixPid = (o as? com.aeriotv.android.core.setup.FixLogin.Offer.Fix)?.playlistId
         com.aeriotv.android.feature.devicesetup.SetupTvOffer(
             target = t,
-            onSetUp = { setupDockTarget = t },
+            onSetUp = { setupDockFixPid = fixPid; setupDockTarget = t },
             onDismiss = { com.aeriotv.android.feature.devicesetup.SetupDockDismissals.dismiss(t) },
+            fixLoginPlaylistId = fixPid,
         )
     }
     // Poll pause state from the held ExoPlayer so the mini-player's
@@ -2142,9 +2170,10 @@ fun MainScaffold(
     // cast targets invisible outside the player.
     setupDockTarget?.let { t ->
         com.aeriotv.android.feature.devicesetup.SetUpTvDialog(
-            playlistId = capsPlaylist?.id,
+            // Fix Login sends the matched playlist's sign-in, else the active playlist's setup.
+            playlistId = setupDockFixPid ?: capsPlaylist?.id,
             target = t,
-            onDismiss = { setupDockTarget = null },
+            onDismiss = { setupDockTarget = null; setupDockFixPid = null },
         )
     }
     if (showCompanionPicker) {

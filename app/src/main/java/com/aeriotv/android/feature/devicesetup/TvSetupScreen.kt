@@ -103,6 +103,8 @@ class TvSetupViewModel @Inject constructor(
         data class RequestFailed(val message: String) : Phase
         /** The received playlist matches one already here (SetupDuplicateMatch): Cancel, Add Anyway, or Replace. */
         data class Duplicate(val existingName: String) : Phase
+        /** Fix Login: [playlistId]'s sign-in was written and its hold lifted; the screen confirms, then closes. */
+        data class SignedIn(val playlistId: String) : Phase
     }
 
     enum class DuplicateChoice { Cancel, AddAnyway, Replace }
@@ -146,11 +148,19 @@ class TvSetupViewModel @Inject constructor(
 
     private var request: Request? = null
     private var requestJob: Job? = null
+    /** Fix Login (TVs): the playlist whose sign-in this screen asks a phone for; null = a normal setup. */
+    private var fixLoginPid: String? = null
 
-    fun start(req: Request? = null) {
+    fun start(req: Request? = null, fixLoginPlaylistId: String? = null) {
         if (receiver != null) return
         request = req
-        val r = SetupReceiver(context, { payload -> viewModelScope.launch { onPayload(payload) } }, advertise = true) // Advertised in every mode, as on Welcome, so other devices show the waiting banner.
+        fixLoginPid = fixLoginPlaylistId
+        val r = SetupReceiver(
+            context,
+            { payload -> viewModelScope.launch { onPayload(payload) } },
+            advertise = true, // Advertised in every mode, as on Welcome, so other devices show the waiting banner.
+            fixLoginPlaylistId = fixLoginPlaylistId,
+        )
         receiver = r
         viewModelScope.launch {
             if (!r.start()) { receiver = null; _phase.value = Phase.NoNetwork; return@launch }
@@ -190,9 +200,10 @@ class TvSetupViewModel @Inject constructor(
 
     fun restart() {
         val req = request
+        val fix = fixLoginPid
         stop()
         _phase.value = Phase.Starting
-        start(req)
+        start(req, fix)
     }
 
     fun stop() {
@@ -204,7 +215,7 @@ class TvSetupViewModel @Inject constructor(
     }
 
     fun reset() {
-        if (_phase.value !is Phase.Applying) { pending = null; resolved = null; duplicateId = null; request = null; _phase.value = Phase.Starting }
+        if (_phase.value !is Phase.Applying) { pending = null; resolved = null; duplicateId = null; request = null; fixLoginPid = null; _phase.value = Phase.Starting }
     }
 
     fun retry() {
@@ -218,6 +229,10 @@ class TvSetupViewModel @Inject constructor(
         timeout?.cancel()
         receiver?.stop()
         receiver = null
+        if (com.aeriotv.android.core.setup.FixLogin.appliesAsFixLogin(fixLoginPid, p.mode)) {
+            applyFixLogin(p)
+            return
+        }
         val add = addPlaylist ?: run { _phase.value = Phase.Failed("Setup is not ready. Try again."); return }
         _phase.value = Phase.Applying("Connecting to your server")
         val pl = p.playlist
@@ -329,6 +344,34 @@ class TvSetupViewModel @Inject constructor(
         _phase.value = Phase.Done(entity.id.takeIf { isDispatcharr })
     }
 
+    /**
+     * Fix Login (docs/DeviceSetupHandoff.md): only the sign-in of the
+     * playlist this screen was opened for (or, for a `mode: "fixlogin"`
+     * payload on a normal screen, the playlist it names) is written; profiles,
+     * settings, and other playlists are never touched, whatever else the
+     * payload carries. Not for a playlist here: "Setup did not finish" and the
+     * screen stays open (Retry offers a new code).
+     */
+    private suspend fun applyFixLogin(p: SetupProtocol.Payload) {
+        _phase.value = Phase.Applying(com.aeriotv.android.core.setup.FixLogin.APPLYING_LINE)
+        val ids = runCatching { playlists.allOnce() }.getOrDefault(emptyList()).map { it.id }
+        val pid = com.aeriotv.android.core.setup.FixLogin.receiverPlaylistId(fixLoginPid, p.playlist.id, ids)
+        // A failed fix never re-applies the same payload: Retry starts a new code.
+        pending = null
+        if (pid == null) {
+            Log.w(TAG, "[SETUP] fix login: the sign-in is not for ${if (fixLoginPid != null) "the playlist this screen asked for" else "a playlist here"}")
+            _phase.value = Phase.Failed(com.aeriotv.android.core.setup.FixLogin.NOT_HERE)
+            return
+        }
+        playlists.applyHandedSignIn(pid, p.playlist.credential).fold(
+            onSuccess = { _phase.value = Phase.SignedIn(pid) },
+            onFailure = {
+                Log.w(TAG, "[SETUP] fix login not applied: ${it.javaClass.simpleName}")
+                _phase.value = Phase.Failed(com.aeriotv.android.core.setup.FixLogin.NOT_HERE)
+            },
+        )
+    }
+
     override fun onCleared() {
         stop()
     }
@@ -349,10 +392,24 @@ fun TvSetupScreen(
     onImportUserOnly: () -> Unit = {},
     /** Room for the floating tab bar when shown inside the main tabs (Settings). */
     bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
+    /**
+     * Fix Login (TVs, from the rejected-key prompt): ask a phone for this
+     * playlist's sign-in only. The advert carries `mode=fixlogin` and `pl`.
+     */
+    fixLoginPlaylistId: String? = null,
+    /** Fix Login: the sign-in was written and the hold lifted (the caller reloads channels). */
+    onSignedIn: (playlistId: String) -> Unit = {},
     vm: TvSetupViewModel = hiltViewModel(),
 ) {
     val phase by vm.phase.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { vm.bind(addPlaylist); vm.start(request) }
+    LaunchedEffect(Unit) { vm.bind(addPlaylist); vm.start(request, fixLoginPlaylistId) }
+    // Fix Login: reload at once, show the confirmation briefly, then close.
+    LaunchedEffect(phase) {
+        val s = phase as? TvSetupViewModel.Phase.SignedIn ?: return@LaunchedEffect
+        onSignedIn(s.playlistId)
+        delay(FIX_LOGIN_CONFIRM_MS)
+        onDone(s.playlistId)
+    }
     // The view model can outlive the screen (Settings host scope): leave it fresh for the next visit.
     DisposableEffect(Unit) { onDispose { vm.stop(); vm.reset() } }
     LaunchedEffect(phase) { (phase as? TvSetupViewModel.Phase.Done)?.let { onDone(it.dispatcharrPlaylistId) } }
@@ -372,7 +429,7 @@ fun TvSetupScreen(
     ) {
         when (val p = phase) {
             TvSetupViewModel.Phase.Starting -> CircularProgressIndicator()
-            is TvSetupViewModel.Phase.Offering -> Offering(p.offer, isTv = isTv, onCancel = cancel)
+            is TvSetupViewModel.Phase.Offering -> Offering(p.offer, isTv = isTv, onCancel = cancel, fixLogin = fixLoginPlaylistId != null)
             TvSetupViewModel.Phase.NoNetwork -> Message(
                 title = "This device is not on a network",
                 body = "Connect this device to the same network as your other device, then try again.",
@@ -397,6 +454,11 @@ fun TvSetupScreen(
                 onCancel = cancel,
             )
             is TvSetupViewModel.Phase.Done -> CircularProgressIndicator()
+            is TvSetupViewModel.Phase.SignedIn -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(20.dp))
+                Text(com.aeriotv.android.core.setup.FixLogin.DONE_LINE, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
+            }
             TvSetupViewModel.Phase.Cancelled -> CircularProgressIndicator()
             is TvSetupViewModel.Phase.Duplicate -> {
                 CircularProgressIndicator()
@@ -421,8 +483,11 @@ fun TvSetupScreen(
     }
 }
 
+/** How long the TV shows "Signed in. Loading channels." before the receive screen closes. */
+private const val FIX_LOGIN_CONFIRM_MS = 2_000L
+
 @Composable
-private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> Unit) {
+private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> Unit, fixLogin: Boolean = false) {
     val qr = remember(offer.link) { qrCodeBitmap(offer.link, 512)?.asImageBitmap() }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { if (isTv) runCatching { focus.requestFocus() } }
@@ -441,19 +506,19 @@ private fun Offering(offer: SetupReceiver.Offer, isTv: Boolean, onCancel: () -> 
     // Phones and tablets stack the QR above the text; TVs keep the side-by-side layout.
     if (isTv) Row(horizontalArrangement = Arrangement.spacedBy(48.dp), verticalAlignment = Alignment.CenterVertically) {
         qrBox()
-        OfferingText(offer, focus, onCancel, centered = false)
+        OfferingText(offer, focus, onCancel, centered = false, fixLogin = fixLogin)
     } else Column(
         Modifier.widthIn(max = 480.dp).fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp),
     ) {
         qrBox()
-        OfferingText(offer, focus, onCancel, centered = true)
+        OfferingText(offer, focus, onCancel, centered = true, fixLogin = fixLogin)
     }
 }
 
 @Composable
-private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCancel: () -> Unit, centered: Boolean) {
+private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCancel: () -> Unit, centered: Boolean, fixLogin: Boolean = false) {
         // Phones and tablets: one centered column on the QR's axis (matches iPhone and iPad).
         // TV: leading-aligned text beside the QR.
         val align = if (centered) TextAlign.Center else TextAlign.Start
@@ -461,10 +526,14 @@ private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCa
             if (centered) Modifier.fillMaxWidth() else Modifier.widthIn(max = 460.dp),
             horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start,
         ) {
-            Text("Set up from another device", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = align)
+            Text(
+                if (fixLogin) com.aeriotv.android.core.setup.FixLogin.RECEIVE_TITLE else "Set up from another device",
+                style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = align,
+            )
             Spacer(Modifier.height(12.dp))
             Text(
-                "Open AerioTV on your other device, then Settings > Playlists > open your playlist > Set up another device, or scan this code.",
+                if (fixLogin) com.aeriotv.android.core.setup.FixLogin.RECEIVE_LINE
+                else "Open AerioTV on your other device, then Settings > Playlists > open your playlist > Set up another device, or scan this code.",
                 style = MaterialTheme.typography.bodyLarge.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = align,

@@ -65,6 +65,11 @@ class SetupTvOffer(
     val target: SetupTarget,
     val onSetUp: () -> Unit,
     val onDismiss: () -> Unit,
+    /**
+     * Fix Login: this phone's playlist whose sign-in the device asks for
+     * (the advert's `mode=fixlogin`); null for a normal setup offer.
+     */
+    val fixLoginPlaylistId: String? = null,
 )
 
 val LocalSetupTvOffer = staticCompositionLocalOf<SetupTvOffer?> { null }
@@ -107,7 +112,7 @@ fun SetupTvSettingsBanner(offer: SetupTvOffer, modifier: Modifier = Modifier) {
             modifier = Modifier.weight(1f),
         )
         Box(modifier = Modifier.heightIn(min = RetainedCardControlHeight), contentAlignment = Alignment.Center) {
-            AccentTextControl(label = "Set up", onClick = offer.onSetUp)
+            AccentTextControl(label = com.aeriotv.android.core.setup.FixLogin.buttonLabel(offer.target.mode), onClick = offer.onSetUp)
         }
         IconButton(onClick = offer.onDismiss) {
             Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -153,7 +158,8 @@ fun SetupTvDockCard(
             modifier = Modifier.weight(1f),
         )
         Box(modifier = Modifier.heightIn(min = RetainedCardControlHeight), contentAlignment = Alignment.Center) {
-            AccentTextControl(label = "Set up", onClick = onSetUp)
+            // "Fix Login" when the device asks for one playlist's sign-in (Fix Login).
+            AccentTextControl(label = com.aeriotv.android.core.setup.FixLogin.buttonLabel(target.mode), onClick = onSetUp)
         }
         IconButton(onClick = onDismiss) {
             Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurfaceVariant)

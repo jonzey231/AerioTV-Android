@@ -33,8 +33,16 @@ data class SetupTarget(
     val kind: String = SetupProtocol.KIND_TV,
     /** DNS-SD instance name: the identity of a discovered device (two can share a friendly name). */
     val service: String? = null,
+    /** Advertised `mode` ([FixLogin.normalizeMode]): null = a normal setup receiver. */
+    val mode: String? = null,
+    /** Advertised `pl` with Fix Login: the receiver's playlist id, lowercase. */
+    val playlistId: String? = null,
 ) {
     val key: String get() = "$host:$port"
+    /** One discovered device: its DNS-SD instance name, else its address. */
+    val identity: String get() = service ?: key
+    /** The receiver asks for one playlist's sign-in (Fix Login), not a whole setup. */
+    val isFixLogin: Boolean get() = mode == SetupProtocol.MODE_FIX_LOGIN
     /** Matches the 4 characters the TV shows next to its code. */
     val fingerprint: String get() = SetupCrypto.keyFingerprint(pk)
 }
@@ -294,6 +302,19 @@ class SetupSender(
         )
     }
 
+    /**
+     * Fix Login: only [playlistId]'s own sign-in (the default profile's, as
+     * in a full setup), marked [SetupProtocol.MODE_FIX_LOGIN], with
+     * `playlist.id` set to the TV's advertised [receiverPlaylistId] so the TV
+     * updates the playlist it asked about. No profiles, no sync choice. Null
+     * when the playlist cannot be read or has no sign-in to send.
+     */
+    suspend fun buildFixLoginPayload(playlistId: String, receiverPlaylistId: String): SetupProtocol.Payload? {
+        val full = buildPayload(playlistId, emptySet(), turnOnSync = false) ?: return null
+        if (full.playlist.type != "dispatcharr") return null
+        return fixLoginPayload(full.playlist, receiverPlaylistId)
+    }
+
     private suspend fun buildUserOnly(playlistId: String, row: PlaylistEntity, turnOnSync: Boolean): SetupProtocol.Payload? {
         val full = buildPayload(playlistId, emptySet(), turnOnSync = false) ?: return null
         if (full.playlist.type != "dispatcharr") return full
@@ -420,6 +441,22 @@ const val NETWORK_RETRY_S = 3L
 /** Sender copy when the key it would send is refused. */
 const val SETUP_KEY_REJECTED_MESSAGE =
     "Dispatcharr no longer accepts this playlist's API key, so it was not sent. Enter the current key in Edit Playlist, then try again."
+
+/**
+ * The Fix Login payload from a full payload's playlist part: that playlist
+ * and its credential only, addressed to [receiverPlaylistId]. Null without a
+ * credential (nothing to fix with). Pure, for the tests.
+ */
+internal fun fixLoginPayload(playlist: SetupProtocol.PlaylistPart, receiverPlaylistId: String): SetupProtocol.Payload? {
+    val cred = playlist.credential?.takeIf { it.apiKey != null || it.password != null } ?: return null
+    val id = receiverPlaylistId.trim().takeIf { it.isNotEmpty() } ?: return null
+    return SetupProtocol.Payload(
+        playlist = playlist.copy(id = id, credential = cred),
+        profiles = emptyList(),
+        sync = null,
+        mode = SetupProtocol.MODE_FIX_LOGIN,
+    )
+}
 
 /**
  * The sign-in for "Import this user only": `username` always rides beside the

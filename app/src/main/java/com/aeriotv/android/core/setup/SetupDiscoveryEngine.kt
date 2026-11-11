@@ -95,6 +95,8 @@ object SetupDiscoveryRules {
             pk = pk,
             kind = SetupProtocol.normalizeKind(txt[SetupProtocol.TXT_KIND]),
             service = service,
+            mode = FixLogin.normalizeMode(txt[SetupProtocol.TXT_MODE]),
+            playlistId = FixLogin.normalizePlaylistId(txt[SetupProtocol.TXT_PLAYLIST]),
         )
     }
 }
@@ -386,7 +388,7 @@ class SetupDiscoveryEngine(
 
     private fun same(a: SetupTarget, b: SetupTarget) =
         a.name == b.name && a.host == b.host && a.port == b.port && a.kind == b.kind &&
-            a.service == b.service && a.pk.contentEquals(b.pk)
+            a.service == b.service && a.pk.contentEquals(b.pk) && a.mode == b.mode && a.playlistId == b.playlistId
 
     private fun publish() {
         val next = rows.values.sortedBy { it.name.lowercase() }

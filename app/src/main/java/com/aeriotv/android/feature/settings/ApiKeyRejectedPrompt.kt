@@ -6,13 +6,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.network.DispatcharrRequestGate
+import com.aeriotv.android.core.setup.FixLogin
 import com.aeriotv.android.ui.settings.SettingsAlertDialog
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 
@@ -48,14 +55,43 @@ fun apiKeyRejectedBody(playlistName: String, passwordToo: Boolean): String {
  * refused a playlist's API key and AerioTV holds every API call for it
  * locally until Edit Playlist changes the key or credentials. Same dialog
  * components as the other Settings prompts, so TV focus and rings match.
+ *
+ * TVs (Fix Login, docs/DeviceSetupHandoff.md): "Update from Phone"
+ * (primary, default focus) opens the receive screen asking a phone for this
+ * playlist's sign-in, "Update with Remote" opens Edit Playlist, and
+ * "Not Now". Phones and tablets keep Edit Playlist and Not Now.
  */
 @Composable
-fun ApiKeyRejectedPromptHost(onEditPlaylist: (playlistId: String) -> Unit) {
+fun ApiKeyRejectedPromptHost(
+    onEditPlaylist: (playlistId: String) -> Unit,
+    /** Fix Login wrote [playlistId]'s sign-in and lifted its hold: reload its channels. */
+    onFixedLogin: (playlistId: String) -> Unit = {},
+) {
     val editRequest by EditPlaylistRequest.pending.collectAsStateWithLifecycle()
     LaunchedEffect(editRequest) {
         val id = editRequest ?: return@LaunchedEffect
         EditPlaylistRequest.consume()
         onEditPlaylist(id)
+    }
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    // Fix Login receive screen (TVs): the playlist it asks a phone about.
+    var fixLoginFor by rememberSaveable { mutableStateOf<String?>(null) }
+    fixLoginFor?.let { pid ->
+        val close = {
+            android.util.Log.i("AerioSetup", "[SETUP] fix login screen closed")
+            fixLoginFor = null
+        }
+        Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            com.aeriotv.android.feature.devicesetup.TvSetupScreen(
+                // Fix Login never adds a playlist; only the sign-in is written.
+                addPlaylist = { _, _ -> Result.failure(IllegalStateException("Fix Login adds no playlist")) },
+                onCancel = close,
+                onDone = { close() },
+                fixLoginPlaylistId = pid,
+                onSignedIn = onFixedLogin,
+                vm = hiltViewModel(key = "fix-login"),
+            )
+        }
     }
     val prompt by DispatcharrRequestGate.prompt.collectAsStateWithLifecycle()
     val p = prompt ?: return
@@ -66,17 +102,40 @@ fun ApiKeyRejectedPromptHost(onEditPlaylist: (playlistId: String) -> Unit) {
         title = { Text(API_KEY_REJECTED_TITLE) },
         text = { Text(apiKeyRejectedBody(p.playlistName, p.passwordToo)) },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                SettingsDialogTextButton("Not Now", { DispatcharrRequestGate.consumePrompt() })
+            if (isTv) {
+                // Emitted straight into the dialog's button row (no inner Row),
+                // so it wraps instead of clipping when the three do not fit.
                 SettingsDialogTextButton(
-                    "Edit Playlist",
+                    FixLogin.PROMPT_FROM_PHONE,
                     {
                         DispatcharrRequestGate.consumePrompt()
-                        onEditPlaylist(p.playlistId)
+                        android.util.Log.i("AerioSetup", "[SETUP] fix login screen opened from the rejected-key prompt")
+                        fixLoginFor = p.playlistId
                     },
                     modifier = Modifier.focusRequester(focus),
                     emphasized = true,
                 )
+                SettingsDialogTextButton(
+                    FixLogin.PROMPT_WITH_REMOTE,
+                    {
+                        DispatcharrRequestGate.consumePrompt()
+                        onEditPlaylist(p.playlistId)
+                    },
+                )
+                SettingsDialogTextButton(FixLogin.PROMPT_NOT_NOW, { DispatcharrRequestGate.consumePrompt() })
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SettingsDialogTextButton("Not Now", { DispatcharrRequestGate.consumePrompt() })
+                    SettingsDialogTextButton(
+                        "Edit Playlist",
+                        {
+                            DispatcharrRequestGate.consumePrompt()
+                            onEditPlaylist(p.playlistId)
+                        },
+                        modifier = Modifier.focusRequester(focus),
+                        emphasized = true,
+                    )
+                }
             }
         },
     )

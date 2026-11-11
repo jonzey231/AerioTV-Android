@@ -30,6 +30,15 @@ object SetupProtocol {
     const val KIND_PHONE = "phone"
     const val KIND_TABLET = "tablet"
     const val KIND_TV = "tv"
+    /**
+     * Receiver mode. Absent = a normal setup receiver; [MODE_FIX_LOGIN] = a
+     * TV whose playlist's key is held as rejected, asking a phone for that
+     * playlist's sign-in only (FixLogin). Older builds never advertise it.
+     */
+    const val TXT_MODE = "mode"
+    const val MODE_FIX_LOGIN = "fixlogin"
+    /** With [MODE_FIX_LOGIN]: the playlist id (UUID, lowercase) whose sign-in is wanted. Not a secret. */
+    const val TXT_PLAYLIST = "pl"
 
     /** Reads an advertised `kind`; unknown or absent means TV, the only receiver older builds had. */
     fun normalizeKind(raw: String?): String = when (raw?.trim()?.lowercase()) {
@@ -81,6 +90,13 @@ object SetupProtocol {
         val playlist: PlaylistPart,
         val profiles: List<ProfilePart> = emptyList(),
         val sync: SyncPart? = null,
+        /**
+         * [MODE_FIX_LOGIN] = only [playlist]'s sign-in (no profiles, no sync
+         * choice); the receiver updates the sign-in of its playlist with
+         * `playlist.id` and nothing else. Absent = a normal setup, which is
+         * what every sender before Fix Login sends.
+         */
+        val mode: String? = null,
     )
 
     @Serializable

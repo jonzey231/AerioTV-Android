@@ -496,6 +496,45 @@ class PlaylistRepository @Inject constructor(
     }
 
     /**
+     * Fix Login on the receiving TV (docs/DeviceSetupHandoff.md): another
+     * device handed over [playlistId]'s sign-in. Writes only the sign-in
+     * fields of the playlist's own row (the default profile's login, as
+     * Dispatcharr Sync's credential apply does): the API key, and the
+     * username and password when sent. Nothing else on the row, no profile,
+     * and no other playlist changes. Then the rejected-key hold and its
+     * prompt are lifted, and requests or streams still built with the old
+     * key go out with the new one. The caller reloads the channels.
+     * Fails with [NoSuchElementException] when the playlist is not here and
+     * [IllegalArgumentException] when nothing to sign in with was sent.
+     */
+    suspend fun applyHandedSignIn(
+        playlistId: String,
+        sent: com.aeriotv.android.core.setup.SetupProtocol.Credential?,
+    ): Result<PlaylistEntity> = runCatching {
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = dao.byId(playlistId) ?: throw NoSuchElementException("playlist not here")
+            val next = com.aeriotv.android.core.setup.FixLogin.signInToWrite(row.apiKey, row.username, row.password, sent)
+                ?: throw IllegalArgumentException("no sign-in sent")
+            val updated = row.copy(apiKey = next.apiKey, username = next.username, password = next.password)
+            dao.update(updated)
+            if (next.accountChanged) dispatcharrTokenStore.clear(playlistId)
+            // Sync: this playlist's newest sign-in change is here now.
+            com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Credentials, playlistId)
+            val oldKey = row.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            val newKey = next.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            com.aeriotv.android.core.setup.FixLogin.liftHold(playlistId, oldKey, newKey)
+            dispatcharrAuth.invalidateRow(playlistId)
+            if (updated.isActive) publishActiveCredentials(updated)
+            Log.i(
+                "AerioSetup",
+                "[SETUP] fix login applied to ${playlistId.take(8)}: key ${if (newKey != oldKey) "replaced" else "unchanged"}" +
+                    (if (next.accountChanged) ", username or password updated" else "") + "; hold lifted",
+            )
+            updated
+        }
+    }
+
+    /**
      * The instant Edit Playlist save: write the edited fields to the existing
      * row and nothing else. No login, no channel fetch, no capability probe, no
      * [SaveStage.Finishing] work, so no loading screen either.

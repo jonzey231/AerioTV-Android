@@ -1316,6 +1316,11 @@ fun AerioTVNavHost(
                     onEditPlaylist = { id ->
                         vm.requestSettingsPage(com.aeriotv.android.feature.settings.EDIT_PLAYLIST_PAGE_PREFIX + id)
                     },
+                    // Fix Login (TV): the sign-in from the phone is in and the
+                    // hold is lifted; the playlist on screen reloads its channels.
+                    onFixedLogin = { id ->
+                        if (vm.state.value.playlist?.id == id) vm.refreshPlaylist(fromRecovery = true)
+                    },
                 )
                 // Capability gates read the LIVE active row: the UiState snapshot
                 // predates the probe that writes the permissions (2026-10-05).

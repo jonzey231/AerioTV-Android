@@ -46,6 +46,12 @@ class SetupReceiver(
      * advert is needed for a sender to find this receiver.
      */
     private val advertise: Boolean = true,
+    /**
+     * Fix Login (TVs): the playlist whose sign-in this receiver asks for. The
+     * advert then carries `mode=fixlogin` and `pl=<id>`, so phones offer
+     * "Fix Login" instead of "Set up". Null = a normal setup receiver.
+     */
+    private val fixLoginPlaylistId: String? = null,
 ) {
     companion object {
         /**
@@ -202,9 +208,15 @@ class SetupReceiver(
             runCatching { setAttribute(SetupProtocol.TXT_NAME, name.take(60)) }
             runCatching { setAttribute(SetupProtocol.TXT_PK, SetupCrypto.b64(keys.publicKey)) }
             runCatching { setAttribute(SetupProtocol.TXT_KIND, deviceKind()) }
+            fixLoginPlaylistId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { pl ->
+                runCatching { setAttribute(SetupProtocol.TXT_MODE, SetupProtocol.MODE_FIX_LOGIN) }
+                runCatching { setAttribute(SetupProtocol.TXT_PLAYLIST, pl) }
+            }
         }
         val l = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(s: NsdServiceInfo) { Log.i(TAG, "[SETUP] NSD registered ${s.serviceName}") }
+            override fun onServiceRegistered(s: NsdServiceInfo) {
+                Log.i(TAG, "[SETUP] NSD registered ${s.serviceName}" + if (fixLoginPlaylistId != null) " mode=fixlogin pl=${fixLoginPlaylistId.take(8)}" else "")
+            }
             override fun onRegistrationFailed(s: NsdServiceInfo, err: Int) { Log.w(TAG, "[SETUP] NSD register failed $err") }
             override fun onServiceUnregistered(s: NsdServiceInfo) {}
             override fun onUnregistrationFailed(s: NsdServiceInfo, err: Int) {}
