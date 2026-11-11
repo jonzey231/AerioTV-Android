@@ -49,6 +49,35 @@ object AvatarCatalog {
     /** The icon id to draw ("initial" when unset or unknown). */
     fun iconFor(spec: AvatarSpec?): String = spec?.icon?.takeIf { it in ICONS } ?: INITIAL
 
+    /**
+     * Letter and icon color on each avatar color (owner pick 2026-11-11, the
+     * same as Apple): #0B1220 on the four lighter colors, white on the rest,
+     * in light and dark mode and on every form factor. A fixed set, not a
+     * luminance rule: no color here measures above 0.45, so the old rule drew
+     * white on all eight.
+     */
+    val DARK_INK_COLORS: Set<String> = setOf("teal", "orange", "green", "slate")
+    const val DARK_INK: Long = 0xFF0B1220
+    const val LIGHT_INK: Long = 0xFFFFFFFF
+
+    /** ARGB ink for the avatar color id [colorId]. */
+    fun inkArgb(colorId: String): Long = if (colorId in DARK_INK_COLORS) DARK_INK else LIGHT_INK
+
+    /**
+     * The letter an initial avatar draws, the same on every platform: the
+     * trimmed display name, else the trimmed username, else "?"; its first
+     * character (a whole grapheme, so an accent stays with its letter),
+     * uppercased.
+     */
+    fun initial(name: String, username: String): String {
+        val source = name.trim().ifEmpty { username.trim() }
+        if (source.isEmpty()) return "?"
+        val chars = java.text.BreakIterator.getCharacterInstance()
+        chars.setText(source)
+        val end = chars.next().takeIf { it != java.text.BreakIterator.DONE } ?: source.length
+        return source.substring(0, end).uppercase()
+    }
+
     /** Normalize a pulled or picked spec: unknown ids fall back; all default = null. */
     fun normalize(spec: AvatarSpec?): AvatarSpec? {
         if (spec == null) return null

@@ -48,7 +48,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.text.font.FontWeight
@@ -82,8 +81,8 @@ internal fun avatarColor(id: String): Color = when (id) {
 
 internal fun avatarColorName(id: String): String = id.replaceFirstChar { it.uppercase() }
 
-/** Glyph color that reads on [bg]. */
-internal fun avatarInk(bg: Color): Color = if (bg.luminance() > 0.45f) Color(0xFF0B1220) else Color.White
+/** Letter and icon color on the avatar color [colorId] (a fixed set, [AvatarCatalog.inkArgb]). */
+internal fun avatarInk(colorId: String): Color = Color(AvatarCatalog.inkArgb(colorId))
 
 internal fun avatarIcon(id: String): ImageVector? = when (id) {
     "person" -> Icons.Filled.Person
@@ -170,8 +169,9 @@ fun ProfileAvatar(
     username: String = name,
     spec: AvatarSpec? = null,
 ) {
-    val bg = avatarColor(AvatarCatalog.colorFor(spec, username))
-    val ink = avatarInk(bg)
+    val colorId = AvatarCatalog.colorFor(spec, username)
+    val bg = avatarColor(colorId)
+    val ink = avatarInk(colorId)
     val icon = avatarIcon(AvatarCatalog.iconFor(spec))
     Box(
         modifier = modifier
@@ -184,7 +184,7 @@ fun ProfileAvatar(
             Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size((size * 0.58f).dp))
         } else {
             Text(
-                text = name.trim().take(1).uppercase().ifEmpty { "?" },
+                text = AvatarCatalog.initial(name, username),
                 color = ink,
                 fontWeight = FontWeight.Bold,
                 fontSize = (size * 0.42f).sp,
