@@ -1,7 +1,5 @@
 package com.aeriotv.android.feature.settings
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -13,13 +11,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.network.DispatcharrRequestGate
-import com.aeriotv.android.core.setup.FixLogin
 import com.aeriotv.android.ui.settings.SettingsAlertDialog
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 
@@ -36,36 +32,27 @@ object EditPlaylistRequest {
 }
 
 /** Title of the rejected-key prompt. */
-const val API_KEY_REJECTED_TITLE = com.aeriotv.android.core.network.KEY_REJECTED_TITLE
-
-/** Body of the rejected-key prompt (key-only playlist, or a password playlist whose re-login was refused too). */
-fun apiKeyRejectedBody(playlistName: String, passwordToo: Boolean): String {
-    val name = playlistName.ifBlank { "this playlist" }
-    return if (passwordToo) {
-        "Dispatcharr no longer accepts the API key or password for $name. They may have been changed on the server. " +
-            "Enter the current details in Edit Playlist, or ask your Dispatcharr administrator."
-    } else {
-        "Dispatcharr no longer accepts the API key for $name. It may have been changed or removed on the server. " +
-            "Enter the current key in Edit Playlist, or ask your Dispatcharr administrator for a new one."
-    }
-}
+const val API_KEY_REJECTED_TITLE = KeyRejectedCopy.TITLE
 
 /**
  * Shown once per rejection ([DispatcharrRequestGate.prompt]): the server
  * refused a playlist's API key and AerioTV holds every API call for it
- * locally until Edit Playlist changes the key or credentials. Same dialog
- * components as the other Settings prompts, so TV focus and rings match.
+ * locally until its sign-in changes. Same dialog components as the other
+ * Settings prompts, so TV focus and rings match. Copy and button sets:
+ * [KeyRejectedCopy].
  *
- * TVs (Fix Login, docs/DeviceSetupHandoff.md): "Update from Phone"
- * (primary, default focus) opens the receive screen asking a phone for this
- * playlist's sign-in, "Update with Remote" opens Edit Playlist, and
- * "Not Now". Phones and tablets keep Edit Playlist and Not Now.
+ * Phones and tablets: "Sign In" (primary; the sign-in form), "Edit
+ * Playlist", and "Not Now". TVs: "Update from Phone" (primary, default
+ * focus; Fix Login, docs/DeviceSetupHandoff.md), "Sign In with Remote" (the
+ * same sign-in form; key entry stays in Settings > Edit Playlist), and "Not
+ * Now". The sign-in buttons follow the Set up gate (no Child profile, not
+ * while the launch PIN screen is up).
  */
 @Composable
 fun ApiKeyRejectedPromptHost(
     onEditPlaylist: (playlistId: String) -> Unit,
-    /** Fix Login wrote [playlistId]'s sign-in and lifted its hold: reload its channels. */
-    onFixedLogin: (playlistId: String) -> Unit = {},
+    /** Fix Login or the sign-in form replaced [playlistId]'s sign-in and lifted its hold: reload its channels. */
+    onSignedIn: (playlistId: String) -> Unit = {},
 ) {
     val editRequest by EditPlaylistRequest.pending.collectAsStateWithLifecycle()
     LaunchedEffect(editRequest) {
@@ -88,54 +75,67 @@ fun ApiKeyRejectedPromptHost(
                 onCancel = close,
                 onDone = { close() },
                 fixLoginPlaylistId = pid,
-                onSignedIn = onFixedLogin,
+                onSignedIn = onSignedIn,
                 vm = hiltViewModel(key = "fix-login"),
             )
         }
     }
+    // The sign-in form (every device): the playlist it signs in to.
+    val signInVm: KeyRejectedSignInViewModel = hiltViewModel(key = "key-rejected-sign-in")
+    var signInFor by rememberSaveable { mutableStateOf<String?>(null) }
+    signInFor?.let { pid ->
+        KeyRejectedSignInDialog(
+            playlistId = pid,
+            vm = signInVm,
+            onCancel = {
+                android.util.Log.i("DispatcharrAuthBroker", "[AUTH] sign-in form closed")
+                signInFor = null
+            },
+            onSignedIn = { id ->
+                signInFor = null
+                onSignedIn(id)
+            },
+        )
+    }
     val prompt by DispatcharrRequestGate.prompt.collectAsStateWithLifecycle()
+    // The gate is re-read when the launch PIN screen, the launch picker, or the active profile changes.
+    val launchGate by signInVm.launchGate.collectAsStateWithLifecycle()
+    val launchPicker by signInVm.launchPicker.collectAsStateWithLifecycle()
+    val profileToken by com.aeriotv.android.core.profiles.ProfileScope.token.collectAsStateWithLifecycle()
     val p = prompt ?: return
+    val canSignIn = remember(p, launchGate, launchPicker, profileToken) { signInVm.canSignIn(p.playlistId) }
+    val buttons = KeyRejectedCopy.buttons(isTv, canSignIn)
     val focus = remember(p) { FocusRequester() }
     LaunchedEffect(p) { runCatching { focus.requestFocus() } }
+    val act: (KeyRejectedCopy.Button) -> Unit = { b ->
+        DispatcharrRequestGate.consumePrompt()
+        when (b) {
+            KeyRejectedCopy.Button.UpdateFromPhone -> {
+                android.util.Log.i("AerioSetup", "[SETUP] fix login screen opened from the rejected-key prompt")
+                fixLoginFor = p.playlistId
+            }
+            KeyRejectedCopy.Button.SignIn, KeyRejectedCopy.Button.SignInWithRemote -> {
+                android.util.Log.i("DispatcharrAuthBroker", "[AUTH] sign-in form opened from the rejected-key prompt")
+                signInFor = p.playlistId
+            }
+            KeyRejectedCopy.Button.EditPlaylist -> onEditPlaylist(p.playlistId)
+            KeyRejectedCopy.Button.NotNow -> Unit
+        }
+    }
     SettingsAlertDialog(
         onDismissRequest = { DispatcharrRequestGate.consumePrompt() },
-        title = { Text(API_KEY_REJECTED_TITLE) },
-        text = { Text(apiKeyRejectedBody(p.playlistName, p.passwordToo)) },
+        title = { Text(KeyRejectedCopy.TITLE) },
+        text = { Text(KeyRejectedCopy.body(p.playlistName, p.passwordToo, p.noApiKey)) },
         confirmButton = {
-            if (isTv) {
-                // Emitted straight into the dialog's button row (no inner Row),
-                // so it wraps instead of clipping when the three do not fit.
+            // Emitted straight into the dialog's button row (no inner Row),
+            // in order, so it wraps instead of clipping when they do not fit.
+            buttons.forEachIndexed { i, b ->
                 SettingsDialogTextButton(
-                    FixLogin.PROMPT_FROM_PHONE,
-                    {
-                        DispatcharrRequestGate.consumePrompt()
-                        android.util.Log.i("AerioSetup", "[SETUP] fix login screen opened from the rejected-key prompt")
-                        fixLoginFor = p.playlistId
-                    },
-                    modifier = Modifier.focusRequester(focus),
-                    emphasized = true,
+                    KeyRejectedCopy.label(b),
+                    { act(b) },
+                    modifier = if (i == 0) Modifier.focusRequester(focus) else Modifier,
+                    emphasized = i == 0,
                 )
-                SettingsDialogTextButton(
-                    FixLogin.PROMPT_WITH_REMOTE,
-                    {
-                        DispatcharrRequestGate.consumePrompt()
-                        onEditPlaylist(p.playlistId)
-                    },
-                )
-                SettingsDialogTextButton(FixLogin.PROMPT_NOT_NOW, { DispatcharrRequestGate.consumePrompt() })
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SettingsDialogTextButton("Not Now", { DispatcharrRequestGate.consumePrompt() })
-                    SettingsDialogTextButton(
-                        "Edit Playlist",
-                        {
-                            DispatcharrRequestGate.consumePrompt()
-                            onEditPlaylist(p.playlistId)
-                        },
-                        modifier = Modifier.focusRequester(focus),
-                        emphasized = true,
-                    )
-                }
             }
         },
     )

@@ -510,7 +510,52 @@ class PlaylistRepository @Inject constructor(
     suspend fun applyHandedSignIn(
         playlistId: String,
         sent: com.aeriotv.android.core.setup.SetupProtocol.Credential?,
-    ): Result<PlaylistEntity> = runCatching {
+    ): Result<PlaylistEntity> = runCatching { writeSignIn(playlistId, sent, "fix login") }
+
+    /**
+     * The rejected-key prompt's sign-in form: log in to [playlistId]'s server
+     * with [username] and [password] (the existing login path, so the login
+     * throttle and its 429 copy apply), read the account's current API key
+     * from users/me (never generated here), and save the key, username, and
+     * password as the playlist's own sign-in (credentials only), then lift
+     * the hold and the prompt like [applyHandedSignIn]. The stored password
+     * lets a later key change heal through the silent re-login. Throws the
+     * login's own errors ([DispatcharrError.InvalidCredentials],
+     * [DispatcharrError.LoginThrottled], [DispatcharrError.NoApiKey], a
+     * transport error). Never logs the password or the key.
+     */
+    suspend fun signInWithPassword(playlistId: String, username: String, password: String): Result<PlaylistEntity> = runCatching {
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = dao.byId(playlistId) ?: throw NoSuchElementException("playlist not here")
+            val base = row.urlString.trimEnd('/')
+            val user = username.trim()
+            val jwt = dispatcharrClient.login(base, user, password)
+            val key = dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
+            val updated = writeSignIn(
+                playlistId,
+                com.aeriotv.android.core.setup.SetupProtocol.Credential(apiKey = key, username = user, password = password),
+                "sign-in",
+            )
+            // After the write: a changed account drops the old pair there.
+            dispatcharrTokenStore.store(playlistId, jwt.access, jwt.refresh)
+            com.aeriotv.android.core.network.DispatcharrLoginGate.reset(playlistId)
+            updated
+        }
+    }
+
+    /**
+     * Writes only the sign-in fields of the playlist's own row (the default
+     * profile's login, as Dispatcharr Sync's credential apply does): the API
+     * key, and the username and password when sent. Nothing else on the row,
+     * no profile, and no other playlist changes. Then the rejected-key hold
+     * and its prompt are lifted, and requests or streams still built with the
+     * old key go out with the new one. The caller reloads the channels.
+     */
+    private suspend fun writeSignIn(
+        playlistId: String,
+        sent: com.aeriotv.android.core.setup.SetupProtocol.Credential?,
+        why: String,
+    ): PlaylistEntity =
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val row = dao.byId(playlistId) ?: throw NoSuchElementException("playlist not here")
             val next = com.aeriotv.android.core.setup.FixLogin.signInToWrite(row.apiKey, row.username, row.password, sent)
@@ -527,12 +572,11 @@ class PlaylistRepository @Inject constructor(
             if (updated.isActive) publishActiveCredentials(updated)
             Log.i(
                 "AerioSetup",
-                "[SETUP] fix login applied to ${playlistId.take(8)}: key ${if (newKey != oldKey) "replaced" else "unchanged"}" +
+                "[SETUP] $why applied to ${playlistId.take(8)}: key ${if (newKey != oldKey) "replaced" else "unchanged"}" +
                     (if (next.accountChanged) ", username or password updated" else "") + "; hold lifted",
             )
             updated
         }
-    }
 
     /**
      * The instant Edit Playlist save: write the edited fields to the existing

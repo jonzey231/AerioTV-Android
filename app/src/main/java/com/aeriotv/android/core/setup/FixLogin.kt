@@ -25,10 +25,8 @@ object FixLogin {
     const val NOT_HERE =
         "The sign-in that was sent is not for a playlist on this device."
 
-    /** Rejected-key prompt buttons on TVs, in this order. */
-    const val PROMPT_FROM_PHONE = "Update from Phone"
-    const val PROMPT_WITH_REMOTE = "Update with Remote"
-    const val PROMPT_NOT_NOW = "Not Now"
+    // The rejected-key prompt's buttons (including "Update from Phone") live
+    // in feature/settings/KeyRejectedCopy with the rest of its copy.
 
     /** Phone line after a successful send. */
     fun sentLine(deviceName: String): String = "Sent. ${deviceName.ifBlank { "The device" }} is signing in."

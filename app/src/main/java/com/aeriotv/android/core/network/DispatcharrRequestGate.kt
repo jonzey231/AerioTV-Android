@@ -46,8 +46,12 @@ object DispatcharrRequestGate {
     /** Key hash -> playlist ids that saw it rejected. */
     private val rejected = ConcurrentHashMap<String, MutableSet<String>>()
 
-    /** One Edit Playlist prompt: [passwordToo] = the playlist also has a password (re-login was refused as well). */
-    data class Prompt(val playlistId: String, val playlistName: String, val passwordToo: Boolean)
+    /**
+     * One prompt: [passwordToo] = the playlist also has a password (re-login
+     * was refused as well); [noApiKey] = the re-login signed in, but the
+     * account has no API key on the server.
+     */
+    data class Prompt(val playlistId: String, val playlistName: String, val passwordToo: Boolean, val noApiKey: Boolean = false)
 
     private val _prompt = kotlinx.coroutines.flow.MutableStateFlow<Prompt?>(null)
     /** The pending Edit Playlist prompt; the UI calls [consumePrompt] when it is answered. */
@@ -71,6 +75,8 @@ object DispatcharrRequestGate {
         passwordToo: Boolean = false,
         /** The server the automatic re-check probes (empty = no re-check). */
         baseUrl: String = "",
+        /** The re-login signed in, but the account has no API key (the prompt says so). */
+        noApiKey: Boolean = false,
     ): Boolean {
         val hash = keyHash(key)
         val set = rejected.getOrPut(hash) { ConcurrentHashMap.newKeySet() }
@@ -78,7 +84,7 @@ object DispatcharrRequestGate {
         if (fresh) {
             // Drive may already carry this playlist's good key (DriveSyncManager).
             runCatching { onKeyHeld?.invoke(playlistId) }
-            _prompt.value = Prompt(playlistId, playlistName, passwordToo)
+            _prompt.value = Prompt(playlistId, playlistName, passwordToo, noApiKey)
             if (baseUrl.isNotBlank()) {
                 rechecks.putIfAbsent(hash, Recheck(hash, key.trim(), baseUrl, serverKey(baseUrl), playlistId, passwordToo, clock()))
             }

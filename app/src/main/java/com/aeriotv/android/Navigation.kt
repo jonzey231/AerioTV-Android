@@ -1316,9 +1316,9 @@ fun AerioTVNavHost(
                     onEditPlaylist = { id ->
                         vm.requestSettingsPage(com.aeriotv.android.feature.settings.EDIT_PLAYLIST_PAGE_PREFIX + id)
                     },
-                    // Fix Login (TV): the sign-in from the phone is in and the
-                    // hold is lifted; the playlist on screen reloads its channels.
-                    onFixedLogin = { id ->
+                    // Fix Login (TV) or the sign-in form: the new sign-in is in
+                    // and the hold is lifted; the playlist on screen reloads its channels.
+                    onSignedIn = { id ->
                         if (vm.state.value.playlist?.id == id) vm.refreshPlaylist(fromRecovery = true)
                     },
                 )

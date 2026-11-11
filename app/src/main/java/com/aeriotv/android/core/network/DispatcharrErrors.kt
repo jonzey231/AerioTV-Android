@@ -37,7 +37,14 @@ sealed class DispatcharrError(message: String) : Exception(message) {
      */
     class KeyRejected : Unauthorized(KEY_REJECTED_MESSAGE)
     class RefreshExpired(message: String) : DispatcharrError(message)
-    class UnexpectedResponse(message: String) : DispatcharrError(message)
+    open class UnexpectedResponse(message: String) : DispatcharrError(message)
+
+    /**
+     * Signed in, but users/me carries no `api_key` for the account. AerioTV
+     * never generates one; the administrator turns on API access. An
+     * [UnexpectedResponse] so every existing catch keeps handling it.
+     */
+    class NoApiKey(message: String) : UnexpectedResponse(message)
     open class Transport(message: String) : DispatcharrError(message)
 
     /** HTTP 404 from a by-id lookup (a regenerated program id, for one).

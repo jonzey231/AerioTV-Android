@@ -352,6 +352,11 @@ class DispatcharrClient @Inject constructor() {
                 header("Authorization", "Bearer $accessToken")
                 header("User-Agent", userAgentForUrl(baseUrl))
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: DispatcharrError) {
+            // The request gate's own answer (a 429 pause): keep its type and copy.
+            throw e
         } catch (t: Throwable) {
             throw DispatcharrError.Transport(
                 "Couldn't read user profile: ${t.message ?: t::class.simpleName}",
@@ -376,7 +381,7 @@ class DispatcharrClient @Inject constructor() {
         // api_key-minting path carry none (Discord 2026-08-16). Name the
         // fix instead of the generic "unexpected shape" copy.
         return me.apiKey?.takeIf { it.isNotBlank() }
-            ?: throw DispatcharrError.UnexpectedResponse(
+            ?: throw DispatcharrError.NoApiKey(
                 "The Dispatcharr account '${me.username}' has no API key. In " +
                     "Dispatcharr, open System, then Users, edit this user, and " +
                     "generate an API key, then try again.",

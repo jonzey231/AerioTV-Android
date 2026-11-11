@@ -40,6 +40,8 @@ class DispatcharrWarmupCoordinator @Inject constructor(
     private val dao: PlaylistDao,
     private val client: DispatcharrClient,
     private val tokenStore: DispatcharrTokenStore,
+    // The startup login IS the broker's re-login (one per launch, shared).
+    private val authBroker: DispatcharrAuthBroker,
     // Lazy so the DispatcharrClient -> repository direction stays one-way at
     // construction time; the cast re-resolve only needs it at ON_START.
     private val playlistRepository: dagger.Lazy<
@@ -159,16 +161,20 @@ class DispatcharrWarmupCoordinator @Inject constructor(
             Log.i(TAG, "[AUTH] warmup login skipped for ${playlist.id.take(8)}: parked after a rejected login")
             return
         }
+        // One login per launch (Logan 2026-11-11): the startup login runs
+        // as the broker's re-login through DispatcharrLoginGate, so a 401
+        // re-login while it runs, or within a minute after it, shares its
+        // result instead of signing in a second time. It stores the JWT pair
+        // as before, also reads the account's current key (a key rotated
+        // while the app was closed is picked up before any call 401s), and
+        // keeps the login throttle, 429 park, and rejected-login park.
         try {
-            val pair = client.login(playlist.urlString, username, password)
-            tokenStore.store(playlist.id, pair.access, pair.refresh)
-            Log.i(TAG, "login OK for ${playlist.id.take(8)}")
+            val key = authBroker.silentRebootstrapApiKey(playlist)
+            Log.i(TAG, "login ${if (key != null) "OK" else "gave no key"} for ${playlist.id.take(8)}")
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
-        } catch (e: DispatcharrError.InvalidCredentials) {
-            DispatcharrLoginGate.noteRejected(playlist.id)
         } catch (t: Throwable) {
-            Log.w(TAG, "login failed for ${playlist.id.take(8)}: ${t.message}")
+            Log.w(TAG, "login failed for ${playlist.id.take(8)}: ${t.javaClass.simpleName}")
         }
     }
 

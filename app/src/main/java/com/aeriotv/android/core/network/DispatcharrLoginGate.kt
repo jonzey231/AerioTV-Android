@@ -23,6 +23,11 @@ import java.util.concurrent.ConcurrentHashMap
  *     and the "enter a new key" state is surfaced once per park.
  *  4. Callers never reach the gate without a stored password (API-key mode).
  *  5. A successful login clears nothing and changes nothing.
+ *  6. The startup login (DispatcharrWarmupCoordinator) is the same attempt
+ *     as a re-login (2026-11-11): it runs through [silentRelogin], so one
+ *     launch makes at most one login, and a re-login while it runs, or
+ *     within [ATTEMPT_WINDOW_MS] after it, shares its key instead of
+ *     signing in again.
  */
 object DispatcharrLoginGate {
     private const val TAG = "DispatcharrAuthBroker"
@@ -35,12 +40,21 @@ object DispatcharrLoginGate {
         @Volatile var lastKey: String? = null
         @Volatile var rejectedUntil = 0L
         @Volatile var rejectionSurfaced = false
+        /** The last re-login signed in, but users/me carried no API key. */
+        @Volatile var noApiKey = false
     }
 
     private val slots = ConcurrentHashMap<String, Slot>()
     private val serverParkedUntil = ConcurrentHashMap<String, Long>()
 
-    private fun now() = SystemClock.elapsedRealtime()
+    /** Monotonic ms clock (tests replace it). */
+    @Volatile internal var clock: () -> Long = { SystemClock.elapsedRealtime() }
+    /** Log sink (tests replace it; android.util.Log is not available on the JVM). */
+    @Volatile internal var logSink: ((warn: Boolean, line: String) -> Unit)? = null
+
+    private fun now() = clock()
+    private fun logI(line: String) = logSink?.invoke(false, line) ?: run { Log.i(TAG, line); Unit }
+    private fun logW(line: String) = logSink?.invoke(true, line) ?: run { Log.w(TAG, line); Unit }
 
     private fun hostKey(baseUrl: String): String =
         runCatching { URI(baseUrl.trim()).let { "${it.host}:${it.port}" } }.getOrNull()
@@ -61,7 +75,7 @@ object DispatcharrLoginGate {
         val secs = retryAfterSeconds?.takeIf { it > 0 } ?: DEFAULT_RETRY_AFTER_S
         serverParkedUntil[hostKey(baseUrl)] = now() + secs * 1000
         serverParkedReason[hostKey(baseUrl)] = reason
-        Log.w(TAG, "[AUTH] login throttled by the server ($reason); next attempt in ${secs}s")
+        logW("[AUTH] login throttled by the server ($reason); next attempt in ${secs}s")
     }
 
     /** Why [baseUrl]'s logins are parked. */
@@ -81,21 +95,29 @@ object DispatcharrLoginGate {
                     slot.rejectionSurfaced = true
                     surfaceRejected(playlistId)
                 }
-                Log.i(TAG, "[AUTH] re-login for ${playlistId.take(8)} parked after a rejected login; " +
+                logI("[AUTH] re-login for ${playlistId.take(8)} parked after a rejected login; " +
                     "next attempt in ${(slot.rejectedUntil - t + 999) / 1000}s")
                 return@withLock null
             }
             if (slot.lastAttemptAt != 0L && t - slot.lastAttemptAt < ATTEMPT_WINDOW_MS) {
                 // A caller that waited on the in-flight attempt, or one inside
                 // the window: share the result, never a second POST.
-                Log.i(TAG, "[AUTH] re-login for ${playlistId.take(8)} already ran " +
+                logI("[AUTH] re-login for ${playlistId.take(8)} already ran " +
                     "${(t - slot.lastAttemptAt) / 1000}s ago; sharing its result")
                 return@withLock slot.lastKey
             }
             slot.lastAttemptAt = t
             slot.lastKey = null
+            slot.noApiKey = false
             try {
                 attempt().also { slot.lastKey = it }
+            } catch (e: DispatcharrError.NoApiKey) {
+                // Signed in, but the account has no API key (removed on the
+                // server). The caller holds the key: retrying it only feeds
+                // the server's failed-key lockout for the whole network.
+                slot.noApiKey = true
+                logW("[AUTH] re-login for ${playlistId.take(8)} signed in, but the account has no API key")
+                null
             } catch (e: DispatcharrError.InvalidCredentials) {
                 slot.rejectedUntil = now() + ATTEMPT_WINDOW_MS
                 slot.rejectionSurfaced = true
@@ -105,9 +127,19 @@ object DispatcharrLoginGate {
         }
     }
 
+    /** The last re-login for [playlistId] signed in but the account has no API key. */
+    fun accountHasNoKey(playlistId: String): Boolean = slots[playlistId]?.noApiKey == true
+
     /** True while a rejected login parks [playlistId] (warmup skips its login). */
     fun isRejected(playlistId: String): Boolean =
         (slots[playlistId]?.rejectedUntil ?: 0L) > now()
+
+    /**
+     * The user just signed in to [playlistId] with a password the server
+     * accepted (the rejected-key prompt's sign-in form): forget the park and
+     * the shared result, so the next silent re-login uses the new password.
+     */
+    fun reset(playlistId: String) { slots.remove(playlistId) }
 
     /** A login outside [silentRelogin] (foreground warmup) was rejected. */
     fun noteRejected(playlistId: String) {
@@ -119,11 +151,17 @@ object DispatcharrLoginGate {
     }
 
     private fun surfaceRejected(playlistId: String) {
-        Log.w(
-            TAG,
+        logW(
             "[AUTH] login rejected for ${playlistId.take(8)}; re-login parked for " +
                 "${ATTEMPT_WINDOW_MS / 1000}s. The user must enter a new key or password in Edit Playlist.",
         )
+    }
+
+    /** Test hook: forget every slot and park. */
+    internal fun resetForTests() {
+        slots.clear()
+        serverParkedUntil.clear()
+        serverParkedReason.clear()
     }
 
     /** Parse a Retry-After header (seconds form; HTTP-date falls back to default). */
