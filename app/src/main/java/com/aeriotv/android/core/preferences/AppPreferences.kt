@@ -124,7 +124,82 @@ class AppPreferences @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cipher: CredentialCipher,
 ) {
-    private val store get() = context.appDataStore
+    /**
+     * Every write goes through [trackedStore]: a write made here (not a sync
+     * apply, see [syncApply]) stamps each synced setting it changed with the
+     * moment of the change, so Drive merges by when a setting changed, not
+     * by the next push (Logan 2026-11-10).
+     */
+    private val trackedStore: DataStore<Preferences> by lazy {
+        val raw = context.appDataStore
+        object : DataStore<Preferences> {
+            override val data: Flow<Preferences> get() = raw.data
+            override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences {
+                val out = raw.updateData(transform)
+                if (kotlin.coroutines.coroutineContext[SyncApplyWrite.Key] == null) noteLocalChange()
+                return out
+            }
+        }
+    }
+    private val store: DataStore<Preferences> get() = trackedStore
+
+    /** Coroutine context marker: writes inside [syncApply] come from a sync, not from the user. */
+    class SyncApplyWrite : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+        companion object Key : kotlin.coroutines.CoroutineContext.Key<SyncApplyWrite>
+    }
+
+    /** Runs [block] as a sync apply: its writes get no change time, and the values after it count as seen. */
+    suspend fun <T> syncApply(block: suspend () -> T): T {
+        val out = kotlinx.coroutines.withContext(SyncApplyWrite()) { block() }
+        runCatching { com.aeriotv.android.core.sync.SyncStamps.setPrefLastSeen(syncedFlat()) }
+        return out
+    }
+
+    /** The Drive preference values as "lane:key" to value (the merge's own form). */
+    suspend fun syncedFlat(): Map<String, String> {
+        val l = snapshotSyncablePreferences()
+        return l.v.mapKeys { "v:${it.key}" } + l.tv.mapKeys { "tv:${it.key}" } + l.mobile.mapKeys { "mobile:${it.key}" }
+    }
+
+    /**
+     * Sync merge of two playlists that are one server account: every
+     * per-playlist key of [fromId] (group picks, catch-up offset, per-profile
+     * copies) moves to [toId] unless [toId] already has its own; guide cache
+     * keys stay behind (PlaylistIdentity.movedKeyName). A sync apply: no
+     * change times. Returns the number of values moved.
+     */
+    suspend fun movePlaylistKeys(fromId: String, toId: String): Int = syncApply {
+        var moved = 0
+        store.edit { prefs ->
+            for ((key, value) in prefs.asMap().toList()) {
+                val newName = com.aeriotv.android.core.sync.PlaylistIdentity.movedKeyName(key.name, fromId, toId) ?: continue
+                @Suppress("UNCHECKED_CAST")
+                val target: Preferences.Key<Any>? = when (value) {
+                    is Boolean -> booleanPreferencesKey(newName)
+                    is Int -> intPreferencesKey(newName)
+                    is Long -> longPreferencesKey(newName)
+                    is Double -> doublePreferencesKey(newName)
+                    is Float -> androidx.datastore.preferences.core.floatPreferencesKey(newName)
+                    is String -> stringPreferencesKey(newName)
+                    is Set<*> -> androidx.datastore.preferences.core.stringSetPreferencesKey(newName)
+                    else -> null
+                } as Preferences.Key<Any>?
+                if (target != null && !prefs.contains(target)) {
+                    prefs[target] = value
+                    moved++
+                }
+                prefs.remove(key)
+            }
+        }
+        moved
+    }
+
+    private suspend fun noteLocalChange() {
+        runCatching {
+            val changed = com.aeriotv.android.core.sync.SyncStamps.notePrefValues(syncedFlat())
+            if (changed.isNotEmpty()) android.util.Log.i("AppPreferences", "[SYNC] setting changed here: ${changed.joinToString(",")} (change time stamped)")
+        }
+    }
 
     /**
      * Profiles (2026-10-16): per-profile keys. The bare key IS the default
@@ -2226,7 +2301,12 @@ class AppPreferences @Inject constructor(
     }
 
     /** Reverse of [snapshotSyncablePreferences] (default profile). Best-effort decode. */
-    suspend fun applySyncedPreferences(lanes: DriveLanes, replace: Boolean = false) {
+    suspend fun applySyncedPreferences(
+        lanes: DriveLanes,
+        replace: Boolean = false,
+        /** Per key gate ("v" / "tv" / "mobile", wire key): false leaves this device's value as is. */
+        accept: (lane: String, key: String) -> Boolean = { _, _ -> true },
+    ) {
         store.edit { prefs ->
             prefs[KEY_DRIVE_PREFS_LANES] = encodeLanes(lanes)
             // Explicit Pull from Drive REPLACES (owner decision, Settings
@@ -2234,6 +2314,7 @@ class AppPreferences @Inject constructor(
             // but the snapshot does not carry goes back to its default.
             registry.forEach { r ->
                 val lane = scopeOfName(prefs, r.name).lane(isTvDevice) ?: return@forEach
+                if (!accept(lane, r.drive)) return@forEach
                 val s = lanes.lane(lane)[r.drive]
                 if (s == null) { if (replace) removeRaw(prefs, r.keyName); return@forEach }
                 val w = r.driveToWire(s)?.takeIf { DsyncSettingsValidator.accepts(r.name, it) } ?: return@forEach
@@ -2243,6 +2324,7 @@ class AppPreferences @Inject constructor(
             driveDataKeys.forEach { (wire, itemId, keyName) ->
                 val on = SyncItemCatalog.item(itemId)?.let { itemOn(prefs, it) } ?: true
                 if (!on) return@forEach
+                if (!accept(SyncScope.LANE_ALL, wire)) return@forEach
                 val s = lanes.v[wire]
                 if (s == null) { if (replace) removeRaw(prefs, keyName); return@forEach }
                 if (wire == "radioModeByDefault") s.toBooleanStrictOrNull()?.let { prefs[KEY_RADIO_MODE_BY_DEFAULT] = it }
@@ -2250,9 +2332,10 @@ class AppPreferences @Inject constructor(
             }
             // Read for one version so an older snapshot still restores the key;
             // it is no longer written (it was cleartext). Re-encrypt at rest.
-            lanes.v["tmdbApiKey"]?.let { prefs[KEY_TMDB_API_KEY] = cipher.encrypt(it) ?: it }
+            lanes.v["tmdbApiKey"]?.takeIf { accept(SyncScope.LANE_ALL, "tmdbApiKey") }?.let { prefs[KEY_TMDB_API_KEY] = cipher.encrypt(it) ?: it }
             if (SyncItemCatalog.item("groupOrder")?.let { itemOn(prefs, it) } != false) {
                 perPlaylist.forEach { (name, base, kind) ->
+                    if (!accept(SyncScope.LANE_ALL, name)) return@forEach
                     val blob = lanes.v[name]
                     if (blob == null) {
                         if (replace) prefs.asMap().keys.filter { it.name.startsWith(base) && !it.name.contains("@prof:") }.forEach { prefs.remove(it) }

@@ -85,6 +85,14 @@ object SetupProtocol {
 
     @Serializable
     data class PlaylistPart(
+        /**
+         * The sender's playlist id (a UUID string). The receiver creates the
+         * row with this id, or updates the row that already has it, so both
+         * devices hold one playlist (Logan 2026-11-10). Absent from older
+         * senders, and from "Import this user only" for a non-default profile
+         * (a different account is a different playlist).
+         */
+        val id: String? = null,
         /** "dispatcharr", "xtream", or "m3u". */
         val type: String,
         val name: String,
@@ -108,6 +116,8 @@ object SetupProtocol {
 
     @Serializable
     data class ProfilePart(
+        /** The sender's profile id; the receiver keeps it for a profile it creates. Optional. */
+        val id: String? = null,
         val username: String,
         val displayName: String,
         /** "admin", "user", or "child"; "" keeps the server-level default. */

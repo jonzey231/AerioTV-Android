@@ -228,18 +228,33 @@ class TvSetupViewModel @Inject constructor(
             else -> SourceType.M3uUrl
         }
         val isDispatcharr = type == SourceType.DispatcharrApiKey || type == SourceType.DispatcharrUserPass
+        // The sender's playlist id (Logan 2026-11-10, one playlist across
+        // devices): a row here with that id IS this playlist, updated in place
+        // without asking; otherwise the duplicate check runs on rows with
+        // other ids, and a new row keeps the sender's id.
+        var sameId: String? = null
         if (resolved == null) {
-            val match = com.aeriotv.android.core.setup.SetupDuplicateMatch.find(
-                type, pl.url, cred?.apiKey, cred?.username, runCatching { playlists.allOnce() }.getOrDefault(emptyList()),
-            )
-            if (match != null) {
-                Log.i(TAG, "[SETUP] received playlist matches an existing one; asking")
-                duplicateId = match.id
-                _phase.value = Phase.Duplicate(match.name)
-                return
+            val all = runCatching { playlists.allOnce() }.getOrDefault(emptyList())
+            when (val t = com.aeriotv.android.core.setup.SetupDuplicateMatch.target(pl.id, type, pl.url, cred?.apiKey, cred?.username, all)) {
+                is com.aeriotv.android.core.setup.SetupDuplicateMatch.Target.SameId -> {
+                    sameId = t.id
+                    Log.i(TAG, "[SETUP] received playlist has this device's playlist id; updating it in place")
+                }
+                is com.aeriotv.android.core.setup.SetupDuplicateMatch.Target.Duplicate -> {
+                    Log.i(TAG, "[SETUP] received playlist matches an existing one; asking")
+                    duplicateId = t.row.id
+                    _phase.value = Phase.Duplicate(t.row.name)
+                    return
+                }
+                is com.aeriotv.android.core.setup.SetupDuplicateMatch.Target.New ->
+                    Log.i(TAG, "[SETUP] new playlist${if (t.id != null) " with the sender's id" else " (sender sent no id)"}")
             }
         }
-        val replaceId = resolved?.takeIf { it.first == DuplicateChoice.Replace }?.second
+        val replaceId = sameId ?: resolved?.takeIf { it.first == DuplicateChoice.Replace }?.second
+        val keepId = pl.id?.trim()?.takeIf { it.isNotEmpty() && replaceId == null }
+        if (keepId != null && isDispatcharr) {
+            profiles.seedDefaultProfileId(keepId, p.profiles.firstOrNull { it.isDefault }?.id)
+        }
         val applyingLine = if (replaceId != null) "Updating your playlist" else "Connecting to your server"
         _phase.value = Phase.Applying(applyingLine)
         // A 429 (the server's API-key throttle tripped by another client on
@@ -258,6 +273,7 @@ class TvSetupViewModel @Inject constructor(
                 vodEnabled = pl.vodEnabled,
                 epgRetentionDays = pl.guideDays,
                 customUserAgent = pl.userAgent?.takeIf { isDispatcharr },
+                newId = keepId,
             )
         val entity = com.aeriotv.android.core.network.RateLimitRetry.run(
             onCountdown = { left, reason ->
@@ -294,7 +310,7 @@ class TvSetupViewModel @Inject constructor(
                     avatar = pp.avatar?.let { AvatarSpec(it.icon, it.color) },
                     order = pp.order,
                 )
-                profiles.applySetupProfile(entity.id, row, pp.isDefault, pp.credential?.password, pp.credential?.apiKey)
+                profiles.applySetupProfile(entity.id, row, pp.isDefault, pp.credential?.password, pp.credential?.apiKey, profileId = pp.id)
                     .onFailure {
                         Log.w(TAG, "[SETUP] profile ${pp.username} not added: ${it.message}")
                         problems += pp.displayName.ifBlank { pp.username }

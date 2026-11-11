@@ -516,7 +516,12 @@ private fun ChooseStep(
             addAll(source.choices.filter { it.isDefault || it.credentialLabel != null }.map { it.profileId })
         }
     }
-    var sync by remember(source, userOnly) { mutableStateOf(source.isDispatcharr && !userOnly) }
+    // Pre-ticked only when Dispatcharr Sync is on for this device
+    // (docs/DeviceSetupHandoff.md, Sender flow step 5): it was pre-ticked for
+    // every Dispatcharr playlist (Fold, 2026-11-10, sync off there).
+    var sync by remember(source, userOnly) {
+        mutableStateOf(com.aeriotv.android.core.setup.SetupSender.syncPreTicked(source.isDispatcharr, source.syncOnHere))
+    }
     if (!LocalSetupSheetStyle.current) {
         Text("Send to ${s.target.name}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
     }

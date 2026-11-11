@@ -223,6 +223,7 @@ class SetupSender(
         }
         val offset = runCatching { prefs.catchupTimeOffsetMinutes(playlistId).first() }.getOrDefault(0)
         val playlist = SetupProtocol.PlaylistPart(
+            id = row.id,
             type = type,
             name = row.name,
             url = row.urlString,
@@ -246,6 +247,7 @@ class SetupSender(
                 val p = s.profile
                 val pin = s.pin
                 SetupProtocol.ProfilePart(
+                    id = p.id,
                     username = p.username,
                     displayName = p.displayName,
                     role = p.effectiveRole().wire,
@@ -278,9 +280,12 @@ class SetupSender(
         val cred = if (p.isDefault) full.playlist.credential else userOnlyCredential(p.apiKey, p.username, p.password) ?: return null
         val pin = src.pin
         return full.copy(
-            playlist = full.playlist.copy(credential = cred),
+            // Another user's sign-in is another account, so another playlist:
+            // no ids then (the receiver adds a playlist of its own).
+            playlist = full.playlist.copy(credential = cred, id = full.playlist.id.takeIf { p.isDefault }),
             profiles = listOf(
                 SetupProtocol.ProfilePart(
+                    id = p.id.takeIf { p.isDefault },
                     username = p.username,
                     displayName = p.displayName,
                     role = p.effectiveRole().wire,
@@ -333,7 +338,16 @@ class SetupSender(
         }
     }
 
-    private companion object { const val TAG = "AerioSetup" }
+    companion object {
+        private const val TAG = "AerioSetup"
+
+        /**
+         * "Turn on Dispatcharr Sync on the other device" starts ticked only
+         * when Dispatcharr Sync is on for this device, for either scope
+         * (Apple SetUpTvView parity: sync = source.syncOnHere).
+         */
+        fun syncPreTicked(isDispatcharr: Boolean, syncOnHere: Boolean): Boolean = isDispatcharr && syncOnHere
+    }
 }
 
 /** What the sender does after checking the key it is about to send. */
@@ -381,7 +395,7 @@ const val NETWORK_RETRY_S = 3L
 
 /** Sender copy when the key it would send is refused. */
 const val SETUP_KEY_REJECTED_MESSAGE =
-    "The server did not accept this playlist's API key, so it was not sent. Enter a new key in Edit Playlist, then try again."
+    "Dispatcharr no longer accepts this playlist's API key, so it was not sent. Enter the current key in Edit Playlist, then try again."
 
 /**
  * The sign-in for "Import this user only": `username` always rides beside the

@@ -2460,7 +2460,7 @@ private fun ExoTile(
             // only; it counts bytes and changes nothing about the transfer.
             val vodDataSourceFactory: androidx.media3.datasource.DataSource.Factory? =
                 if (isVod || tile.kind == TileKind.Dvr) {
-                    tracer.wrapDataSourceFactory(DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(httpFactory)))
+                    tracer.wrapDataSourceFactory(DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(httpFactory, headers)))
                 } else {
                     null
                 }
@@ -2865,6 +2865,16 @@ private fun ExoTile(
                         noteLiveReprime(userInitiated = false)
                         return
                     }
+                    // The stream's key was refused and held (StreamAuth): the tile
+                    // stops with the error shown; no ladder, no member-stream walk,
+                    // no automatic retry. The "Sign-in not accepted" prompt shows.
+                    if (com.aeriotv.android.core.playback.StreamAuth.find(error) != null) {
+                        Log.w(TAG, "[AUTH] tile $channelName: stream key rejected; stopping, no retry")
+                        failover.halt("key rejected")
+                        liveCalls.stop(player)
+                        tileError.value = com.aeriotv.android.core.playback.StreamAuth.find(error)?.message ?: error.errorCodeName
+                        return
+                    }
                     // Dispatcharr rate-limited this network (StreamGate): count the
                     // pause down on the tile, retry once, never the tile ladder
                     // or a member-stream walk.
@@ -3099,7 +3109,7 @@ private fun ExoTile(
                                 if (headers.isNotEmpty()) {
                                     swapHttp.setDefaultRequestProperties(headers)
                                 }
-                                DefaultDataSource.Factory(view.context, com.aeriotv.android.core.playback.StreamGate.Factory(swapHttp))
+                                DefaultDataSource.Factory(view.context, com.aeriotv.android.core.playback.StreamGate.Factory(swapHttp, headers))
                             } else {
                                 // DefaultHttpDataSource defaults: 8 s connect + read.
                                 com.aeriotv.android.core.playback.ServerHlsGuard.Factory(

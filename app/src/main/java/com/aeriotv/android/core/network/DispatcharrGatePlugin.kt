@@ -26,6 +26,8 @@ import io.ktor.util.AttributeKey
  */
 internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
     on(Send) { request ->
+        // Launch: the Drive credentials pull goes first (bounded wait).
+        DispatcharrLaunchGate.await()
         val built = request.url.build()
         val path = built.encodedPath
         val isTokenEndpoint = path.contains("/api/accounts/token/")

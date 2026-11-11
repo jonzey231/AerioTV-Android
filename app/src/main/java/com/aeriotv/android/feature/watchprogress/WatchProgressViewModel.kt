@@ -68,6 +68,7 @@ class WatchProgressViewModel @Inject constructor(
         viewModelScope.launch {
             if (!watched) {
                 dao.delete(videoId)
+                com.aeriotv.android.core.sync.SyncStamps.removed(com.aeriotv.android.core.sync.SyncStamps.Cat.WatchProgress, videoId)
                 return@launch
             }
             val now = System.currentTimeMillis()
@@ -295,7 +296,11 @@ class WatchProgressViewModel @Inject constructor(
     }
 
     fun delete(videoId: String) {
-        viewModelScope.launch { dao.delete(videoId) }
+        viewModelScope.launch {
+            dao.delete(videoId)
+            // Sync tombstone: no older copy elsewhere brings the row back.
+            com.aeriotv.android.core.sync.SyncStamps.removed(com.aeriotv.android.core.sync.SyncStamps.Cat.WatchProgress, videoId)
+        }
     }
 
     companion object {

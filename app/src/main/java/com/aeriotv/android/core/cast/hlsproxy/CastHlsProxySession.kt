@@ -869,6 +869,13 @@ class CastHlsProxySession @Inject constructor(
                             }
                         }
                     }
+                } catch (e: com.aeriotv.android.core.playback.StreamKeyRejectedException) {
+                    // The stream's key was refused and held (StreamAuth): the
+                    // ingest stops; a reconnect would be another counted
+                    // failed-key open. The "Sign-in not accepted" prompt shows.
+                    debugLogWarn(context, TAG, "[AUTH] ingest: stream key rejected; stopping, no reconnect")
+                    sessionError.value = e
+                    return@launch
                 } catch (e: com.aeriotv.android.core.playback.StreamRateLimitedException) {
                     // Dispatcharr rate-limited this network (or the gate is
                     // paused after a 429): no open until the pause ends, then

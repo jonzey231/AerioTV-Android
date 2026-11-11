@@ -73,6 +73,8 @@ class RemindersViewModel @Inject constructor(
                 ),
             )
             scheduleAlarm(key, channelName, programTitle, channelId, triggerAt, requestCode)
+            // Sync: when this reminder was set, so a merge keeps the newest change.
+            com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Reminders, key)
         }
     }
 
@@ -83,6 +85,8 @@ class RemindersViewModel @Inject constructor(
                 cancelAlarm(existing.reminderKey, existing.alarmRequestCode)
             }
             dao.delete(reminderKey)
+            // Sync tombstone: no older copy elsewhere brings it back.
+            com.aeriotv.android.core.sync.SyncStamps.removed(com.aeriotv.android.core.sync.SyncStamps.Cat.Reminders, reminderKey)
         }
     }
 

@@ -681,6 +681,17 @@ class ProfileManager @Inject constructor(
 
     /** Every Dispatcharr playlist has exactly one default profile. Its state
      *  is the legacy (unscoped) state, so creating it moves no data. */
+    /**
+     * A device setup creating [playlistId] with the sender's id also keeps the
+     * sender's default profile id ([profileId]); [ensureDefaultProfile] uses it.
+     */
+    fun seedDefaultProfileId(playlistId: String, profileId: String?) {
+        val id = profileId?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (store.byId(id) == null) seededDefaultIds[playlistId] = id
+    }
+
+    private val seededDefaultIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     private suspend fun ensureDefaultProfile(row: PlaylistEntity) {
         if (!row.isDispatcharrDirectConnect()) return
         if (store.forPlaylist(row.id).any { it.isDefault }) return
@@ -693,9 +704,10 @@ class ProfileManager @Inject constructor(
                     .getOrNull().orEmpty()
             }
         }
+        val seeded = seededDefaultIds.remove(row.id)?.takeIf { store.byId(it) == null }
         store.upsert(
             DispatcharrProfile(
-                id = UUID.randomUUID().toString(),
+                id = seeded ?: UUID.randomUUID().toString(),
                 playlistId = row.id,
                 displayName = username.ifBlank { row.name },
                 username = username,
@@ -842,6 +854,8 @@ class ProfileManager @Inject constructor(
         apiKey: String?,
         role: ProfileRole? = null,
         seed: com.aeriotv.android.core.sync.dsync.ProfileRow? = null,
+        /** A device setup keeps the sender's profile id (unless one here already has it). */
+        wantedId: String? = null,
     ): Result<DispatcharrProfile> = runCatching {
         // Same rule as setRole (assumption A): before a Child is added, every
         // Admin and Standard profile holds a PIN.
@@ -851,7 +865,7 @@ class ProfileManager @Inject constructor(
         check(canAdd(playlistId)) { "Only an Admin or Standard profile can add profiles." }
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
-        val id = UUID.randomUUID().toString()
+        val id = wantedId?.trim()?.takeIf { it.isNotEmpty() && store.byId(it) == null } ?: UUID.randomUUID().toString()
         // The admin users list carries each user's api_key: use it directly
         // (validated below by reading /me/ AS that user) and only fall back
         // to a typed password or key when the server has none.
@@ -1045,11 +1059,13 @@ class ProfileManager @Inject constructor(
         user: DispatcharrUserSummary,
         password: String?,
         apiKey: String?,
+        /** A device setup keeps the sender's profile id. */
+        wantedId: String? = null,
     ): Result<DispatcharrProfile> {
         val role = ProfileRole.fromWire(row.role)
         // One step: the row's fields and PIN are applied inside addProfile
         // before the sync hook fires (an applyRow after the add raced the push).
-        val added = addProfile(playlistId, user, password, apiKey, role, seed = row).getOrElse { return Result.failure(it) }
+        val added = addProfile(playlistId, user, password, apiKey, role, seed = row, wantedId = wantedId).getOrElse { return Result.failure(it) }
         refreshActiveRole()
         Log.i(TAG, "[DSYNC] profiles: added ${row.username} from the roster (explicit choice) role=${role?.label ?: "default"} order=${row.order}")
         rosterUndoable.update { it + added.id }
@@ -1146,6 +1162,8 @@ class ProfileManager @Inject constructor(
         isDefault: Boolean,
         password: String?,
         apiKey: String?,
+        /** The sender's profile id (docs/DeviceSetupHandoff.md), kept for a profile created here. */
+        profileId: String? = null,
     ): Result<Unit> = runCatching {
         if (isDefault) {
             var local: DispatcharrProfile? = null
@@ -1167,7 +1185,7 @@ class ProfileManager @Inject constructor(
         if (store.forPlaylist(playlistId).any { it.username.equals(row.username, ignoreCase = true) }) return@runCatching
         pickerAddUnlocked = playlistId
         try {
-            addFromRoster(playlistId, row, DispatcharrUserSummary(id = row.userId, username = row.username), password, apiKey).getOrThrow()
+            addFromRoster(playlistId, row, DispatcharrUserSummary(id = row.userId, username = row.username), password, apiKey, wantedId = profileId).getOrThrow()
         } finally {
             pickerAddUnlocked = null
         }

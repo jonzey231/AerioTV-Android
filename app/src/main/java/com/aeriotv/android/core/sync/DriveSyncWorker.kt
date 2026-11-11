@@ -25,8 +25,9 @@ import kotlinx.coroutines.flow.first
  * even after the process has been recycled, so we no-op when there's nothing
  * authorized. The user can still trigger Sync Now manually any time.
  *
- * Conflict policy is the same as manual sync: push-then-pull serially, with
- * push winning by virtue of a fresher envelope timestamp.
+ * Order (Logan 2026-11-10): pull, finish the id migration, then push, and
+ * no push at all when a pull failed. Every push merges per item onto the
+ * Drive copy, newest change time wins.
  */
 @HiltWorker
 class DriveSyncWorker @AssistedInject constructor(
@@ -56,22 +57,34 @@ class DriveSyncWorker @AssistedInject constructor(
             Log.i(TAG, "No categories enabled, skipping")
             return@runCatching Result.success()
         }
-        // Never auto-push before this install's first successful pull: a
-        // blank fresh install would overwrite a populated Drive backup with
-        // empty snapshots (user report). The pull below sets the flag, so
-        // the next cycle pushes normally.
+        // Logan 2026-11-10: pre-migration data never overwrites post-migration
+        // data. So every round PULLS first, then finishes the one-time id
+        // migration, and pushes only when every pull succeeded (a device that
+        // was offline for weeks takes in what changed elsewhere before it
+        // writes anything). The push itself merges per item onto the Drive
+        // copy (DriveSyncManager.mergedPayload), newest change wins.
+        val pulled = sync.pullForSync(token, enabled)
+        val pullFailed = pulled.values.any { !it }
         // Rule 4 one-time id migration (DriveSyncManager.migrateCanonicalIds); never fails the sync.
         runCatching { sync.migrateCanonicalIds(token, enabled) }
+        val waitingIds = sync.idUpdatePending()
         val initialPullDone = prefs.syncInitialPullDone.first()
-        val pushed = if (initialPullDone) {
-            sync.pushAll(token, enabled)
-        } else {
-            Log.i(TAG, "Skipping push: no pull completed on this install yet")
-            emptyMap()
+        val pushed = when {
+            pullFailed -> {
+                Log.i(TAG, "Skipping push: a pull failed this round (${pulled.filterValues { !it }.keys.joinToString(",") { it.name }})")
+                emptyMap()
+            }
+            !initialPullDone -> {
+                Log.i(TAG, "Skipping push: no pull completed on this install yet")
+                emptyMap()
+            }
+            else -> {
+                if (waitingIds.isNotEmpty()) Log.i(TAG, "Push waits for the backup update: ${waitingIds.joinToString(",") { it.name }}")
+                sync.pushAll(token, enabled - waitingIds)
+            }
         }
-        val pulled = sync.pullAll(token, enabled)
         val failures = (pushed + pulled).count { !it.value }
-        Log.i(TAG, "Periodic sync done: ${pushed.size}↑ ${pulled.size}↓ failures=$failures")
+        Log.i(TAG, "Periodic sync done: ${pulled.size} pulled, ${pushed.size} pushed, failures=$failures")
         if (failures == 0) Result.success() else Result.retry()
     }.getOrElse { t ->
         Log.w(TAG, "Periodic sync threw", t)

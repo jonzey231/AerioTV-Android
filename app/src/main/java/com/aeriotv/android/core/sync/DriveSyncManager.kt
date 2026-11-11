@@ -37,10 +37,12 @@ import java.util.concurrent.TimeUnit
  *   - clearRemote(), Settings > "Clear Drive Data" hook.
  *   - status flow exposed for SyncSettingsScreen badge.
  *
- * Conflict resolution: last-writer-wins by [SyncEnvelope.lastModified]. A
- * pull only overwrites local rows when the remote envelope is newer; a push
- * always wins over older remote data because the local DB is treated as the
- * latest writer at sync time.
+ * Conflict resolution (Logan 2026-11-10: pre-migration data never
+ * overwrites post-migration data): per item, by each item's own change time,
+ * never by when a file was pushed. A push re-reads the Drive file and merges
+ * onto it (newest wins, a tie keeps Drive, tombstones carry deletions); a pull
+ * applies only what changed elsewhere after it changed here. The background
+ * worker pulls before it pushes and never pushes after a failed pull.
  */
 @Singleton
 class DriveSyncManager @Inject constructor(
@@ -63,6 +65,9 @@ class DriveSyncManager @Inject constructor(
     private val idLookup: DriveIdLookup,
     /** Rule 4 retry after an unknown-Drive probe (Provider: the coordinator depends on this class). */
     private val setupCoordinator: javax.inject.Provider<SetupSourceCoordinator>,
+    /** One server account is one playlist: the merge after a pull. */
+    private val playlistCollapse: javax.inject.Provider<PlaylistCollapse>,
+    private val profileStore: javax.inject.Provider<com.aeriotv.android.core.profiles.ProfileStore>,
 ) {
     /** The record every file of the current push carries (envelope.syncProviders). */
     @Volatile private var pushProviders: SyncProvidersRecord? = null
@@ -359,6 +364,37 @@ class DriveSyncManager @Inject constructor(
     }
 
     /**
+     * Background sync pull (Logan 2026-11-10: pull first, push after). Per
+     * category: true when it applied, Dispatcharr Sync owns it, or Drive has no
+     * file yet; false when Drive could not be read or the file did not apply.
+     * Any false means the caller must not push this round.
+     */
+    suspend fun pullForSync(token: String, enabled: Set<SyncCategory>): Map<SyncCategory, Boolean> {
+        val result = LinkedHashMap<SyncCategory, Boolean>()
+        enabled.forEach { category ->
+            val outcome = runCatching { pullCategoryDetailed(token, category) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; Log.w(TAG, "pull ${category.name} failed", it) }
+                .getOrDefault(PullOutcome.Failed)
+            result[category] = outcome != PullOutcome.Failed
+        }
+        appPreferences.setSyncLastPullAt(System.currentTimeMillis())
+        if (result.values.all { it }) appPreferences.setSyncInitialPullDone(true)
+        // One server account is one playlist (Logan 2026-11-10): duplicates
+        // the pull brought in (or that were here already) collapse into one
+        // before anything is pushed. Needs both the playlists and the
+        // credentials (account names) to have applied.
+        if (result[SyncCategory.Playlists] != false && result[SyncCategory.Credentials] != false) {
+            runCatching { playlistCollapse.get().run("sync") }
+                .onSuccess { if (it > 0) Log.i(TAG, "[DRIVE] merged $it playlist(s) into their account's playlist") }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; Log.w(TAG, "[DRIVE] playlist merge failed: ${it.javaClass.simpleName}") }
+        }
+        return result
+    }
+
+    /** Categories an accepted backup update has not rewritten yet: none of them is pushed until it has. */
+    suspend fun idUpdatePending(): Set<SyncCategory> = runCatching { pendingIdUpdate().toSet() }.getOrDefault(emptySet())
+
+    /**
      * [pullAll] variant that publishes per-category progress through
      * [restoreSteps] for the onboarding restore screen. Same return shape and
      * same per-category semantics (a category maps to true only when a remote
@@ -417,15 +453,26 @@ class DriveSyncManager @Inject constructor(
             Log.i(TAG, "[DRIVE] push ${category.name} held: replace deferred until the Dispatcharr pull applies")
             return true
         }
-        val payload = when (category) {
-            SyncCategory.Playlists -> json.encodeToString(buildPlaylistsSnapshot())
-            SyncCategory.WatchProgress -> json.encodeToString(driveProgressSnapshot(label ?: "push"))
-            SyncCategory.Reminders -> json.encodeToString(buildRemindersSnapshot())
-            SyncCategory.Favorites -> json.encodeToString(withCanonicalIds(buildFavoritesSnapshot()))
-            SyncCategory.Watchlist -> json.encodeToString(withCanonicalIds(buildWatchlistSnapshot()))
-            SyncCategory.Preferences -> json.encodeToString(withCanonicalIds(buildPreferencesSnapshot()))
-            SyncCategory.Credentials -> json.encodeToString(buildCredentialsSnapshot())
+        // Merge on push (Logan 2026-11-10: pre-migration data never overwrites
+        // post-migration data): re-read the Drive file and merge per item,
+        // newest change time wins, a tie keeps Drive's copy. A file that cannot
+        // be read is never overwritten. The explicit "replace" (the user chose
+        // Dispatcharr as the source at setup) writes this device's copy as is.
+        val remoteBody: String? = if (label == "replace") null else when (val r = readRemote(token, category)) {
+            RemoteFile.Missing -> null
+            is RemoteFile.Body -> r.text
+            RemoteFile.Failed -> {
+                Log.i(TAG, "[DRIVE] push ${category.name} held: the Drive copy could not be read (never overwritten unread)")
+                return false
+            }
         }
+        if (label != "replace") Log.i(TAG, "[DRIVE] push ${category.name} drive had ${DriveFileStats.line(category, remoteBody)}${statsExtra(category, remoteBody)}")
+        val built = mergedPayload(category, remoteBody, label ?: "push")
+        if (built == null) {
+            Log.i(TAG, "[DRIVE] push ${category.name}: nothing newer than the Drive copy; not written")
+            return true
+        }
+        val payload = built.first
         // Fresh-device order (Rule 4, Dispatcharr chosen; section 10a): the first
         // push of each shared file waits until the Dispatcharr pull applied its
         // categories here, so an empty fresh device never overwrites a
@@ -457,12 +504,195 @@ class DriveSyncManager @Inject constructor(
         // category (pushAll checks between categories).
         return kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
             commitCategory(token, category, payload, label ?: if (waiting) "replace" else null, local)
+                .also { ok -> if (ok) built.second() }
         }
     }
+
+    private sealed interface RemoteFile {
+        data object Missing : RemoteFile
+        data class Body(val text: String) : RemoteFile
+        data object Failed : RemoteFile
+    }
+
+    /** The Drive copy of [category]: missing, its text, or unreadable (lookup or download failed). */
+    private suspend fun readRemote(token: String, category: SyncCategory): RemoteFile {
+        val id = runCatching { driveClient.findFileId(token, category.fileName) }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            return RemoteFile.Failed
+        } ?: return RemoteFile.Missing
+        val body = runCatching { driveClient.download(token, id) }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            null
+        } ?: return RemoteFile.Failed
+        return RemoteFile.Body(body)
+    }
+
+    /** The merged file's envelope: newest item time (never the push time), the remote's format when it exists. */
+    private fun mergedEnvelope(remote: SyncEnvelope?, itemTimes: List<Long>) = SyncEnvelope(
+        lastModified = DriveMerge.mergedTime(remote?.lastModified, itemTimes),
+        device = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+        syncProviders = pushProviders,
+        format = DriveMerge.mergedFormat(remote != null, remote?.format, DriveCanon.FORMAT),
+    )
+
+    private inline fun <reified T> decodeRemote(category: SyncCategory, body: String?): Pair<Boolean, T?> {
+        if (body == null) return true to null
+        val t = runCatching { json.decodeFromString<T>(body) }.getOrNull()
+        if (t == null) Log.w(TAG, "[DRIVE] push ${category.name}: the Drive copy does not decode; left as is")
+        return (t != null) to t
+    }
+
+    /**
+     * This device's copy of [category] merged onto the Drive copy ([remoteBody],
+     * null when there is none), plus what to remember once it is written.
+     * Null: nothing here is newer than Drive, or the Drive copy is unreadable
+     * as this build's snapshot, so nothing is written.
+     */
+    private suspend fun mergedPayload(category: SyncCategory, remoteBody: String?, label: String): Pair<String, () -> Unit>? {
+        val now = System.currentTimeMillis()
+        val done: () -> Unit = {}
+        return when (category) {
+            SyncCategory.Playlists -> {
+                val (ok, remote) = decodeRemote<PlaylistsSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = buildPlaylistsSnapshot()
+                val mine = DriveMerge.playlistsLocal(local.playlists, SyncStamps.touchedAll(SyncStamps.Cat.Playlists), SyncStamps.removedAll(SyncStamps.Cat.Playlists))
+                val merged = DriveMerge.mergePlaylists(remote?.playlists.orEmpty(), mine)
+                // The active playlist is a per-device choice: keep Drive's pointer when it has one.
+                val active = remote?.active ?: local.active
+                if (remote != null && merged == remote.playlists && active == remote.active) return null
+                json.encodeToString(PlaylistsSnapshot(mergedEnvelope(remote?.envelope, merged.map(DriveMerge::playlistStamp)), active, merged)) to done
+            }
+            SyncCategory.WatchProgress -> {
+                val (ok, remote) = decodeRemote<WatchProgressSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = driveProgressSnapshot(label)
+                val mine = DriveMerge.progressLocal(local.entries, SyncStamps.removedAll(SyncStamps.Cat.WatchProgress))
+                val merged = DriveMerge.mergeProgress(remote?.entries.orEmpty(), mine)
+                if (remote != null && merged == remote.entries) return null
+                json.encodeToString(WatchProgressSnapshot(mergedEnvelope(remote?.envelope, merged.map(DriveMerge::progressStamp)), merged)) to done
+            }
+            SyncCategory.Reminders -> {
+                val (ok, remote) = decodeRemote<RemindersSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = buildRemindersSnapshot()
+                val mine = DriveMerge.remindersLocal(local.entries, SyncStamps.touchedAll(SyncStamps.Cat.Reminders), SyncStamps.removedAll(SyncStamps.Cat.Reminders))
+                val merged = DriveMerge.mergeReminders(remote?.entries.orEmpty(), mine, now)
+                // Spent reminders dropping out alone is no reason to write.
+                if (remote != null && merged == DriveMerge.mergeReminders(remote.entries, emptyList(), now)) return null
+                json.encodeToString(RemindersSnapshot(mergedEnvelope(remote?.envelope, merged.map(DriveMerge::reminderStamp)), merged)) to done
+            }
+            SyncCategory.Favorites -> {
+                val (ok, remote) = decodeRemote<FavoritesSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = withCanonicalIds(buildFavoritesSnapshot())
+                val mine = DriveMerge.favoritesLocal(local.entries, SyncStamps.touchedAll(SyncStamps.Cat.Favorites), SyncStamps.removedAll(SyncStamps.Cat.Favorites))
+                val merged = DriveMerge.mergeFavorites(remote?.entries.orEmpty(), mine)
+                if (remote != null && merged == remote.entries) return null
+                json.encodeToString(FavoritesSnapshot(mergedEnvelope(remote?.envelope, merged.map(DriveMerge::favoriteStamp)), merged)) to done
+            }
+            SyncCategory.Watchlist -> {
+                val (ok, remote) = decodeRemote<WatchlistSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = withCanonicalIds(buildWatchlistSnapshot())
+                val (entries, hidden) = DriveMerge.mergeWatchlist(remote, local)
+                if (remote != null && entries == remote.entries && hidden == remote.hidden) return null
+                val times = entries.map { maxOf(it.addedAt, it.removedAt ?: 0L) } + hidden.map { maxOf(it.hiddenAt, it.unhiddenAt ?: 0L) }
+                json.encodeToString(local.copy(envelope = mergedEnvelope(remote?.envelope, times), entries = entries, hidden = hidden)) to done
+            }
+            SyncCategory.Preferences -> {
+                val (ok, remote) = decodeRemote<PreferencesSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = withCanonicalIds(buildPreferencesSnapshot())
+                val baseline = SyncStamps.prefBaseline()
+                val localState = DriveMerge.PrefState(local.keys, local.tv, local.mobile, emptyMap())
+                val flatLocal = prefFlat(localState)
+                if (baseline == null) {
+                    // First run of this build: today's values are of unknown age.
+                    SyncStamps.setPrefBaseline(flatLocal)
+                }
+                val times = DriveMerge.localPrefTimes(localState, baseline, SyncStamps.touchedAll(SyncStamps.Cat.Preferences), now, SyncStamps.prefBaselineAt())
+                times.forEach { (k, t) -> if (SyncStamps.touchedAt(SyncStamps.Cat.Preferences, k) != t) SyncStamps.settleTouched(SyncStamps.Cat.Preferences, k, t) }
+                val remoteState = remote?.let { DriveMerge.PrefState(it.keys, it.tv, it.mobile, it.times) }
+                val merged = DriveMerge.mergePrefs(remoteState, localState.copy(times = times))
+                val ids = local.dispatcharrChannelIds ?: remote?.dispatcharrChannelIds
+                // The baseline is THIS device's values as of this sync (a push
+                // never changes them; a pull records what it applied), so only
+                // a real change here afterwards gets a change time. Recording
+                // the merged values instead would read every key where Drive
+                // kept its own value as "changed here" on the next push.
+                val after: () -> Unit = { SyncStamps.setPrefBaseline(flatLocal) }
+                if (remote != null && merged.v == remote.keys && merged.tv == remote.tv && merged.mobile == remote.mobile &&
+                    merged.times == remote.times && ids == remote.dispatcharrChannelIds
+                ) {
+                    SyncStamps.setPrefBaseline(flatLocal)
+                    return null
+                }
+                json.encodeToString(
+                    PreferencesSnapshot(
+                        envelope = mergedEnvelope(remote?.envelope, merged.times.values.toList()),
+                        keys = merged.v, tv = merged.tv, mobile = merged.mobile,
+                        dispatcharrChannelIds = ids, times = merged.times,
+                    ),
+                ) to after
+            }
+            SyncCategory.Credentials -> {
+                val (ok, remote) = decodeRemote<CredentialsSnapshot>(category, remoteBody)
+                if (!ok) return null
+                val local = buildCredentialsSnapshot()
+                val mine = local.entries.map { it.copy(updatedAt = SyncStamps.touchedAt(SyncStamps.Cat.Credentials, it.playlistId) ?: 0L) }
+                // A deleted playlist's sign-in leaves Drive: the merge keeps
+                // Drive-only entries, so without this a deleted playlist's
+                // credentials stayed in Drive for good (whole-file pushes used
+                // to drop them).
+                val merged = DriveMerge.dropDeletedPlaylists(
+                    DriveMerge.mergeCredentials(remote?.entries.orEmpty(), mine) { keyRejectedHere(it) },
+                ) { mergedAway(it) }
+                // Which side each merged key came from (never the key itself).
+                merged.forEach { m ->
+                    val l = mine.firstOrNull { it.playlistId == m.playlistId }
+                    val r = remote?.entries?.firstOrNull { it.playlistId == m.playlistId }
+                    val src = when {
+                        m.apiKey.isNullOrBlank() -> "none"
+                        m.apiKey == r?.apiKey && m.apiKey == l?.apiKey -> "same both sides"
+                        m.apiKey == r?.apiKey -> "drive"
+                        m.apiKey == l?.apiKey -> "this device"
+                        else -> "?"
+                    }
+                    val rejectedHere = l?.apiKey?.let { keyRejectedHere(it) } == true
+                    Log.i(TAG, "[DRIVE] push Credentials ${m.playlistId.take(8)}: key from $src; local key rejected here=$rejectedHere; drive t=${DriveFileStats.time(r?.updatedAt)} local t=${DriveFileStats.time(l?.updatedAt)}")
+                }
+                if (remote != null && merged == remote.entries) return null
+                json.encodeToString(CredentialsSnapshot(mergedEnvelope(remote?.envelope, merged.map { it.updatedAt ?: 0L }), merged)) to done
+            }
+        }
+    }
+
+    /** Extra counts-only detail for the read/wrote lines: newest progress row, recently changed preference keys. */
+    private fun statsExtra(category: SyncCategory, body: String?): String = when (category) {
+        SyncCategory.WatchProgress -> " newestRow ${DriveFileStats.newestProgress(body)}"
+        SyncCategory.Preferences -> " recentKeys=${DriveFileStats.recentPrefKeys(body, System.currentTimeMillis() - 3L * 60 * 60 * 1000)}"
+        else -> ""
+    }
+
+    /** A key the request gate holds as rejected, or one a playlist merge here set aside. */
+    private fun keyRejectedHere(key: String): Boolean =
+        com.aeriotv.android.core.network.DispatcharrRequestGate.isKeyRejected(key) ||
+            SyncStamps.isSuperseded(com.aeriotv.android.core.network.DispatcharrRequestGate.keyHash(key))
+
+    /** A playlist a merge here deleted (or will once it leaves the screen): never pushed as live. */
+    private fun mergedAway(id: String): Boolean {
+        val gone = SyncStamps.removedAt(SyncStamps.Cat.Playlists, id) ?: return false
+        return gone >= (SyncStamps.touchedAt(SyncStamps.Cat.Playlists, id) ?: 0L)
+    }
+
+    private fun prefFlat(s: DriveMerge.PrefState): Map<String, String> =
+        s.v.mapKeys { "v:${it.key}" } + s.tv.mapKeys { "tv:${it.key}" } + s.mobile.mapKeys { "mobile:${it.key}" }
 
     /** Upload plus bookkeeping for one category; always runs to completion (NonCancellable caller). */
     private suspend fun commitCategory(token: String, category: SyncCategory, payload: String, why: String?, local: Map<String, Int>): Boolean {
         val ok = driveClient.upload(token, category.fileName, payload).isSuccess
+        Log.i(TAG, "[DRIVE] wrote ${category.name} ok=$ok ${DriveFileStats.line(category, payload)}${statsExtra(category, payload)}")
         val follows = DriveSyncWorker.takeFollows(category)
         if (!ok && follows.isNotEmpty()) follows.forEach { DriveSyncWorker.noteFollow(category, it) }
         if (why != null || follows.isNotEmpty()) {
@@ -487,9 +717,9 @@ class DriveSyncManager @Inject constructor(
         val ids = DriveCanon.Ids()
         val out = LinkedHashMap<String, SetupSourceChoice.Category>()
         when (category) {
-            SyncCategory.Favorites -> out["favorites"] = DriveCanon.favorites(json.decodeFromString(payload), ids)
-            SyncCategory.WatchProgress -> out["progress"] = DriveCanon.progress(json.decodeFromString(payload), ids, now)
-            SyncCategory.Reminders -> out["reminders"] = DriveCanon.reminders(json.decodeFromString(payload), now)
+            SyncCategory.Favorites -> out["favorites"] = DriveCanon.favorites(json.decodeFromString<FavoritesSnapshot>(payload).live(), ids)
+            SyncCategory.WatchProgress -> out["progress"] = DriveCanon.progress(json.decodeFromString<WatchProgressSnapshot>(payload).live(), ids, now)
+            SyncCategory.Reminders -> out["reminders"] = DriveCanon.reminders(json.decodeFromString<RemindersSnapshot>(payload).live(), now)
             SyncCategory.Watchlist -> {
                 val w = json.decodeFromString<WatchlistSnapshot>(payload)
                 val host = idLookup.activeDispatcharr()?.let { idLookup.host(it) }
@@ -538,9 +768,9 @@ class DriveSyncManager @Inject constructor(
     private fun snapshotRows(category: SyncCategory, payload: String, shared: Map<String, Int> = emptyMap()): Int = runCatching {
         if (shared.size == 1) return@runCatching shared.values.first()
         when (category) {
-            SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(payload).entries.size
-            SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(payload).entries.size
-            SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(payload).entries.size
+            SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(payload).live().entries.size
+            SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(payload).live().entries.size
+            SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(payload).live().entries.size
             SyncCategory.Watchlist -> json.decodeFromString<WatchlistSnapshot>(payload).let { it.entries.size + it.hidden.size }
             SyncCategory.Preferences -> json.decodeFromString<PreferencesSnapshot>(payload).let { it.keys.size + it.tv.size + it.mobile.size }
             else -> -1
@@ -578,6 +808,7 @@ class DriveSyncManager @Inject constructor(
         }
         val fileId = driveClient.findFileId(token, category.fileName) ?: return PullOutcome.NoRemote
         val body = driveClient.download(token, fileId) ?: return PullOutcome.Failed
+        Log.i(TAG, "[DRIVE] read ${category.name} ${DriveFileStats.line(category, body)}${statsExtra(category, body)}")
         providersStore.fold(SyncProvidersStore.DRIVE, SyncProvidersRules.fromDriveBody(body))
         return kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { runCatching {
             when (category) {
@@ -585,18 +816,18 @@ class DriveSyncManager @Inject constructor(
                 // Drive rows carry local ids (no server-id translation), so no
                 // cache gate is needed; the counts measure what each apply carried.
                 SyncCategory.WatchProgress -> json.decodeFromString<WatchProgressSnapshot>(body).let {
-                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyWatchProgressSnapshot(it)
-                    recordCanonicalIds(it)
-                    holdPlaceholders(it, forcedReplace)
-                    if (forcedReplace) replaceProgress(it)
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.live().entries.size} removed=${it.entries.size - it.live().entries.size}"); applyWatchProgressSnapshot(it)
+                    recordCanonicalIds(it.live())
+                    holdPlaceholders(it.live(), forcedReplace)
+                    if (forcedReplace) replaceProgress(it.live())
                 }
                 SyncCategory.Reminders -> json.decodeFromString<RemindersSnapshot>(body).let {
-                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size}"); applyRemindersSnapshot(it)
-                    if (forcedReplace) replaceReminders(it)
+                    Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.live().entries.size} removed=${it.entries.size - it.live().entries.size}"); applyRemindersSnapshot(it)
+                    if (forcedReplace) replaceReminders(it.live())
                 }
                 SyncCategory.Favorites -> json.decodeFromString<FavoritesSnapshot>(body).let {
                     applyFavoritesSnapshot(it)
-                    if (forcedReplace) replaceFavorites(it)
+                    if (forcedReplace) replaceFavorites(it.live())
                     Log.i(TAG, "[DRIVE] apply ${category.name} rows=${it.entries.size} local now=${favoriteChannelDao.allOnce().size}")
                 }
                 SyncCategory.Watchlist -> json.decodeFromString<WatchlistSnapshot>(body).let {
@@ -815,10 +1046,10 @@ class DriveSyncManager @Inject constructor(
             // rows, so the probe fails (no choice) instead of undercounting.
             val channels = row?.let { idLookup.channels(it) }.orEmpty()
             val host = row?.let { idLookup.host(it) }
-            body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it) }?.let { f ->
+            body(SyncCategory.Favorites)?.let { json.decodeFromString<FavoritesSnapshot>(it).live() }?.let { f ->
                 out["favorites"] = DriveCanon.favorites(f, DriveCanon.Ids(channels = channels))
             }
-            body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it) }?.let { w ->
+            body(SyncCategory.WatchProgress)?.let { json.decodeFromString<WatchProgressSnapshot>(it).live() }?.let { w ->
                 // Snapshots older than the id migration resolve their local ids here.
                 val (movies, episodes) = DriveCanon.progressNeeds(w)
                 val ids = row?.let { r ->
@@ -828,7 +1059,7 @@ class DriveSyncManager @Inject constructor(
                 carriedP = w
                 carriedIds = carriedIds.copy(movies = carriedIds.movies + ids.movies, episodes = ids.episodes)
             }
-            body(SyncCategory.Reminders)?.let { json.decodeFromString<RemindersSnapshot>(it) }?.let { r ->
+            body(SyncCategory.Reminders)?.let { json.decodeFromString<RemindersSnapshot>(it).live() }?.let { r ->
                 out["reminders"] = DriveCanon.reminders(r, now)
             }
             body(SyncCategory.Watchlist)?.let { json.decodeFromString<WatchlistSnapshot>(it) }?.let { w ->
@@ -1250,8 +1481,17 @@ class DriveSyncManager @Inject constructor(
         System.currentTimeMillis(), "${Build.MANUFACTURER} ${Build.MODEL}".trim(), pushProviders,
     )
 
+    /** The username [row] signs in as, when this device knows it (never a key or a password). */
+    private suspend fun accountOf(row: PlaylistEntity): String? {
+        if (PlaylistIdentity.kind(row.sourceType) != PlaylistIdentity.Kind.Dispatcharr) return row.username?.takeIf { it.isNotBlank() }
+        return row.username?.takeIf { it.isNotBlank() }
+            ?: runCatching { appPreferences.dispatcharrAccountFactsOnce(row.id).username }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: profileStore.get().forPlaylist(row.id).firstOrNull { it.isDefault }?.username?.takeIf { it.isNotBlank() }
+            ?: SyncStamps.learnedAccount(row.id)
+    }
+
     private suspend fun buildPlaylistsSnapshot(): PlaylistsSnapshot {
-        val rows = playlistDao.allOnce()
+        val rows = playlistDao.allOnce().filterNot { mergedAway(it.id) }
         val active = rows.firstOrNull { it.isActive }?.id
         // Drop sensitive creds from this snapshot, they go in Credentials.
         return PlaylistsSnapshot(
@@ -1268,6 +1508,7 @@ class DriveSyncManager @Inject constructor(
                     username = null,
                     apiKey = null,
                     lastUsedMillis = e.lastRefreshedAt,
+                    createdAt = e.createdAt,
                     dispatcharrAccountProfileIds = e.dispatcharrAccountProfileIds,
                     vodEnabled = e.vodEnabled,
                 )
@@ -1409,7 +1650,7 @@ class DriveSyncManager @Inject constructor(
         // model on CredentialsSnapshotEntry (audit task #53). The matching pull
         // path (applyCredentialsSnapshot) writes back through the same decorator,
         // re-encrypting at rest on the receiving device.
-        val rows = playlistDao.allOnce()
+        val rows = playlistDao.allOnce().filterNot { mergedAway(it.id) }
         return CredentialsSnapshot(
             envelope = envelope(),
             entries = rows.mapNotNull { row ->
@@ -1419,6 +1660,9 @@ class DriveSyncManager @Inject constructor(
                     username = row.username,
                     password = row.password,
                     apiKey = row.apiKey,
+                    // The account an API-key playlist signs in as (identity
+                    // for the one-account-one-playlist merge on other devices).
+                    account = accountOf(row),
                 )
             },
         )
@@ -1438,14 +1682,39 @@ class DriveSyncManager @Inject constructor(
                     .onFailure { Log.w(TAG, "pull replace: delete ${row.id} failed", it) }
             }
         }
-        mergePlaylistsSnapshot(snapshot)
+        mergePlaylistsSnapshot(snapshot, force = replace)
     }
 
-    private suspend fun mergePlaylistsSnapshot(snapshot: PlaylistsSnapshot) = database.withTransaction {
+    /**
+     * [force] is the explicit Pull from Drive (replace): every row applies.
+     * Otherwise a row applies only when it changed after this device's own copy
+     * (Logan 2026-11-10), a tombstone never re-adds or deletes anything here,
+     * and a playlist removed here stays removed unless re-added later elsewhere.
+     */
+    private suspend fun mergePlaylistsSnapshot(snapshot: PlaylistsSnapshot, force: Boolean = false) = database.withTransaction {
         val existing = playlistDao.allOnce().associateBy { it.id }
         snapshot.playlists.forEach { entry ->
             val current = existing[entry.id]
-            val merged = (current ?: PlaylistEntity(id = entry.id, name = entry.name, urlString = entry.urlString)).copy(
+            val stamp = DriveMerge.playlistStamp(entry)
+            // The original's creation time travels: keep the earliest seen
+            // (a row this device added from Drive got the time of that pull).
+            val remoteCreated = entry.createdAt
+            if (current != null && remoteCreated != null && remoteCreated < current.createdAt) {
+                playlistDao.update(current.copy(createdAt = remoteCreated))
+            }
+            if (entry.removedAt != null) {
+                if ((SyncStamps.removedAt(SyncStamps.Cat.Playlists, entry.id) ?: 0L) < entry.removedAt) {
+                    SyncStamps.settleRemoved(SyncStamps.Cat.Playlists, entry.id, entry.removedAt)
+                }
+                return@forEach
+            }
+            if (!force) {
+                val goneHere = SyncStamps.removedAt(SyncStamps.Cat.Playlists, entry.id)
+                if (current == null && goneHere != null && goneHere >= stamp) return@forEach
+                if (current != null && stamp <= (SyncStamps.touchedAt(SyncStamps.Cat.Playlists, entry.id) ?: 0L)) return@forEach
+            }
+            val merged = (current?.let { c -> if (remoteCreated != null && remoteCreated < c.createdAt) c.copy(createdAt = remoteCreated) else c }
+                ?: PlaylistEntity(id = entry.id, name = entry.name, urlString = entry.urlString, createdAt = remoteCreated ?: System.currentTimeMillis())).copy(
                 name = entry.name,
                 urlString = entry.urlString,
                 sourceType = entry.sourceType,
@@ -1470,6 +1739,7 @@ class DriveSyncManager @Inject constructor(
                 vodEnabled = entry.vodEnabled,
             )
             playlistDao.upsert(merged)
+            SyncStamps.settleTouched(SyncStamps.Cat.Playlists, entry.id, stamp)
         }
         // Enforce the single-active-row invariant that bootstrap relies on.
         // The old code set isActive per row from snapshot.active, which left the
@@ -1496,7 +1766,25 @@ class DriveSyncManager @Inject constructor(
     }
 
     private suspend fun applyWatchProgressSnapshot(snapshot: WatchProgressSnapshot) {
+        var updated = 0; var deleted = 0; var keptNewer = 0
         snapshot.entries.forEach { remote ->
+            // Tombstones (Logan 2026-11-10): a removal newer than this device's
+            // row deletes it; a row removed here after the remote changed it
+            // stays removed.
+            val goneHere = SyncStamps.removedAt(SyncStamps.Cat.WatchProgress, remote.videoId)
+            val gone = remote.removedAt
+            if (gone != null) {
+                val row = watchProgressDao.getOnce(remote.videoId)
+                if (row != null && gone > row.updatedAt) {
+                    watchProgressDao.delete(remote.videoId)
+                    deleted++
+                    SyncStamps.settleRemoved(SyncStamps.Cat.WatchProgress, remote.videoId, gone)
+                } else if (row == null && (goneHere ?: 0L) < gone) {
+                    SyncStamps.settleRemoved(SyncStamps.Cat.WatchProgress, remote.videoId, gone)
+                }
+                return@forEach
+            }
+            if (goneHere != null && goneHere >= remote.updatedAt) return@forEach
             // URL-keyed rows are legacy identity (dropped locally by
             // MIGRATION_23_24 and excluded from pushes), but snapshots
             // written by pre-fix builds still carry them and re-imported
@@ -1507,7 +1795,9 @@ class DriveSyncManager @Inject constructor(
             // Held placeholders have no local title yet (holdPlaceholders keeps them).
             if (com.aeriotv.android.core.sync.dsync.DsyncHeld.isPlaceholder(remote.videoId)) return@forEach
             val local = watchProgressDao.getOnce(remote.videoId)
+            if (local != null && remote.updatedAt < local.updatedAt) keptNewer++
             if (local == null || remote.updatedAt > local.updatedAt) {
+                updated++
                 // The snapshot only carries the synced position fields, so MERGE
                 // onto any existing local row to preserve its local-only episode
                 // metadata (vodType, seriesId, season/episode, streamUrl,
@@ -1543,63 +1833,135 @@ class DriveSyncManager @Inject constructor(
                         isFinished = remote.isFinished || base.isFinished,
                     ),
                 )
+                if (goneHere != null) SyncStamps.clearRemoved(SyncStamps.Cat.WatchProgress, remote.videoId)
             }
         }
+        Log.i(TAG, "[DRIVE] apply WatchProgress result: updated=$updated deleted=$deleted keptNewerHere=$keptNewer")
     }
 
     /**
-     * Task #52: additive favorites merge, mirroring the reminders policy: a
-     * remote favorite this device lacks is added with its synced order; a
-     * favorite both sides have adopts the remote order only when the remote
-     * snapshot is fresher than the local add (so a reorder travels without a
-     * local drag being clobbered by a stale snapshot). Removals deliberately
-     * do NOT propagate - same create-only limitation as reminders (audit #24
-     * design note): a device can't tell "removed elsewhere" from "not added
-     * here yet" without tombstones.
+     * Favorites merge per item: a remote favorite this device lacks is added
+     * unless it was removed here later; a favorite both sides have adopts the
+     * remote order only when the remote change is newer; a remote removal
+     * (tombstone) newer than this device's copy removes it here.
      */
     private suspend fun applyFavoritesSnapshot(snapshot: FavoritesSnapshot) {
+        var added = 0; var removed = 0; var reordered = 0; var keptRemovedHere = 0
+        // Per item, newest change wins (Logan 2026-11-10): the favorite's own
+        // add / order / removal time, never the time the file was pushed.
         snapshot.entries.forEach { remote ->
-            val local = favoriteChannelDao.getOnce(remote.channelId)
+            val id = remote.channelId
+            val stamp = DriveMerge.favoriteStamp(remote)
+            val local = favoriteChannelDao.getOnce(id)
+            val localStamp = local?.let { maxOf(it.addedAt, SyncStamps.touchedAt(SyncStamps.Cat.Favorites, id) ?: 0L) }
+            val goneHere = SyncStamps.removedAt(SyncStamps.Cat.Favorites, id)
+            val gone = remote.removedAt
+            if (gone != null) {
+                if (local != null && gone > (localStamp ?: 0L)) {
+                    favoriteChannelDao.delete(id)
+                    removed++
+                    SyncStamps.settleRemoved(SyncStamps.Cat.Favorites, id, gone)
+                } else if (local == null && (goneHere ?: 0L) < gone) {
+                    SyncStamps.settleRemoved(SyncStamps.Cat.Favorites, id, gone)
+                }
+                return@forEach
+            }
             if (local == null) {
+                if (goneHere != null && goneHere >= stamp) { keptRemovedHere++; return@forEach }
+                added++
                 favoriteChannelDao.upsert(
                     FavoriteChannelEntity(
-                        channelId = remote.channelId,
+                        channelId = id,
                         channelName = remote.channelName,
                         displayOrder = remote.displayOrder,
                         addedAt = remote.addedAt,
                     ),
                 )
-            } else if (snapshot.envelope.lastModified > local.addedAt &&
-                local.displayOrder != remote.displayOrder
-            ) {
-                favoriteChannelDao.setDisplayOrder(remote.channelId, remote.displayOrder)
+                SyncStamps.settleTouched(SyncStamps.Cat.Favorites, id, stamp)
+                SyncStamps.clearRemoved(SyncStamps.Cat.Favorites, id)
+            } else if (stamp > (localStamp ?: 0L) && local.displayOrder != remote.displayOrder) {
+                favoriteChannelDao.setDisplayOrder(id, remote.displayOrder)
+                reordered++
+                SyncStamps.settleTouched(SyncStamps.Cat.Favorites, id, stamp)
             }
         }
+        Log.i(TAG, "[DRIVE] apply Favorites result: added=$added removed=$removed reordered=$reordered keptRemovedHere=$keptRemovedHere")
     }
 
     private suspend fun applyRemindersSnapshot(snapshot: RemindersSnapshot) {
         snapshot.entries.forEach { remote ->
-            val local = reminderDao.getOnce(remote.reminderKey)
+            val key = remote.reminderKey
+            val stamp = DriveMerge.reminderStamp(remote)
+            val local = reminderDao.getOnce(key)
+            val goneHere = SyncStamps.removedAt(SyncStamps.Cat.Reminders, key)
+            val gone = remote.removedAt
+            if (gone != null) {
+                // Cancelled elsewhere after it was set here: cancel it here too.
+                if (local != null && gone > (SyncStamps.touchedAt(SyncStamps.Cat.Reminders, key) ?: 0L)) {
+                    cancelReminderAlarm(local.alarmRequestCode)
+                    reminderDao.delete(key)
+                    SyncStamps.settleRemoved(SyncStamps.Cat.Reminders, key, gone)
+                } else if (local == null && (goneHere ?: 0L) < gone) {
+                    SyncStamps.settleRemoved(SyncStamps.Cat.Reminders, key, gone)
+                }
+                return@forEach
+            }
             if (local == null) {
+                if (goneHere != null && goneHere >= stamp) return@forEach
                 reminderDao.upsert(
                     ReminderEntity(
-                        reminderKey = remote.reminderKey,
+                        reminderKey = key,
                         channelName = remote.channelName,
                         programTitle = remote.programTitle,
                         startMillis = remote.startMillis,
                         endMillis = remote.endMillis,
-                        alarmRequestCode = remote.reminderKey.hashCode(),
+                        alarmRequestCode = key.hashCode(),
                     ),
                 )
+                SyncStamps.settleTouched(SyncStamps.Cat.Reminders, key, stamp)
             }
         }
     }
 
+    /**
+     * Per key, only when the key changed elsewhere after it changed here
+     * (Logan 2026-11-10). [replace] (explicit Pull from Drive) applies all.
+     * What applied becomes this device's synced baseline and change time.
+     */
     private suspend fun applyPreferencesSnapshot(snapshot: PreferencesSnapshot, replace: Boolean = false) {
-        appPreferences.applySyncedPreferences(
-            com.aeriotv.android.core.preferences.AppPreferences.DriveLanes(snapshot.keys, snapshot.tv, snapshot.mobile),
-            replace,
-        )
+        fun remoteTime(lane: String, key: String) = DriveMerge.remotePrefTime(snapshot.times, lane, key)
+        val hadBaseline = SyncStamps.prefBaseline() != null
+        // A device that never completed a pull (the restore case) takes every key.
+        val fresh = !appPreferences.syncInitialPullDone.first()
+        val accepted = HashMap<String, Pair<String, Long>>()
+        for ((lane, values) in listOf("v" to snapshot.keys, "tv" to snapshot.tv, "mobile" to snapshot.mobile)) {
+            for ((k, v) in values) {
+                val rt = remoteTime(lane, k)
+                if (replace || DriveMerge.prefApplies(rt, SyncStamps.touchedAt(SyncStamps.Cat.Preferences, "$lane:$k"), fresh)) {
+                    accepted["$lane:$k"] = v to rt
+                }
+            }
+        }
+        // A sync apply, not a change made here: no change time is stamped.
+        appPreferences.syncApply {
+            appPreferences.applySyncedPreferences(
+                com.aeriotv.android.core.preferences.AppPreferences.DriveLanes(snapshot.keys, snapshot.tv, snapshot.mobile),
+                replace,
+                accept = { lane, key -> "$lane:$key" in accepted },
+            )
+        }
+        val base = HashMap(SyncStamps.prefBaseline() ?: appPreferences.snapshotSyncablePreferences().let { l ->
+            prefFlat(DriveMerge.PrefState(l.v, l.tv, l.mobile, emptyMap()))
+        })
+        accepted.forEach { (id, vt) ->
+            base[id] = vt.first
+            SyncStamps.settleTouched(SyncStamps.Cat.Preferences, id, vt.second)
+        }
+        // A pull records what it applied, but keeps the baseline's time: a
+        // change made here since the last push keeps the time it was made
+        // (measured 2026-11-10: a pull reset it and the push stamped "now").
+        SyncStamps.setPrefBaseline(base, stampTime = hadBaseline.not())
+        Log.i(TAG, "[DRIVE] apply Preferences keys=${accepted.size} of ${snapshot.keys.size + snapshot.tv.size + snapshot.mobile.size} timed=${snapshot.times.size} fresh=$fresh (newer or unknown-age here kept)${if (accepted.isNotEmpty()) " applied=" + accepted.keys.sorted().take(12).joinToString(",") else ""}")
     }
 
     // ── Rule 4 replace (the user chose Google Drive; DriveCanon.replace*) ──
@@ -1689,17 +2051,94 @@ class DriveSyncManager @Inject constructor(
         Log.i(TAG, DriveCanon.replaceLine("hiddenTitles", hLocal, DriveCanon.hiddenTitles(s, DriveCanon.Ids(), host).rows, hRemoved))
     }
 
+    /**
+     * Only newer credentials apply, a field at a time; a non-empty value is
+     * never replaced by an empty one, and a key this device holds as rejected
+     * is never taken (Logan 2026-11-10). A field empty here is filled.
+     */
     private suspend fun applyCredentialsSnapshot(snapshot: CredentialsSnapshot) {
+        // Accounts other devices know (identity for the playlist merge only).
+        snapshot.entries.forEach { SyncStamps.learnAccount(it.playlistId, it.account) }
         snapshot.entries.forEach { entry ->
-            val local = playlistDao.byId(entry.playlistId) ?: return@forEach
-            playlistDao.upsert(
-                local.copy(
-                    username = entry.username,
-                    password = entry.password,
-                    apiKey = entry.apiKey,
-                ),
-            )
+            val local = playlistDao.byId(entry.playlistId) ?: run {
+                Log.i(TAG, "[DRIVE] apply Credentials ${entry.playlistId.take(8)}: no such playlist here")
+                return@forEach
+            }
+            val localTime = SyncStamps.touchedAt(SyncStamps.Cat.Credentials, entry.playlistId) ?: 0L
+            val next = DriveMerge.credentialsToApply(local.username, local.password, local.apiKey, localTime, entry) {
+                keyRejectedHere(it)
+            }
+            val keyCmp = when {
+                entry.apiKey.isNullOrBlank() -> "drive has none"
+                entry.apiKey == local.apiKey -> "drive key same as local"
+                else -> "drive key differs" + if (com.aeriotv.android.core.network.DispatcharrRequestGate.isKeyRejected(entry.apiKey)) " (rejected here)" else ""
+            }
+            Log.i(TAG, "[DRIVE] apply Credentials ${entry.playlistId.take(8)}: $keyCmp; drive t=${DriveFileStats.time(entry.updatedAt)} local t=${DriveFileStats.time(localTime)} -> ${if (next == null) "kept local" else "applied"}")
+            if (next == null) return@forEach
+            playlistDao.upsert(local.copy(username = next.first, password = next.second, apiKey = next.third))
+            SyncStamps.settleTouched(SyncStamps.Cat.Credentials, entry.playlistId, maxOf(localTime, entry.updatedAt ?: 0L))
+            Log.i(TAG, "[DRIVE] apply Credentials: updated one playlist (newer or filling an empty field)")
+            // The synced key replaced one the server rejected here: lift the
+            // hold (and its "Sign-in not accepted" prompt), and send requests
+            // and streams still built with the old key with the new one.
+            val oldKey = local.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            val newKey = next.third?.trim()?.takeIf { it.isNotEmpty() }
+            if (oldKey != null && newKey != null && oldKey != newKey && keyRejectedHere(oldKey)) {
+                com.aeriotv.android.core.network.DispatcharrRequestGate.clearPlaylist(entry.playlistId)
+                com.aeriotv.android.core.network.DispatcharrRequestGate.noteKeyReplaced(oldKey, newKey)
+                Log.i(TAG, "[DRIVE] apply Credentials ${entry.playlistId.take(8)}: this device's key was rejected; adopted the synced key, hold lifted")
+            }
         }
+    }
+
+    /**
+     * Launch (Logan 2026-11-10): with Drive Sync and Credentials on, pull the
+     * credentials before the first Dispatcharr request, so a stale device
+     * takes the synced key instead of spending failed attempts on its own.
+     * The first requests wait for this, at most [DispatcharrLaunchGate.MAX_WAIT_MS].
+     */
+    suspend fun launchCredentialsPull() {
+        var outcome = "skipped"
+        try {
+            if (!appPreferences.syncMasterEnabled.first()) return
+            if (!appPreferences.syncCategoryEnabled(SyncCategory.Credentials).first()) return
+            val token = ensureSignedIn() ?: run { outcome = "not signed in"; return }
+            outcome = runCatching { pullCategoryDetailed(token, SyncCategory.Credentials) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                .getOrNull()?.name ?: "failed"
+        } finally {
+            val waited = com.aeriotv.android.core.network.DispatcharrLaunchGate.waiting()
+            com.aeriotv.android.core.network.DispatcharrLaunchGate.open()
+            // Time from process start, to size the launch wait (measured, not guessed).
+            val sinceLaunch = android.os.SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis()
+            Log.i(TAG, "[DRIVE] launch credentials pull: $outcome ${sinceLaunch} ms after launch (requests ${if (waited) "were waiting" else "were not waiting"})")
+        }
+    }
+
+    /**
+     * A key was just held here (the server rejected it): Drive may already
+     * carry this playlist's good key from another device. Pull the
+     * credentials again (at most once a minute) so the rule above adopts it.
+     */
+    private fun onKeyHeld(playlistId: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastHeldPullAt < 60_000L) return
+        lastHeldPullAt = now
+        retryScope.launch {
+            runCatching {
+                if (!appPreferences.syncMasterEnabled.first()) return@runCatching
+                if (!appPreferences.syncCategoryEnabled(SyncCategory.Credentials).first()) return@runCatching
+                val token = ensureSignedIn() ?: return@runCatching
+                val outcome = pullCategoryDetailed(token, SyncCategory.Credentials)
+                Log.i(TAG, "[DRIVE] credentials pull after a held key (${playlistId.take(8)}): ${outcome.name}")
+            }
+        }
+    }
+
+    @Volatile private var lastHeldPullAt = 0L
+
+    init {
+        com.aeriotv.android.core.network.DispatcharrRequestGate.onKeyHeld = ::onKeyHeld
     }
 
     sealed interface Status {

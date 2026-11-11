@@ -69,6 +69,33 @@ class SetupProtocolTest {
     }
 
     @Test
+    fun syncBoxIsPreTickedOnlyWhenDispatcharrSyncIsOnHere() {
+        assertTrue(SetupSender.syncPreTicked(isDispatcharr = true, syncOnHere = true))
+        // Fold 2026-11-10: Dispatcharr Sync off here, the box was ticked anyway.
+        assertTrue(!SetupSender.syncPreTicked(isDispatcharr = true, syncOnHere = false))
+        assertTrue(!SetupSender.syncPreTicked(isDispatcharr = false, syncOnHere = true))
+    }
+
+    @Test
+    fun idsTravelAsPlaylistIdAndProfileIdAndAreOptional() {
+        val withIds = payload.copy(
+            playlist = payload.playlist.copy(id = "6F1C2A4E-0B7D-4E52-9C1A-2D3E4F5A6B7C"),
+            profiles = payload.profiles.mapIndexed { i, p -> p.copy(id = "p$i") },
+        )
+        val text = SetupProtocol.encodePayload(withIds).toString(Charsets.UTF_8)
+        // The wire names the shared spec fixes: playlist.id and profiles[].id.
+        val obj = SetupProtocol.json.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
+        assertEquals("6F1C2A4E-0B7D-4E52-9C1A-2D3E4F5A6B7C", (obj["playlist"] as kotlinx.serialization.json.JsonObject)["id"].toString().trim('"'))
+        assertEquals("p0", ((obj["profiles"] as kotlinx.serialization.json.JsonArray)[0] as kotlinx.serialization.json.JsonObject)["id"].toString().trim('"'))
+        assertEquals(withIds, SetupProtocol.decodePayload(text.toByteArray()))
+        // An older sender's payload has no ids: they read as null.
+        val old = SetupProtocol.decodePayload(SetupProtocol.encodePayload(payload))!!
+        assertNull(old.playlist.id)
+        assertNull(old.profiles.first().id)
+        assertTrue(!SetupProtocol.encodePayload(payload).toString(Charsets.UTF_8).contains("\"id\""))
+    }
+
+    @Test
     fun sealOpenRoundTripAndWrongCode() {
         val tv = SetupCrypto.newKeyPair()
         val env = SetupProtocol.sealForTv(payload, tv.publicKey, "042917")

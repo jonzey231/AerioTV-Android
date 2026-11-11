@@ -38,6 +38,8 @@ class FavoritesViewModel @Inject constructor(
             val existing = dao.observeIsFavorite(channel.id).first()
             if (existing) {
                 dao.delete(channel.id)
+                // Sync tombstone: no older copy elsewhere brings it back.
+                com.aeriotv.android.core.sync.SyncStamps.removed(com.aeriotv.android.core.sync.SyncStamps.Cat.Favorites, channel.id)
             } else {
                 val now = System.currentTimeMillis()
                 dao.upsert(
@@ -48,6 +50,7 @@ class FavoritesViewModel @Inject constructor(
                         addedAt = now,
                     ),
                 )
+                com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Favorites, channel.id, now)
             }
         }
     }
@@ -59,6 +62,11 @@ class FavoritesViewModel @Inject constructor(
      * onMove frame, so this hits Room once per gesture.
      */
     fun applyOrder(orderedChannelIds: List<String>) {
-        viewModelScope.launch { dao.applyDisplayOrder(orderedChannelIds) }
+        viewModelScope.launch {
+            dao.applyDisplayOrder(orderedChannelIds)
+            // Sync: the new order is this device's newest change for each row.
+            val now = System.currentTimeMillis()
+            orderedChannelIds.forEach { com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Favorites, it, now) }
+        }
     }
 }

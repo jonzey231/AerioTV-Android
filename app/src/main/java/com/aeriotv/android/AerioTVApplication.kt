@@ -73,6 +73,8 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     @Inject lateinit var dispatcharrSync: com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
     @Inject lateinit var aerioDatabase: AerioDatabase
     @Inject lateinit var driveSync: com.aeriotv.android.core.sync.DriveSyncManager
+    /** Created at launch so stream 401s reach the key broker from the first open (its init registers StreamAuth.handler). */
+    @Inject lateinit var authBroker: com.aeriotv.android.core.network.DispatcharrAuthBroker
     @Inject lateinit var timeshiftStore: com.aeriotv.android.core.timeshift.TimeshiftBufferStore
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -143,7 +145,11 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     }
 
     override fun onCreate() {
+        // Launch order: the Drive credentials pull before the first Dispatcharr request.
+        com.aeriotv.android.core.network.DispatcharrLaunchGate.arm()
         super.onCreate()
+        // Drive sync change times and tombstones (device-local).
+        com.aeriotv.android.core.sync.SyncStamps.init(this)
         // Profiles: restore the active Dispatcharr profile's scope before any
         // scoped read (favorites, recents, view prefs) can run, then start the
         // one-time default-profile migration and active-playlist tracking.
@@ -153,6 +159,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         dispatcharrSync.start()
         // Drive backup update: finish categories that waited for the VOD catalog.
         driveSync.startIdUpdateRetry()
+        appScope.launch { driveSync.launchCredentialsPull() }
         // Crash capture FIRST, and independent of the Debug Logging toggle: a
         // user whose app dies seconds after launch cannot turn logging on in
         // time, so the report has to be collected without being asked for.

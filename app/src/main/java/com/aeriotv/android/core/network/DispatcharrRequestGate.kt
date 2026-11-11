@@ -76,6 +76,8 @@ object DispatcharrRequestGate {
         val set = rejected.getOrPut(hash) { ConcurrentHashMap.newKeySet() }
         val fresh = set.add(playlistId)
         if (fresh) {
+            // Drive may already carry this playlist's good key (DriveSyncManager).
+            runCatching { onKeyHeld?.invoke(playlistId) }
             _prompt.value = Prompt(playlistId, playlistName, passwordToo)
             if (baseUrl.isNotBlank()) {
                 rechecks.putIfAbsent(hash, Recheck(hash, key.trim(), baseUrl, serverKey(baseUrl), playlistId, passwordToo, clock()))
@@ -87,6 +89,9 @@ object DispatcharrRequestGate {
     // ---- Automatic re-check while a key is held (owner 2026-11-09: "We
     // don't want to just block access but we don't want constant retries
     // that force a server-side block from repeated attempts either.") ----
+
+    /** Told when a key is newly held for a playlist (Drive Sync re-pulls credentials). */
+    @Volatile var onKeyHeld: ((playlistId: String) -> Unit)? = null
 
     /** Scheduled probes after the rejection: 1, 5, and 15 minutes. */
     val RECHECK_OFFSETS_MS = longArrayOf(60_000, 300_000, 900_000)

@@ -502,6 +502,28 @@ class PlaylistViewModel @Inject constructor(
                 }
             }
         }
+        // One server account is one playlist (sync merge, Logan 2026-11-10):
+        // the playlist on screen was merged into another, so switch to the
+        // winner, then let the merged-away row go (it waited for this).
+        viewModelScope.launch {
+            _state.map { it.playlist?.id }.distinctUntilChanged().collect {
+                com.aeriotv.android.core.sync.PlaylistMerges.uiBoundId = it
+            }
+        }
+        viewModelScope.launch {
+            com.aeriotv.android.core.sync.PlaylistMerges.events.collect { e ->
+                if (_state.value.playlist?.id != e.loserId) return@collect
+                Log.i(TAG, "[MERGE] playlist on screen merged into ${e.winnerId.take(8)}; switching")
+                switchToPlaylist(e.winnerId, onDone = {
+                    if (e.deferredDelete) viewModelScope.launch {
+                        com.aeriotv.android.core.sync.PlaylistMerges.uiBoundId = e.winnerId
+                        repository.deletePlaylist(e.loserId)
+                            .onSuccess { Log.i(TAG, "[MERGE] merged-away playlist ${e.loserId.take(8)} deleted after the switch") }
+                            .onFailure { Log.w(TAG, "[MERGE] merged-away playlist delete failed: ${it.javaClass.simpleName}") }
+                    }
+                })
+            }
+        }
         // Profiles: a profile switch reloads the channel list, groups and VOD
         // for the new Dispatcharr user through the same path as a playlist
         // switch (stops playback, refetches, restores the scoped group).

@@ -46,6 +46,51 @@ class DispatcharrAuthBroker @Inject constructor(
      * cleared on ANY write to the playlists table (a key rotation, an edit,
      * a profile switch rewriting the row), so a stale key is never served.
      */
+    init {
+        // Stream opens hand their 401s here (StreamGate, Logan 2026-11-10).
+        com.aeriotv.android.core.playback.StreamAuth.handler = ::handleStreamUnauthorized
+    }
+
+    /**
+     * A stream open (live, on demand, DVR, catch-up, Live Rewind, Multiview,
+     * Cast ingest, recording) was answered 401 with [usedKey]. The same steps
+     * as an API call's 401, once for every stream that hits it together
+     * (StreamAuth shares the call): a key already replaced or held is
+     * answered from memory; otherwise one probe; a rejected key is re-signed
+     * in when the playlist stores a password (the stream retries with the new
+     * key), else held, with the "Sign-in not accepted" prompt. A key the probe
+     * accepts (or cannot judge) leaves the 401 to the stream's own handling.
+     */
+    suspend fun handleStreamUnauthorized(usedKey: String): com.aeriotv.android.core.playback.StreamAuth.Outcome {
+        val key = usedKey.trim()
+        if (DispatcharrRequestGate.isKeyRejected(key)) return com.aeriotv.android.core.playback.StreamAuth.Outcome.Held
+        DispatcharrRequestGate.replacementFor(key)?.takeIf { !DispatcharrRequestGate.isKeyRejected(it) }?.let { return com.aeriotv.android.core.playback.StreamAuth.Outcome.Retry(it) }
+        val row = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            dao.allOnce().firstOrNull { it.apiKey?.trim() == key }
+        }
+        if (row == null) {
+            // No playlist holds this key any more (an edit replaced it): never send it again.
+            Log.i(TAG, "[AUTH] stream 401 with a key no playlist holds now; stripping it")
+            return com.aeriotv.android.core.playback.StreamAuth.Outcome.Held
+        }
+        val probe = client.probeApiKey(row.urlString, key)
+        if (probe !is DispatcharrClient.KeyProbe.Rejected) {
+            Log.i(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: key probe ${probe::class.simpleName}; the stream's own error stands")
+            return com.aeriotv.android.core.playback.StreamAuth.Outcome.NotKey
+        }
+        val hasPassword = !row.password.isNullOrBlank() && !row.username.isNullOrBlank()
+        val fresh = runCatching { silentRebootstrapApiKey(row) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            .getOrNull()
+        if (fresh != null && !DispatcharrRequestGate.isKeyRejected(fresh)) {
+            Log.i(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: re-signed in; the stream retries with the new key")
+            return com.aeriotv.android.core.playback.StreamAuth.Outcome.Retry(fresh)
+        }
+        gateRejectedKey(row, key, passwordToo = hasPassword)
+        Log.w(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: key rejected${if (hasPassword) ", re-sign-in refused" else ""}; held, stream stopped")
+        return com.aeriotv.android.core.playback.StreamAuth.Outcome.Held
+    }
+
     private class CachedRow(val token: String, val row: PlaylistEntity)
     private val rowCache = java.util.concurrent.ConcurrentHashMap<String, CachedRow>()
     private val invalidator = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -238,6 +283,8 @@ class DispatcharrAuthBroker @Inject constructor(
             tokenStore.store(row.id, pair.access, pair.refresh)
             val newKey = client.fetchCurrentUserApiKey(row.urlString, pair.access)
             dao.update(row.copy(apiKey = newKey))
+            // Sync: the re-issued key is this playlist's newest sign-in change here.
+            com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Credentials, row.id)
             // Requests already built with the old key go out with the new one.
             row.apiKey?.let { DispatcharrRequestGate.noteKeyReplaced(it, newKey) }
             invalidateRow(row.id)

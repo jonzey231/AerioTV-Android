@@ -36,7 +36,8 @@ sealed class DispatcharrError(message: String) : Exception(message) {
      * too; the auth broker never tries to recover it.
      */
     class KeyRejected : Unauthorized(
-        "The server did not accept this playlist's API key. Enter a new key in Edit Playlist.",
+        "Dispatcharr no longer accepts this playlist's API key. Enter the current key in Edit Playlist, " +
+            "or ask your Dispatcharr administrator for a new one.",
     )
     class RefreshExpired(message: String) : DispatcharrError(message)
     class UnexpectedResponse(message: String) : DispatcharrError(message)

@@ -1229,7 +1229,7 @@ fun VODPlayerScreen(
                 // auth headers. A bare DefaultHttpDataSource.Factory cannot open
                 // file://, so local recordings would otherwise fail to load.
                 val upstreamFactory: androidx.media3.datasource.DataSource.Factory =
-                    DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(dataSourceFactory)).let { base ->
+                    DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(dataSourceFactory, httpHeaders)).let { base ->
                         // Catch-up (task #133): a Dispatcharr /timeshift/ archive
                         // reports an estimated Content-Length and re-redirects to
                         // a fresh ?session_id on every connection, so ExoPlayer's

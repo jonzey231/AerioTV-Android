@@ -61,6 +61,24 @@ class SetupDuplicateMatchTest {
         assertFalse(SetupDuplicateMatch.matches(SourceType.DispatcharrUserPass, "http://tv.example.com", null, "a", r))
     }
 
+    @Test fun theSendersIdMeansTheSamePlaylistWithoutAPrompt() {
+        val mine = PlaylistEntity(id = "6f1c2a4e-0b7d-4e52-9c1a-2d3e4f5a6b7c", name = "Home", urlString = "https://tv.example.com", sourceType = SourceType.DispatcharrApiKey.name, apiKey = "k1")
+        // Same id (Apple writes it uppercase): update in place.
+        assertEquals(
+            SetupDuplicateMatch.Target.SameId(mine.id),
+            SetupDuplicateMatch.target("6F1C2A4E-0B7D-4E52-9C1A-2D3E4F5A6B7C", SourceType.DispatcharrApiKey, "https://tv.example.com", "k1", null, listOf(mine)),
+        )
+        // Another id, same server and account: the duplicate prompt.
+        assertEquals(
+            SetupDuplicateMatch.Target.Duplicate(mine),
+            SetupDuplicateMatch.target("other-id", SourceType.DispatcharrApiKey, "https://tv.example.com", "k1", null, listOf(mine)),
+        )
+        // Nothing matches: a new row keeping the sender's id; an old sender sends none.
+        assertEquals(SetupDuplicateMatch.Target.New("other-id"), SetupDuplicateMatch.target("other-id", SourceType.M3uUrl, "http://m.example/x.m3u", null, null, listOf(mine)))
+        assertEquals(SetupDuplicateMatch.Target.Duplicate(mine), SetupDuplicateMatch.target(null, SourceType.DispatcharrApiKey, "https://tv.example.com", "k1", null, listOf(mine)))
+        assertEquals(SetupDuplicateMatch.Target.New(null), SetupDuplicateMatch.target(" ", SourceType.M3uUrl, "http://m.example/x.m3u", null, null, emptyList()))
+    }
+
     @Test fun findReturnsTheMatchingRow() {
         val a = row(SourceType.M3uUrl, "http://a.example.com/x.m3u")
         val b = row(SourceType.DispatcharrApiKey, "https://tv.example.com", apiKey = "k1")

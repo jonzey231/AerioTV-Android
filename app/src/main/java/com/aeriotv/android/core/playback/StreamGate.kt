@@ -135,16 +135,52 @@ object StreamGate {
         return StreamRateLimitedException(r.seconds, r.reason)
     }
 
+    /** [request] with its key rewritten to [rewrite] (StreamAuth): the new key, or none. */
+    private fun withKey(request: okhttp3.Request, rewrite: StreamAuth.Rewrite): okhttp3.Request = when (rewrite) {
+        StreamAuth.Rewrite.Keep -> request
+        StreamAuth.Rewrite.Strip -> request.newBuilder().removeHeader("X-API-Key").removeHeader("Authorization").build()
+        is StreamAuth.Rewrite.Replace -> request.newBuilder().apply {
+            StreamAuth.authHeaders(rewrite.key).forEach { (k, v) -> header(k, v) }
+        }.build()
+    }
+
     /** OkHttp side (live, tiles, Live Rewind fill, Cast ingest, recordings). */
     val interceptor = Interceptor { chain ->
+        com.aeriotv.android.core.network.DispatcharrLaunchGate.awaitBlocking()
         val url = chain.request().url.toString()
+        // Per open: the key this request was built with, as it stands now
+        // (replaced by a re-sign-in, or held and stripped). StreamAuth.
+        val builtKey = StreamAuth.keyOf { chain.request().header(it) }
+        val rewrite = StreamAuth.rewriteFor(builtKey)
+        val request = withKey(chain.request(), rewrite)
         beforeOpen(url)
-        val resp: Response = chain.proceed(chain.request())
+        var resp: Response = chain.proceed(request)
         if (resp.code == 429) {
             val body = runCatching { resp.peekBody(4_096).string() }.getOrDefault("")
             onResponse(url, resp.code, body, resp.header("Retry-After"))?.let { e ->
                 resp.close()
                 throw e
+            }
+        }
+        if (resp.code == 401) {
+            // The key was held and stripped: the stream stops, the open never retries.
+            if (rewrite == StreamAuth.Rewrite.Strip) {
+                resp.close()
+                throw StreamKeyRejectedException()
+            }
+            val sentKey = StreamAuth.keyOf { request.header(it) }
+            if (sentKey != null) {
+                when (val out = StreamAuth.onUnauthorized(sentKey)) {
+                    is StreamAuth.Outcome.Retry -> {
+                        resp.close()
+                        resp = chain.proceed(withKey(request, StreamAuth.Rewrite.Replace(out.key)))
+                    }
+                    StreamAuth.Outcome.Held -> {
+                        resp.close()
+                        throw StreamKeyRejectedException()
+                    }
+                    StreamAuth.Outcome.NotKey -> Unit
+                }
             }
         }
         resp
@@ -162,8 +198,8 @@ object StreamGate {
         return null
     }
 
-    /** Media3 load-error policies: never re-GET a rate-limited stream themselves. */
-    fun noRetry(error: Throwable?): Boolean = find(error) != null
+    /** Media3 load-error policies: never re-GET a rate-limited stream, or one whose key is held, themselves. */
+    fun noRetry(error: Throwable?): Boolean = find(error) != null || StreamAuth.find(error) != null
 
     /** Seconds to wait before the one retry: what is left on the pause, at least 1. */
     fun waitSeconds(url: String?, e: StreamRateLimitedException?): Long {
@@ -194,21 +230,46 @@ object StreamGate {
     /** Automatic retries after a rate-limit wait, shared with the API flows. */
     const val MAX_AUTO_RETRIES = com.aeriotv.android.core.network.RateLimitRetry.MAX_AUTO_RETRIES
 
-    /** Media3 side (DefaultHttpDataSource paths: on demand, recordings, tiles). */
-    class GatedDataSource(private val upstream: DataSource) : DataSource {
+    /**
+     * Media3 side (DefaultHttpDataSource paths: on demand, recordings, tiles).
+     * [headers] are the ones the HTTP factory was built with: the key in them
+     * is rewritten per open (a replaced key goes out as the new one through
+     * the open's own headers; a held key cannot be taken off a factory's
+     * defaults, so that open never goes out).
+     */
+    class GatedDataSource(private val upstream: DataSource, private val headers: Map<String, String> = emptyMap()) : DataSource {
         override fun addTransferListener(transferListener: TransferListener) = upstream.addTransferListener(transferListener)
 
+        private val builtKey: String? = StreamAuth.keyOf(headers)
+
         override fun open(dataSpec: DataSpec): Long {
+            com.aeriotv.android.core.network.DispatcharrLaunchGate.awaitBlocking()
             val url = dataSpec.uri.toString()
+            val spec = when (val rewrite = StreamAuth.rewriteFor(builtKey)) {
+                StreamAuth.Rewrite.Keep -> dataSpec
+                StreamAuth.Rewrite.Strip -> throw StreamKeyRejectedException()
+                is StreamAuth.Rewrite.Replace -> dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(rewrite.key))
+            }
             beforeOpen(url)
             return try {
-                upstream.open(dataSpec)
+                upstream.open(spec)
             } catch (e: HttpDataSource.InvalidResponseCodeException) {
                 val retryAfter = e.headerFields.entries
                     .firstOrNull { it.key?.equals("Retry-After", ignoreCase = true) == true }
                     ?.value?.firstOrNull()
                 val rl = onResponse(url, e.responseCode, String(e.responseBody, Charsets.UTF_8), retryAfter)
                 if (rl != null) throw StreamRateLimitedException(rl.seconds, rl.reason, e)
+                val sentKey = StreamAuth.keyOf(spec.httpRequestHeaders) ?: builtKey
+                if (e.responseCode == 401 && sentKey != null) {
+                    when (val out = StreamAuth.onUnauthorized(sentKey)) {
+                        is StreamAuth.Outcome.Retry -> {
+                            runCatching { upstream.close() }
+                            return upstream.open(dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(out.key)))
+                        }
+                        StreamAuth.Outcome.Held -> throw StreamKeyRejectedException(e)
+                        StreamAuth.Outcome.NotKey -> Unit
+                    }
+                }
                 throw e
             }
         }
@@ -219,9 +280,9 @@ object StreamGate {
         override fun close() = upstream.close()
     }
 
-    /** Wraps every source [base] makes in [GatedDataSource]. */
-    class Factory(private val base: DataSource.Factory) : DataSource.Factory {
-        override fun createDataSource(): DataSource = GatedDataSource(base.createDataSource())
+    /** Wraps every source [base] makes in [GatedDataSource]; [headers]: the ones [base] was given. */
+    class Factory(private val base: DataSource.Factory, private val headers: Map<String, String> = emptyMap()) : DataSource.Factory {
+        override fun createDataSource(): DataSource = GatedDataSource(base.createDataSource(), headers)
     }
 
     /** Load-error policy for the on-demand and tile players. */

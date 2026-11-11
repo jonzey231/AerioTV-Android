@@ -29,15 +29,17 @@ object EditPlaylistRequest {
 }
 
 /** Title of the rejected-key prompt. */
-const val API_KEY_REJECTED_TITLE = "Sign-in not accepted"
+const val API_KEY_REJECTED_TITLE = "API key no longer valid"
 
 /** Body of the rejected-key prompt (key-only playlist, or a password playlist whose re-login was refused too). */
 fun apiKeyRejectedBody(playlistName: String, passwordToo: Boolean): String {
     val name = playlistName.ifBlank { "this playlist" }
     return if (passwordToo) {
-        "The server did not accept the API key or the password for $name. Enter a new key or password in Edit Playlist to reconnect."
+        "Dispatcharr no longer accepts the API key or password for $name. They may have been changed on the server. " +
+            "Enter the current details in Edit Playlist, or ask your Dispatcharr administrator."
     } else {
-        "The server did not accept the API key for $name. Enter a new key in Edit Playlist to reconnect."
+        "Dispatcharr no longer accepts the API key for $name. It may have been changed or removed on the server. " +
+            "Enter the current key in Edit Playlist, or ask your Dispatcharr administrator for a new one."
     }
 }
 

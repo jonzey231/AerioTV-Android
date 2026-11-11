@@ -17,6 +17,35 @@ import java.util.Locale
  */
 object SetupDuplicateMatch {
 
+    /** Where a received playlist goes (docs/DeviceSetupHandoff.md, Receiver apply). */
+    sealed interface Target {
+        /** A row here already has the sender's id: the same playlist, updated in place, no prompt. */
+        data class SameId(val id: String) : Target
+        /** A row with another id matches server and account: ask (Cancel, Add Anyway, Replace). */
+        data class Duplicate(val row: PlaylistEntity) : Target
+        /** Nothing here: add it, keeping the sender's id when it sent one. */
+        data class New(val id: String?) : Target
+    }
+
+    /**
+     * Ids compare without case: Apple sends uppercase UUID strings, Android
+     * lowercase. The duplicate check runs only for rows with another id.
+     */
+    fun target(
+        incomingId: String?,
+        incomingType: SourceType,
+        incomingUrl: String,
+        apiKey: String?,
+        username: String?,
+        existing: List<PlaylistEntity>,
+    ): Target {
+        val id = incomingId?.trim()?.takeIf { it.isNotEmpty() }
+        if (id != null) existing.firstOrNull { it.id.equals(id, ignoreCase = true) }?.let { return Target.SameId(it.id) }
+        val others = if (id == null) existing else existing.filterNot { it.id.equals(id, ignoreCase = true) }
+        find(incomingType, incomingUrl, apiKey, username, others)?.let { return Target.Duplicate(it) }
+        return Target.New(id)
+    }
+
     fun find(
         incomingType: SourceType,
         incomingUrl: String,

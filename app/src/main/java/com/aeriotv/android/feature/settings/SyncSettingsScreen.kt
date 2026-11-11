@@ -558,13 +558,14 @@ fun SyncSettingsScreen(
 
     if (pushConfirmOpen) {
         // Kept although Apple pushes without asking: a blank install once
-        // overwrote a good Drive backup, so an Android push states its cost.
+        // overwrote a good Drive backup, so an Android push states what it
+        // does. A push merges per item since 2026-11-10 (Logan-approved copy).
         com.aeriotv.android.ui.scale.AlertDialog(
             onDismissRequest = { pushConfirmOpen = false },
             title = { Text("Push to Drive?") },
             text = {
                 Text(
-                    "This replaces the snapshot in Google Drive with this device's playlists and settings.",
+                    "This merges this device's changes into Google Drive.",
                 )
             },
             confirmButton = {

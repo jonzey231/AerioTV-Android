@@ -30,6 +30,14 @@ internal object VodStreamRefusal {
 
     /** The card line for [error], or null when it is neither refusal (the usual card). */
     fun onError(error: Throwable?, url: String?): String? {
+        // The stream's key was refused and held (StreamAuth): the usual card,
+        // and no automatic retry (each would be another counted failed-key
+        // open). The "Sign-in not accepted" prompt shows.
+        if (com.aeriotv.android.core.playback.StreamAuth.find(error) != null) {
+            reason = null
+            limited = true
+            return null
+        }
         StreamGate.find(error)?.let { rl ->
             limited = false
             reason = rl.reason

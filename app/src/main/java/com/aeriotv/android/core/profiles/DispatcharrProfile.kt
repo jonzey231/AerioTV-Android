@@ -148,6 +148,34 @@ class ProfileStore @Inject constructor(
         prefs.edit().remove(KEY_ACTIVE + playlistId).commit()
     }
 
+    /**
+     * Two playlists were one server account (sync merge, Logan 2026-11-10):
+     * [move] profiles of [fromPlaylist] now belong to [toPlaylist], [drop]
+     * profiles go, and the per-playlist picks follow ([takeActive]: the
+     * merged-away playlist was the one in use here, so its active profile
+     * carries over).
+     */
+    @Synchronized
+    fun applyMerge(fromPlaylist: String, toPlaylist: String, move: List<String>, drop: List<String>, takeActive: Boolean) {
+        val moveSet = move.toSet()
+        val dropSet = drop.toSet()
+        save(_profiles.value.filterNot { it.id in dropSet }.map { if (it.id in moveSet) it.copy(playlistId = toPlaylist) else it })
+        val e = prefs.edit()
+        val fromActive = prefs.getString(KEY_ACTIVE + fromPlaylist, null)
+        val toActive = prefs.getString(KEY_ACTIVE + toPlaylist, null)
+        when {
+            takeActive && fromActive != null && fromActive in moveSet -> e.putString(KEY_ACTIVE + toPlaylist, fromActive)
+            toActive != null && toActive in dropSet -> e.remove(KEY_ACTIVE + toPlaylist)
+        }
+        e.remove(KEY_ACTIVE + fromPlaylist)
+        if (!prefs.contains(KEY_ASK + toPlaylist) && prefs.contains(KEY_ASK + fromPlaylist)) {
+            e.putBoolean(KEY_ASK + toPlaylist, prefs.getBoolean(KEY_ASK + fromPlaylist, true))
+        }
+        e.remove(KEY_ASK + fromPlaylist)
+        if (prefs.getString(KEY_LAST_PLAYLIST, null) == fromPlaylist) e.putString(KEY_LAST_PLAYLIST, toPlaylist)
+        e.commit()
+    }
+
     /** Active profile id for [playlistId] on this device; null = default. */
     fun activeProfileId(playlistId: String): String? = prefs.getString(KEY_ACTIVE + playlistId, null)
 

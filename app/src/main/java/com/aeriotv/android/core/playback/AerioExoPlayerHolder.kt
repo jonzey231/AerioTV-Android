@@ -2547,6 +2547,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 )
                 return
             }
+            if (handleStreamKeyRejected(error)) return
             if (handleStreamRateLimit(error)) return
             if (handleConnectionLimit(error)) return
             // Android companion to the frame-stall path: a terminal source/HTTP
@@ -4244,7 +4245,7 @@ class AerioExoPlayerHolder @Inject constructor(
                 ?.let(factory::setUserAgent)
         }
         // Same 429 rules as the OkHttp live path (StreamGate).
-        return StreamGate.Factory(factory)
+        return StreamGate.Factory(factory, headers)
     }
 
     /** OkHttp-backed [DataSource.Factory] for live raw-TS playback (GH #32).
@@ -5394,6 +5395,27 @@ class AerioExoPlayerHolder @Inject constructor(
         return true
     }
 
+    /**
+     * A stream open was answered 401 and the key broker held the key
+     * (StreamAuth, Logan 2026-11-10): the stream stops. No reload ladder, no
+     * failover walk and no retry: each would be another open the server
+     * counts against this network's failed-key limit. The "Sign-in not
+     * accepted" prompt shows from the request gate. Returns true when this
+     * holder now owns the error.
+     */
+    private fun handleStreamKeyRejected(error: Throwable): Boolean {
+        StreamAuth.find(error) ?: return false
+        Log.w(TAG, "[AUTH] stream key rejected ch=$currentChannelId; stopping, no retry or failover")
+        tracer.recover("stream key rejected")
+        stoppingRetryJob?.cancel()
+        stoppingRetryJob = null
+        rateLimitJob?.cancel()
+        liveFailover.resetWalk()
+        liveFailover.publishServerStatus(null)
+        stop()
+        return true
+    }
+
     /** The running rate-limit countdown (one per holder). */
     private var rateLimitJob: Job? = null
     /** Automatic retries spent on [rateLimitKey]'s rate-limit waits. */
@@ -5806,12 +5828,18 @@ class AerioExoPlayerHolder @Inject constructor(
             val limit = DispatcharrConnectionLimit.parse(error)
             val is503 = Dispatcharr503.parse(error) != null
             val rateLimited = StreamGate.find(error) != null
-            if (wasCanceled && !is503 && limit == null && !rateLimited) return
+            val keyRejected = StreamAuth.find(error) != null
+            if (wasCanceled && !is503 && limit == null && !rateLimited && !keyRejected) return
             Log.w(
                 TAG,
                 "load error uri=${loadEventInfo.uri} " +
                     "${error.javaClass.simpleName}: ${error.message}${causeChain(error)}",
             )
+            // The stream's key was refused and held (StreamAuth): stop.
+            if (keyRejected) {
+                handleStreamKeyRejected(error)
+                return
+            }
             // Rate-limited (API key lockout, or the gate paused after a 429):
             // wait it out and retry once; no ladder, no failover walk.
             if (rateLimited) {

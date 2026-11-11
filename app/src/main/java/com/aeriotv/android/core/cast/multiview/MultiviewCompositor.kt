@@ -802,7 +802,7 @@ class MultiviewCompositor(
             }
         })
         player.setMediaSource(
-            com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, com.aeriotv.android.core.playback.StreamGate.Factory(http)),
+            com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, com.aeriotv.android.core.playback.StreamGate.Factory(http, headers)),
         )
         player.playWhenReady = true
         player.prepare()
@@ -834,7 +834,7 @@ class MultiviewCompositor(
         armWatchdog(t)
         player.stop()
         player.setMediaSource(
-            com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, com.aeriotv.android.core.playback.StreamGate.Factory(http)),
+            com.aeriotv.android.feature.multiview.buildTileMediaSource(source.resolvedUrl, com.aeriotv.android.core.playback.StreamGate.Factory(http, headers)),
         )
         player.playWhenReady = true
         player.prepare()

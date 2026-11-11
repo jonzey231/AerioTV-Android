@@ -196,6 +196,7 @@ Unknown keys are ignored by readers; absent keys take the defaults shown.
 ```json
 {
   "playlist": {
+    "id": "6F1C2A4E-0B7D-4E52-9C1A-2D3E4F5A6B7C",
     "type": "dispatcharr | xtream | m3u",
     "name": "Home",
     "url": "https://server.example",
@@ -210,6 +211,7 @@ Unknown keys are ignored by readers; absent keys take the defaults shown.
   },
   "profiles": [
     {
+      "id": "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D",
       "username": "alex",
       "displayName": "Alex",
       "role": "admin | user | child",
@@ -237,6 +239,11 @@ Unknown keys are ignored by readers; absent keys take the defaults shown.
 
 Notes:
 
+- `playlist.id` is the sender's playlist id (its UUID string) and
+  `profiles[].id` each profile's id. Both are optional: older senders omit
+  them. "Import this user only" for a profile other than the default omits
+  both (another user's sign-in is another account, so another playlist).
+  Ids compare without case (Apple writes uppercase, Android lowercase).
 - `playlist.credential` is the playlist's own sign-in: the default
   profile's API key and/or username and password on Dispatcharr, the
   account login on Xtream Codes, absent on M3U. Only non-empty fields are
@@ -259,6 +266,14 @@ Non-interactive, with a progress line on screen:
    Playlist save path (it loads the channels, which is the connection
    test), then store the catch-up offset. On failure: "Setup did not
    finish" with the error, Retry (re-applies the same payload), and Cancel.
+   Playlist id: when a playlist here already has `playlist.id`, it is the
+   same playlist and is updated in place (Replace, "Updating your
+   playlist"), never added a second time and never prompted. Otherwise the
+   duplicate check (same server and account, Cancel, Add Anyway, or
+   Replace) runs against playlists with other ids, and a new playlist is
+   created with the sender's `playlist.id`, its default profile with the
+   default entry's `id`, and each added profile with its `id` (an id
+   already used here gets a new one). Without ids, today's behavior.
 2. "Adding profiles": the default profile first (name, role, avatar,
    order, PIN), then Admins, then the rest, each through the roster add
    path (signs in once with the sent credential, then applies role, PIN,

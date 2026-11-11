@@ -472,6 +472,12 @@ class TimeshiftController @Inject constructor(
                 } catch (t: Throwable) {
                     if (session.fillJob?.isActive != true) return@launch
                     Log.w(TAG, "retained fill error for ${session.channelName}: $t")
+                    // The stream's key was refused and held (StreamAuth): no
+                    // reconnects, each would be another counted failed-key open.
+                    if (com.aeriotv.android.core.playback.StreamAuth.find(t) != null) {
+                        releaseRetainedAfterFillEnd(session, "stream key rejected")
+                        return@launch
+                    }
                 }
                 if (!currentCoroutineContext().isActive || session.writer.closed) return@launch
                 // A keep that opens right after the player stopped (the mini

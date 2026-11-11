@@ -50,6 +50,18 @@ data class PlaylistSnapshotEntry(
      *  (iOS ServerConnection.vodEnabled parity). Default true keeps older
      *  snapshots decodable and matches the entity default. */
     val vodEnabled: Boolean = true,
+    /** When this playlist last changed on the device that wrote it (merge on
+     *  push, newest wins). Null in older files: treated as 0, never newer. */
+    val updatedAt: Long? = null,
+    /** Tombstone: the playlist was deleted at this time. Readers that predate
+     *  it see a live row; current readers never re-add a deleted playlist. */
+    val removedAt: Long? = null,
+    /**
+     * When the playlist was first added (the original's time; every merge
+     * keeps the earliest seen). Breaks a tie between two copies of one
+     * account: the older one stays. Null in older files (unknown).
+     */
+    val createdAt: Long? = null,
 )
 
 @Serializable
@@ -83,6 +95,9 @@ data class WatchProgressSnapshotEntry(
      *  push when the active playlist is Dispatcharr and the id resolves. Null
      *  otherwise; older files decode without it. */
     val dispatcharrVodId: Int? = null,
+    /** Tombstone: the row was removed at this time (newest of updatedAt and
+     *  removedAt wins). Absent in older files. */
+    val removedAt: Long? = null,
 )
 
 @Serializable
@@ -98,6 +113,10 @@ data class ReminderSnapshotEntry(
     val programTitle: String,
     val startMillis: Long,
     val endMillis: Long,
+    /** When the reminder was set on the writer. Null in older files (0). */
+    val updatedAt: Long? = null,
+    /** Tombstone: the reminder was cancelled at this time. */
+    val removedAt: Long? = null,
 )
 
 @Serializable
@@ -116,6 +135,11 @@ data class FavoriteSnapshotEntry(
     val addedAt: Long,
     /** Canonical id (Rule 4): the Dispatcharr channel id, null when unresolved or not Dispatcharr. */
     val dispatcharrChannelId: Int? = null,
+    /** When this favorite (or its order) last changed on the writer. Null in
+     *  older files: [addedAt] stands in. */
+    val updatedAt: Long? = null,
+    /** Tombstone: the favorite was removed at this time. */
+    val removedAt: Long? = null,
 )
 
 @Serializable
@@ -197,6 +221,13 @@ data class PreferencesSnapshot(
      * resolves. Null when not Dispatcharr or in files written before it.
      */
     val dispatcharrChannelIds: Map<String, Int>? = null,
+    /**
+     * Per-key change times ("v:key", "tv:key", "mobile:key" to epoch ms):
+     * when that value last changed on a device. A key applies only when its
+     * time is newer than this device's own. Absent in older files, where the
+     * envelope time stands in for every key.
+     */
+    val times: Map<String, Long> = emptyMap(),
 )
 
 /**
@@ -220,6 +251,14 @@ data class CredentialsSnapshotEntry(
     val username: String? = null,
     val password: String? = null,
     val apiKey: String? = null,
+    /** When these credentials last changed on the writer. Null in older files (0). */
+    val updatedAt: Long? = null,
+    /**
+     * The server account (username) this playlist signs in as, when the
+     * writer knows it (an API-key playlist learns it from the server). For
+     * the one-account-one-playlist merge only; never applied as a sign-in.
+     */
+    val account: String? = null,
 )
 
 @Serializable
@@ -227,3 +266,10 @@ data class CredentialsSnapshot(
     val envelope: SyncEnvelope,
     val entries: List<CredentialsSnapshotEntry>,
 )
+
+// Live views: the rows a snapshot carries without its tombstones (removedAt),
+// for every reader that counts, summarizes, or replaces rather than merges.
+fun WatchProgressSnapshot.live(): WatchProgressSnapshot = copy(entries = entries.filter { it.removedAt == null })
+fun FavoritesSnapshot.live(): FavoritesSnapshot = copy(entries = entries.filter { it.removedAt == null })
+fun RemindersSnapshot.live(): RemindersSnapshot = copy(entries = entries.filter { it.removedAt == null })
+fun PlaylistsSnapshot.live(): PlaylistsSnapshot = copy(playlists = playlists.filter { it.removedAt == null })
