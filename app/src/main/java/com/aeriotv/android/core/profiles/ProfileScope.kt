@@ -63,18 +63,31 @@ object ProfileScope {
 
     fun isForcedDefault(): Boolean = forcedDefault.get() == true
 
-    /** The overlay for [playlistId], or null (default profile, or sync). */
+    /**
+     * Profiles whose stored sign-in is held after a server address change
+     * ([ProfileHostHold]), kept by ProfileManager from before the first
+     * request. A held profile's overlay is never laid over a row and never
+     * installed; setting this drops one that is installed.
+     */
+    @Volatile var held: Set<String> = emptySet()
+        set(value) {
+            field = value
+            if (overlay?.profileId?.let { it in value } == true) activate(null)
+        }
+
+    /** The overlay for [playlistId], or null (default profile, sync, or a held profile). */
     fun overlayFor(playlistId: String): Overlay? {
         if (forcedDefault.get() == true) return null
-        return overlay?.takeIf { it.playlistId == playlistId }
+        return overlay?.takeIf { it.playlistId == playlistId && it.profileId !in held }
     }
 
     fun activeOverlay(): Overlay? = overlay
 
-    /** Install (or clear, with null) the active non-default profile. */
+    /** Install (or clear, with null) the active non-default profile. A held profile is never installed. */
     fun activate(newOverlay: Overlay?) {
-        overlay = newOverlay
-        _token.value = newOverlay?.profileId.orEmpty()
+        val next = newOverlay?.takeUnless { it.profileId in held }
+        overlay = next
+        _token.value = next?.profileId.orEmpty()
     }
 
     /** Non-default profile usernames per playlist, kept by ProfileManager.

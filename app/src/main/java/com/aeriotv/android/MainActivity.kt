@@ -1546,6 +1546,9 @@ class MainActivity : ComponentActivity() {
                             com.aeriotv.android.feature.settings.ProfileLaunchGate(profileManager)
                             // Profiles phase 2b: Android TV "Who is watching?" picker.
                             com.aeriotv.android.feature.settings.TvLaunchProfilePicker(profileManager)
+                            // A picked profile whose sign-in is held after its playlist's
+                            // server address changed: the sign-in form, above the picker.
+                            com.aeriotv.android.feature.settings.HeldProfileSignInHost(profileManager)
                             // Exit AerioTV? confirm (Logan 2026-10-14): raised by the
                             // root Back fallback registered in onCreate (any Back no
                             // screen consumed, every form factor) and by a held Back

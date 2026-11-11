@@ -795,7 +795,9 @@ class DispatcharrSyncManager @Inject constructor(
             val row = playlistDao.byId(playlistId) ?: return@withContext null
             val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext null
             val base = repository.get().effectiveBaseUrl(row)
-            val name = runCatching { client.fetchMe(base, apiKey) }.getOrNull()?.username.orEmpty()
+            val me = runCatching { client.fetchMe(base, apiKey) }.getOrNull()
+            me?.let { runCatching { profileManager.get().noteDefaultMe(playlistId, base, apiKey, it.id, it.username) } }
+            val name = me?.username.orEmpty()
             val main = DsyncKeyName.main(name) ?: return@withContext null
             var r = runCatching { client.appDataGet(base, apiKey, main) }.getOrNull()
                 ?: return@withContext null
@@ -828,7 +830,9 @@ class DispatcharrSyncManager @Inject constructor(
             val row = playlistDao.byId(playlistId) ?: return@withContext err
             val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext err
             val base = repository.get().effectiveBaseUrl(row)
-            val name = runCatching { client.fetchMe(base, apiKey) }.getOrNull()?.username.orEmpty()
+            val me = runCatching { client.fetchMe(base, apiKey) }.getOrNull()
+            me?.let { runCatching { profileManager.get().noteDefaultMe(playlistId, base, apiKey, it.id, it.username) } }
+            val name = me?.username.orEmpty()
             val main = DsyncKeyName.main(name) ?: return@withContext err
             for (key in listOf(main, DsyncKeyName.LEGACY_MAIN)) {
                 val r = runCatching { client.appDataGet(base, apiKey, key) }.getOrNull() ?: return@withContext err
@@ -1063,7 +1067,11 @@ class DispatcharrSyncManager @Inject constructor(
     /** Reads the signed-in username once per session (GET users/me/) and names the key from it. */
     private suspend fun ensureUserKey(s: Session, c: Conn): Boolean {
         if (s.userKey != null) return true
-        val name = runCatching { client.fetchMe(c.base, c.apiKey) }.getOrNull()?.username.orEmpty()
+        val me = runCatching { client.fetchMe(c.base, c.apiKey) }.getOrNull()
+        // The default profile's session: its users/me is recorded, or is the
+        // same-server check after an address change (A-APP-1).
+        if (me != null && s.token.isEmpty()) runCatching { profileManager.get().noteDefaultMe(s.playlistId, c.base, c.apiKey, me.id, me.username) }
+        val name = me?.username.orEmpty()
         val main = DsyncKeyName.main(name) ?: run {
             Log.w(TAG, "[DSYNC] username not read; sync waits for the next attempt")
             return false

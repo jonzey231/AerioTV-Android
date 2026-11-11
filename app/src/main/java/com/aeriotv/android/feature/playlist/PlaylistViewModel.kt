@@ -2762,6 +2762,14 @@ class PlaylistViewModel @Inject constructor(
                 return@launch
             }
             _state.update { it.copy(isLoading = true, error = null) }
+            // A new address while a non-default profile is active (A-APP-1):
+            // the form shows that profile's sign-in, which is held from now
+            // on, so this interim row (the guide may fetch with it before the
+            // save lands) carries the playlist's own sign-in instead.
+            val own = if (
+                com.aeriotv.android.core.profiles.ProfileHostHold.routeChanged(active.urlString, request.url, active.lanUrlString, request.lanUrl) &&
+                profileManager.activeProfile(active.id)?.isDefault == false
+            ) profileManager.defaultPlaylistRow(active.id) else null
             // GH #83: Edit Playlist reads state.playlist, so reflect the
             // edited fields there NOW (the repository writes the DB row early
             // too); a failed save puts the previous values back.
@@ -2773,9 +2781,9 @@ class PlaylistViewModel @Inject constructor(
                         urlString = request.url.trimEnd('/'),
                         lanUrlString = request.lanUrl?.trimEnd('/'),
                         epgUrl = request.epgUrl,
-                        apiKey = request.apiKey ?: active.apiKey,
-                        username = request.username,
-                        password = request.password,
+                        apiKey = if (own != null) own.apiKey else request.apiKey ?: active.apiKey,
+                        username = if (own != null) own.username else request.username,
+                        password = if (own != null) own.password else request.password,
                         dispatcharrProfileId = request.dispatcharrProfileId,
                         vodEnabled = request.vodEnabled,
                         epgRetentionDays = request.epgRetentionDays,

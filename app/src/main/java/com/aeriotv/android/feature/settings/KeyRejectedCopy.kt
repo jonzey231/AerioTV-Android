@@ -68,6 +68,14 @@ object KeyRejectedCopy {
     const val CANCEL = "Cancel"
     const val FOOTNOTE = "AerioTV keeps your password on this device so it can reconnect if the key changes again."
 
+    /**
+     * Above the form's fields when a picked profile's sign-in is held because
+     * its playlist moved to another server address (shared spec 2026-11-11,
+     * same wording on every platform).
+     */
+    fun hostChanged(playlistName: String): String =
+        "The server address for ${playlistName.ifBlank { "this playlist" }} changed. Sign in again to use this profile."
+
     const val WRONG_PASSWORD = "Dispatcharr did not accept that username or password."
     const val NO_API_KEY =
         "This account has no API key yet. Ask your Dispatcharr administrator to turn on API access for it."

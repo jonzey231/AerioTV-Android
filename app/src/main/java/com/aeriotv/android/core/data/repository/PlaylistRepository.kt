@@ -192,6 +192,9 @@ class PlaylistRepository @Inject constructor(
     private val vodCatalogStore: com.aeriotv.android.core.data.vod.VodCatalogStore,
     private val vodSnapshotStore: com.aeriotv.android.core.preferences.VodLibrarySnapshotStore,
     private val snapshotStamps: com.aeriotv.android.core.profiles.ChannelSnapshotStamps,
+    // Profile sign-ins held across a server address change (A-APP-1).
+    // Provider: ProfileManager depends on this class.
+    private val profileManager: javax.inject.Provider<com.aeriotv.android.core.profiles.ProfileManager>,
 ) {
 
     /** Last successful cast-profile re-resolve per playlist id, so the launch
@@ -592,8 +595,14 @@ class PlaylistRepository @Inject constructor(
         request: SaveRequest,
         existingId: String,
         plan: EditPlan,
-    ): Result<PlaylistEntity> = runCatching {
+    ): Result<PlaylistEntity> {
+        var routeMoved = false
+        return runCatching {
         val startedAt = System.currentTimeMillis()
+        // A Local URL edit can move the playlist to another host: profile
+        // sign-ins are held before the row changes (A-APP-1), and the row is
+        // read after that, with the playlist's own sign-in.
+        if (plan.lanUrlChanged) routeMoved = holdProfileSignInsForSave(request, existingId).second
         val previous = dao.byId(existingId)
             ?: throw IllegalStateException("Playlist not found.")
         val normalisedBase = request.url.trimEnd('/')
@@ -636,10 +645,12 @@ class PlaylistRepository @Inject constructor(
                 "vodOff=${plan.vodTurnedOff} ua=${plan.userAgentChanged}",
         )
         updated
-    }.onFailure { Log.w(TAG_SAVE, "plan=InstantUpdate failed", it) }
+        }.onFailure { Log.w(TAG_SAVE, "plan=InstantUpdate failed", it) }
+            .also { if (routeMoved) runCatching { profileManager.get().routeChangeSettled(existingId, reloadUi = true) } }
+    }
 
     suspend fun loadAndPersist(
-        request: SaveRequest,
+        saveRequest: SaveRequest,
         existingId: String? = null,
         /**
          * Called as each [SaveStage] begins, on the calling coroutine's
@@ -654,6 +665,15 @@ class PlaylistRepository @Inject constructor(
          */
         onPlan: ((SavePlan) -> Unit)? = null,
     ): Result<Pair<PlaylistEntity, List<M3UChannel>>> {
+        // A new address for an existing playlist: profile sign-ins are held
+        // before this save sends anything (A-APP-1).
+        val (request, routeMoved) = try {
+            holdProfileSignInsForSave(saveRequest, existingId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            return Result.failure(t)
+        }
         // Where the seconds go, per stage, so a slow save can be attributed
         // (Logan 2026-09-18: "a successful save takes several seconds"). No
         // credential values are ever logged.
@@ -1115,6 +1135,10 @@ class PlaylistRepository @Inject constructor(
         entity to channels
         }.also { result ->
             closeStages(if (result.isSuccess) "ok" else "failed")
+            // The saved result reloads the screen; a failed save put the row back, so reload it here.
+            if (routeMoved && existingId != null) {
+                runCatching { profileManager.get().routeChangeSettled(existingId, reloadUi = result.isFailure) }
+            }
         }
     }
 
@@ -1150,20 +1174,36 @@ class PlaylistRepository @Inject constructor(
      * stored key turned out to belong to somebody else.
      */
     /** "scheme://host:port", lowercased, default port filled in; "" when blank or unparseable. */
-    private fun hostKey(raw: String?): String {
-        var v = raw?.trim().orEmpty()
-        if (v.isEmpty()) return ""
-        if (!v.startsWith("http://", true) && !v.startsWith("https://", true)) v = "http://$v"
-        val uri = runCatching { java.net.URI(v) }.getOrNull() ?: return ""
-        val host = uri.host?.lowercase()?.takeIf { it.isNotBlank() } ?: return ""
-        val scheme = (uri.scheme ?: "http").lowercase()
-        val port = if (uri.port > 0) uri.port else if (scheme == "https") 443 else 80
-        return "$scheme://$host:$port"
-    }
+    private fun hostKey(raw: String?): String = com.aeriotv.android.core.profiles.ProfileHostHold.routeKey(raw)
 
     /** True when either route of the playlist now points at another host, scheme, or port. */
     private fun hostChanged(oldBase: String?, newBase: String?, oldLan: String?, newLan: String?): Boolean =
-        hostKey(oldBase) != hostKey(newBase) || hostKey(oldLan) != hostKey(newLan)
+        com.aeriotv.android.core.profiles.ProfileHostHold.routeChanged(oldBase, newBase, oldLan, newLan)
+
+    /**
+     * A save that moves [existingId] to another scheme, host, or port
+     * (A-APP-1): BEFORE it sends anything, every non-default profile's stored
+     * sign-in for the playlist is held and a held active profile is left for
+     * the default one. Edit Playlist shows the ACTIVE profile's sign-in, so a
+     * request that carries a held profile's sign-in goes out with the
+     * playlist's own one instead. Returns the request to save and whether the
+     * route moved.
+     */
+    private suspend fun holdProfileSignInsForSave(incoming: SaveRequest, existingId: String?): Pair<SaveRequest, Boolean> {
+        val id = existingId ?: return incoming to false
+        val before = dao.byId(id) ?: return incoming to false
+        val newBase = incoming.url.trimEnd('/')
+        if (!hostChanged(before.urlString, newBase, before.lanUrlString, incoming.lanUrl)) return incoming to false
+        val profiles = profileManager.get()
+        if (!profiles.holdSignInsForRouteChange(id, before.urlString, before.lanUrlString, newBase, incoming.lanUrl)) return incoming to true
+        val own = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { dao.byId(id) } ?: before
+        val signIn = com.aeriotv.android.core.profiles.ProfileHostHold.scrub(
+            com.aeriotv.android.core.profiles.ProfileHostHold.SignIn(incoming.apiKey, incoming.username, incoming.password),
+            com.aeriotv.android.core.profiles.ProfileHostHold.SignIn(own.apiKey, own.username, own.password),
+            profiles.heldSignIns(id),
+        )
+        return incoming.copy(apiKey = signIn.apiKey, username = signIn.username, password = signIn.password) to true
+    }
 
     /**
      * Forget everything learned against a playlist's OLD host after an edit
@@ -1334,9 +1374,11 @@ class PlaylistRepository @Inject constructor(
         if (!force && !playlist.capabilitiesNeedProbe()) return false
         val base = effectiveBaseUrl(playlist)
         val key = playlist.apiKey?.takeIf { it.isNotBlank() }
+        var usedKey: String? = null
         val snapshot = key?.let {
             runCatching {
                 dispatcharrAuth.withApiKeyRetry(playlist.id) { k ->
+                    usedKey = k
                     dispatcharrClient.fetchAccountSnapshot(base, k)
                 }
             }.getOrNull()
@@ -1350,6 +1392,11 @@ class PlaylistRepository @Inject constructor(
             }
             Log.w(TAG_CAPS, "probe failed for ${playlistId.take(8)}; keeping last good snapshot")
             return false
+        }
+        // The default profile's users/me (another profile's key is ignored
+        // there): recorded, or the same-server check after an address change.
+        usedKey?.let { k ->
+            runCatching { profileManager.get().noteDefaultMe(playlist.id, base, k, snapshot.userId, snapshot.username) }
         }
         // SELF-HEAL: does the stored key actually authenticate as the account
         // whose username this playlist carries?
@@ -3986,6 +4033,9 @@ class PlaylistRepository @Inject constructor(
         // Display-only Dispatcharr account facts for the deleted row.
         runCatching { appPreferences.clearDispatcharrAccountFacts(playlistId) }
             .onFailure { Log.w("PlaylistRepo", "delete: account facts purge failed", it) }
+        // The default profile's recorded identity and any profile sign-in hold (A-APP-1).
+        runCatching { profileManager.get().forgetPlaylistHost(playlistId) }
+            .onFailure { Log.w("PlaylistRepo", "delete: profile host record purge failed", it) }
         // The VOD snapshot file is keyed by the playlist's IDENTITY, which is
         // derived from the row, so compute it BEFORE the row is gone.
         val row = dao.byId(playlistId)

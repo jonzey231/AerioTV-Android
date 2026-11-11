@@ -68,6 +68,8 @@ class DriveSyncManager @Inject constructor(
     /** One server account is one playlist: the merge after a pull. */
     private val playlistCollapse: javax.inject.Provider<PlaylistCollapse>,
     private val profileStore: javax.inject.Provider<com.aeriotv.android.core.profiles.ProfileStore>,
+    /** A pulled playlist on a new server address holds its profile sign-ins (A-APP-1). */
+    private val profileManager: javax.inject.Provider<com.aeriotv.android.core.profiles.ProfileManager>,
 ) {
     /** The record every file of the current push carries (envelope.syncProviders). */
     @Volatile private var pushProviders: SyncProvidersRecord? = null
@@ -1691,7 +1693,18 @@ class DriveSyncManager @Inject constructor(
      * (Logan 2026-11-10), a tombstone never re-adds or deletes anything here,
      * and a playlist removed here stays removed unless re-added later elsewhere.
      */
-    private suspend fun mergePlaylistsSnapshot(snapshot: PlaylistsSnapshot, force: Boolean = false) = database.withTransaction {
+    private suspend fun mergePlaylistsSnapshot(snapshot: PlaylistsSnapshot, force: Boolean = false) {
+        val moved = mutableListOf<String>()
+        try {
+            mergePlaylistRows(snapshot, force, moved)
+        } finally {
+            // After the transaction (or its rollback): the same-server check,
+            // and a reload for a profile the hold left.
+            moved.forEach { id -> runCatching { profileManager.get().routeChangeSettled(id, reloadUi = true) } }
+        }
+    }
+
+    private suspend fun mergePlaylistRows(snapshot: PlaylistsSnapshot, force: Boolean, moved: MutableList<String>) = database.withTransaction {
         val existing = playlistDao.allOnce().associateBy { it.id }
         snapshot.playlists.forEach { entry ->
             val current = existing[entry.id]
@@ -1738,6 +1751,15 @@ class DriveSyncManager @Inject constructor(
                 // decode with the default true, matching the entity default.
                 vodEnabled = entry.vodEnabled,
             )
+            // A new scheme, host, or port: hold this playlist's profile
+            // sign-ins before the row changes (A-APP-1). No network or lock.
+            if (current != null && com.aeriotv.android.core.profiles.ProfileHostHold.routeChanged(
+                    current.urlString, merged.urlString, current.lanUrlString, merged.lanUrlString,
+                )
+            ) {
+                profileManager.get().holdSignInsForRouteChange(entry.id, current.urlString, current.lanUrlString, merged.urlString, merged.lanUrlString)
+                moved += entry.id
+            }
             playlistDao.upsert(merged)
             SyncStamps.settleTouched(SyncStamps.Cat.Playlists, entry.id, stamp)
         }

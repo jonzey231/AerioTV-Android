@@ -86,6 +86,30 @@ class KeyRejectedSignInViewModel @Inject constructor(
         return KeyRejectedCopy.prefillUsername(row?.username, facts, default)
     }
 
+    /** A held profile's own username (the form for a profile whose playlist moved), else "". */
+    fun heldUsername(profileId: String): String = profiles.profileUsername(profileId)
+
+    /**
+     * Sign in as a held profile (its playlist moved to another server
+     * address): replaces that profile's key and password, lifts its hold
+     * only, and finishes the switch. No Set up gate here: the profile was
+     * picked, its PIN (if any) passed before the form opened.
+     */
+    fun submitHeld(playlistId: String, profileId: String, username: String, password: String) {
+        if (!KeyRejectedCopy.canSubmit(username, password, _state.value is State.Busy)) return
+        _state.value = State.Busy
+        viewModelScope.launch {
+            profiles.signInHeldProfile(playlistId, profileId, username, password).fold(
+                onSuccess = { _state.value = State.Done(playlistId) },
+                onFailure = {
+                    // Never the password or the key: the error's class only.
+                    Log.w(TAG, "[PROFILE-HOST] held profile sign-in failed: ${it.javaClass.simpleName}")
+                    _state.value = State.Failed(KeyRejectedCopy.errorLine(it))
+                },
+            )
+        }
+    }
+
     fun reset() { if (_state.value !is State.Busy) _state.value = State.Idle }
 
     fun submit(playlistId: String, username: String, password: String) {
@@ -127,18 +151,22 @@ fun KeyRejectedSignInDialog(
     vm: KeyRejectedSignInViewModel,
     onCancel: () -> Unit,
     onSignedIn: (playlistId: String) -> Unit,
+    /** A held profile (its playlist moved to another server address): sign in as it, not as the playlist. */
+    heldProfileId: String? = null,
+    /** Shown above the fields. */
+    message: String? = null,
 ) {
-    var username by rememberSaveable(playlistId) { mutableStateOf("") }
-    var password by rememberSaveable(playlistId) { mutableStateOf("") }
-    var prefilled by rememberSaveable(playlistId) { mutableStateOf(false) }
+    var username by rememberSaveable(playlistId, heldProfileId) { mutableStateOf("") }
+    var password by rememberSaveable(playlistId, heldProfileId) { mutableStateOf("") }
+    var prefilled by rememberSaveable(playlistId, heldProfileId) { mutableStateOf(false) }
     val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
     val usernameFocus = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
     val passwordFocus = androidx.compose.runtime.remember { androidx.compose.ui.focus.FocusRequester() }
-    LaunchedEffect(playlistId) {
+    LaunchedEffect(playlistId, heldProfileId) {
         vm.reset()
         if (!prefilled) {
             prefilled = true
-            if (username.isEmpty()) username = vm.knownUsername(playlistId)
+            if (username.isEmpty()) username = heldProfileId?.let { vm.heldUsername(it) } ?: vm.knownUsername(playlistId)
         }
         // TV: start where the remote types next (the password when the
         // username is known), so the keyboard opens on the right field and
@@ -154,12 +182,16 @@ fun KeyRejectedSignInDialog(
         }
     }
     val busy = state is KeyRejectedSignInViewModel.State.Busy
-    val submit = { vm.submit(playlistId, username, password) }
+    val submit = {
+        if (heldProfileId != null) vm.submitHeld(playlistId, heldProfileId, username, password)
+        else vm.submit(playlistId, username, password)
+    }
     SettingsAlertDialog(
         onDismissRequest = { if (!busy) onCancel() },
         title = { Text(KeyRejectedCopy.FORM_TITLE) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
@@ -195,5 +227,28 @@ fun KeyRejectedSignInDialog(
         },
         confirmButton = { SettingsDialogTextButton(label = KeyRejectedCopy.FORM_SIGN_IN, onClick = submit, emphasized = true) },
         dismissButton = { SettingsDialogTextButton(label = KeyRejectedCopy.CANCEL, onClick = { if (!busy) onCancel() }) },
+    )
+}
+
+/**
+ * Picking a profile whose sign-in is held because its playlist moved to
+ * another server address (A-APP-1, shared spec 2026-11-11) opens the same
+ * "Sign in to Dispatcharr" form, prefilled with that profile's username and
+ * a line naming the playlist. Sign In replaces that profile's key and
+ * password and finishes the switch; Cancel stays on the current profile.
+ * Mounted at the app root after the TV launch picker, so it shows above it.
+ */
+@Composable
+fun HeldProfileSignInHost(manager: ProfileManager) {
+    val request by manager.heldSignIn.collectAsStateWithLifecycle()
+    val r = request ?: return
+    val vm: KeyRejectedSignInViewModel = androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel(key = "held-profile-sign-in")
+    KeyRejectedSignInDialog(
+        playlistId = r.playlistId,
+        vm = vm,
+        onCancel = { manager.closeHeldSignIn() },
+        onSignedIn = { manager.closeHeldSignIn() },
+        heldProfileId = r.profileId,
+        message = KeyRejectedCopy.hostChanged(r.playlistName),
     )
 }

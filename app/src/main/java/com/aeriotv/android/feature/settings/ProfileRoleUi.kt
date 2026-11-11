@@ -255,7 +255,11 @@ fun TvLaunchProfilePicker(manager: ProfileManager) {
     fun choose(p: DispatcharrProfile) {
         busy = true; error = null
         scope.launch {
-            manager.pickAtLaunch(p.id).onFailure { busy = false; error = it.message ?: "Switch failed" }
+            manager.pickAtLaunch(p.id).onFailure {
+                busy = false
+                // A held profile opened the sign-in form above the picker instead.
+                if (it !is com.aeriotv.android.core.profiles.ProfileSignInHeld) error = it.message ?: "Switch failed"
+            }
         }
     }
 

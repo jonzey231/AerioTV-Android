@@ -474,6 +474,36 @@ class DispatcharrClient @Inject constructor() {
         KeyCheck.Unknown(null)
     }
 
+    /** Outcome of [checkMe]. */
+    sealed interface MeCheck {
+        data class Ok(val me: MeResponse) : MeCheck
+        /** 401/403, or a key the gate already holds as rejected (nothing sent). */
+        data object Rejected : MeCheck
+        /** No answer: a network error, a 429 pause, or any other status. */
+        data object Unreachable : MeCheck
+    }
+
+    /**
+     * The same-server check after a playlist's address changed (A-APP-1):
+     * one GET of /api/accounts/users/me/ (already in the README path tables)
+     * at exactly [baseUrl] with exactly [apiKey], through the request gate.
+     * Unlike [fetchMe] it tells a refused key from no answer.
+     */
+    suspend fun checkMe(baseUrl: String, apiKey: String): MeCheck = try {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") { applyAuth(apiKey) }
+        when (response.status.value) {
+            in 200..299 -> runCatching { MeCheck.Ok(response.body<MeResponse>()) }.getOrElse { MeCheck.Unreachable }
+            401, 403 -> MeCheck.Rejected
+            else -> MeCheck.Unreachable
+        }
+    } catch (c: kotlinx.coroutines.CancellationException) {
+        throw c
+    } catch (k: DispatcharrError.KeyRejected) {
+        MeCheck.Rejected
+    } catch (t: Throwable) {
+        MeCheck.Unreachable
+    }
+
     /** Profiles: the full /api/accounts/users/me/ record for the user [apiKey]
      *  authenticates as, or null on any failure. */
     suspend fun fetchMe(baseUrl: String, apiKey: String): MeResponse? = runCatching {
@@ -659,6 +689,8 @@ class DispatcharrClient @Inject constructor() {
         /** custom_properties, verbatim, as JSON text ("" when absent). */
         val customPropertiesJson: String,
         val channelProfiles: List<Int>,
+        /** The Dispatcharr user id (the same-server check's identity, with [username]). */
+        val userId: Int = 0,
     )
 
     /**
@@ -701,6 +733,7 @@ class DispatcharrClient @Inject constructor() {
             isSuperuser = me.isSuperuser,
             customPropertiesJson = me.customProperties?.toString().orEmpty(),
             channelProfiles = me.channelProfiles,
+            userId = me.id,
         )
     }.orNullKeepingAuthFailures()
 

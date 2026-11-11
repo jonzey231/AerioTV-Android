@@ -79,6 +79,15 @@ class ProfileManager @Inject constructor(
     private val mutex = Mutex()
     @Volatile private var started = false
 
+    /** Server address changes (A-APP-1): held profile sign-ins, persisted before anything is sent. */
+    private val hostHolds = HostHoldBook(
+        object : HostHoldBook.Backing {
+            private val prefs = context.getSharedPreferences("aerio_profile_host", android.content.Context.MODE_PRIVATE)
+            override fun read(): String? = prefs.getString("state.v1", null)
+            override fun write(value: String) { prefs.edit().putString("state.v1", value).commit() }
+        },
+    )
+
     /** Playlist ids whose channel list / groups / VOD must reload after a
      *  profile switch. A Channel so exactly one PlaylistViewModel handles it. */
     data class Reload(val playlistId: String, val gen: Long, val fromSwitch: Boolean = true)
@@ -142,6 +151,9 @@ class ProfileManager @Inject constructor(
      * scoped read ever sees the default profile's state by mistake.
      */
     fun restoreSync() {
+        // First: a sign-in held after a server address change never goes out
+        // after a relaunch, whatever was active when the app stopped.
+        ProfileScope.held = hostHolds.heldProfileIds()
         ProfileScope.onOverlayChanged = { o -> store.update(o.profileId) { it.withOverlay(o) } }
         ProfileScope.activeUserIdLookup = { pid -> activeProfileIdNow(pid)?.let(store::byId)?.userId ?: 0 }
         scope.launch {
@@ -153,8 +165,13 @@ class ProfileManager @Inject constructor(
             }
         }
         val pid = store.lastActivePlaylistId ?: return
+        var active = store.activeProfileId(pid)?.let(store::byId)
+        if (active != null && !active.isDefault && hostHolds.isHeld(active.id)) {
+            store.setActiveProfileId(pid, null)
+            Log.i(TAG, "[PROFILE-HOST] restored the default profile on ${pid.take(8)}: the active profile's sign-in is held")
+            active = null
+        }
         refreshActiveRole(pid)
-        val active = store.activeProfileId(pid)?.let(store::byId)
         if (active != null && !active.isDefault && active.playlistId == pid) {
             ProfileScope.activate(active.toOverlay())
             Log.i(TAG, "[PROFILE] restored ${active.displayName} on ${pid.take(8)}")
@@ -669,7 +686,12 @@ class ProfileManager @Inject constructor(
         if (pid == null) { ProfileScope.activate(null); ProfileRoles.set(null); return@withLock }
         store.lastActivePlaylistId = pid
         playlistDao.rawById(pid)?.let { ensureDefaultProfile(it) }
-        val active = store.activeProfileId(pid)?.let(store::byId)
+        var active = store.activeProfileId(pid)?.let(store::byId)
+        if (active != null && !active.isDefault && hostHolds.isHeld(active.id)) {
+            // Its sign-in is held after a server address change: the default profile it is.
+            store.setActiveProfileId(pid, null)
+            active = null
+        }
         val current = ProfileScope.activeOverlay()
         if (active != null && !active.isDefault) {
             if (current?.profileId != active.id) ProfileScope.activate(active.toOverlay())
@@ -700,8 +722,10 @@ class ProfileManager @Inject constructor(
             // API-key login: ask the server who the key belongs to.
             val key = row.apiKey
             if (!key.isNullOrBlank()) {
-                username = runCatching { client.fetchMe(repository.effectiveBaseUrl(row), key)?.username }
-                    .getOrNull().orEmpty()
+                val base = repository.effectiveBaseUrl(row)
+                val me = runCatching { client.fetchMe(base, key) }.getOrNull()
+                me?.let { runCatching { noteDefaultMe(row.id, base, key, it.id, it.username) } }
+                username = me?.username.orEmpty()
             }
         }
         val seeded = seededDefaultIds.remove(row.id)?.takeIf { store.byId(it) == null }
@@ -890,6 +914,10 @@ class ProfileManager @Inject constructor(
             // FIRST store write, so the row never exists (or syncs) half built.
             .let { if (seed != null) ProfileRoster.applyRow(it, seed) else it }
         store.upsert(profile)
+        // Signed in just now at the playlist's current address: no older hold
+        // applies to this id, and its tag is the server it signed in at.
+        dropHold(id, "added")
+        runCatching { tagLive(playlistId, id, base) }
         if (needsPinAfterAdd(playlistId, id)) pendingPinAdds.add(id)
         appPreferences.seedProfileSettings(id)
         if (seed != null) {
@@ -1076,7 +1104,8 @@ class ProfileManager @Inject constructor(
 
     /** True when [profileId] has its own saved API key or password here (the default profile uses the playlist login). */
     fun hasSavedCredential(profileId: String): Boolean =
-        store.byId(profileId)?.let { it.isDefault || !it.apiKey.isNullOrBlank() || !it.password.isNullOrBlank() } ?: false
+        store.byId(profileId)?.let { ProfileHostHold.withoutHeldSignIn(it, hostHolds.isHeld(it.id)) }
+            ?.let { it.isDefault || !it.apiKey.isNullOrBlank() || !it.password.isNullOrBlank() } ?: false
 
     /** Sign in once as [profileId]'s user and save the password or key on that profile. */
     suspend fun saveProfileCredential(playlistId: String, profileId: String, password: String?, apiKey: String?): Result<Unit> = runCatching {
@@ -1099,7 +1128,8 @@ class ProfileManager @Inject constructor(
     suspend fun userQrText(playlistId: String, profileId: String): String? {
         val row = playlistDao.rawById(playlistId) ?: return null
         if (!row.sourceType.startsWith("Dispatcharr")) return null
-        val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId } ?: return null
+        val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId }
+            ?.let { ProfileHostHold.withoutHeldSignIn(it, hostHolds.isHeld(it.id)) } ?: return null
         val key = (if (p.isDefault) row.apiKey else p.apiKey)?.takeIf { it.isNotBlank() } ?: return null
         val user = p.username.ifBlank { row.username.orEmpty() }
         return com.aeriotv.android.core.qr.ScannedCode.userKeyText(key, row.urlString, user)
@@ -1148,8 +1178,9 @@ class ProfileManager @Inject constructor(
     /** A local profile plus its v2 PIN record, for the setup payload. */
     data class SetupSource(val profile: DispatcharrProfile, val pin: ProfilePinStore.Record?)
 
+    /** A held profile (server address changed) comes without its stored sign-in, so no payload carries it. */
     fun setupSources(playlistId: String): List<SetupSource> =
-        store.forPlaylist(playlistId).map { SetupSource(it, pinStore.syncRecord(it.id)) }
+        store.forPlaylist(playlistId).map { SetupSource(ProfileHostHold.withoutHeldSignIn(it, hostHolds.isHeld(it.id)), pinStore.syncRecord(it.id)) }
 
     /**
      * TV side: apply one handed-over profile. The default profile already
@@ -1379,6 +1410,8 @@ class ProfileManager @Inject constructor(
         runCatching { vodCatalogStore.deleteForPlaylistUser(p.playlistId, p.username) }
         if (tombstone) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "remove", 0L) }
         else if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "undo-add", 0L) }
+        dropHold(profileId, "removed")
+        hostHolds.tag(profileId, null)
         store.remove(profileId)
         Log.i(TAG, "[PROFILE] removed ${p.username} on ${p.playlistId.take(8)}; local state deleted${if (fromSync) " (synced removal)" else ""}")
     }
@@ -1393,6 +1426,13 @@ class ProfileManager @Inject constructor(
     suspend fun switchTo(playlistId: String, profileId: String, bypassPin: Boolean = false): Result<Unit> = runCatching {
         if (!bypassPin && pinStore.hasPin(profileId)) {
             check(switchTickets.remove(profileId)) { "Enter PIN" }
+        }
+        if (hostHolds.isHeld(profileId)) {
+            // Its sign-in is held after a server address change: nothing is
+            // sent with it. The "Sign in to Dispatcharr" form asks for a fresh one.
+            _heldSignIn.value = HeldSignIn(playlistId, profileId, playlistDao.rawById(playlistId)?.name.orEmpty())
+            Log.i(TAG, "[PROFILE-HOST] sign-in form opened for a held profile on ${playlistId.take(8)}")
+            throw ProfileSignInHeld()
         }
         val gen = switchGen.incrementAndGet()
         watchdog?.cancel()
@@ -1428,13 +1468,16 @@ class ProfileManager @Inject constructor(
         // before any network; sign-in and /me/ run behind the painted guide
         // (verifyWarmSwitch). Only a profile with no snapshot waits on them.
         val targetKey = if (target.isDefault) playlistId else "$playlistId@${target.id}"
-        val storedKey = (if (target.isDefault) row.apiKey else target.apiKey)?.takeIf { it.isNotBlank() }
+        val signIn = ProfileHostHold.usable(target, hostHolds.isHeld(target.id))
+        val storedKey = (if (target.isDefault) row.apiKey else signIn.apiKey)?.takeIf { it.isNotBlank() }
         val warm = storedKey != null &&
             snapshotStamps.get(targetKey) != null &&
             runCatching { channelSnapshotDao.newestFetchedAtKey(targetKey) }.getOrNull() != null
         if (warm) {
             mutex.withLock {
                 tLock = System.currentTimeMillis()
+                // A hold that landed since switchTo looked: never activate it.
+                if (!target.isDefault && hostHolds.isHeld(target.id)) throw ProfileSignInHeld()
                 if (target.isDefault) {
                     ProfileScope.activate(null)
                     store.setActiveProfileId(playlistId, null)
@@ -1479,9 +1522,11 @@ class ProfileManager @Inject constructor(
                 tMe = System.currentTimeMillis()
                 ProfileScope.activate(null)
                 store.setActiveProfileId(playlistId, null)
-                if (me != null) applyMeToDefaultRow(playlistId, target.id, me)
+                if (me != null) applyMeToDefaultRow(playlistId, target.id, me, base, a.key)
             } else {
-                val a = authenticate(playlistId, target.id, base, target.username, target.password, target.apiKey)
+                if (hostHolds.isHeld(target.id)) throw ProfileSignInHeld()
+                val held = ProfileHostHold.usable(target, hostHolds.isHeld(target.id))
+                val a = authenticate(playlistId, target.id, base, target.username, held.password, held.apiKey)
                 path = a.path
                 val key = a.key
                 tAuth = System.currentTimeMillis()
@@ -1492,6 +1537,7 @@ class ProfileManager @Inject constructor(
                 val updated = target.applyMe(me, key)
                 store.upsert(updated)
                 followServerRole(updated.id, updated.userLevel)
+                runCatching { tagVerified(playlistId, updated.id) }
                 ProfileScope.activate(updated.toOverlay())
                 store.setActiveProfileId(playlistId, updated.id)
             }
@@ -1550,13 +1596,15 @@ class ProfileManager @Inject constructor(
                     if (gen != switchGen.get()) return
                     if (me != null) {
                         val before = playlistDao.rawById(playlistId)
-                        applyMeToDefaultRow(playlistId, target.id, me)
+                        applyMeToDefaultRow(playlistId, target.id, me, base, a.key)
                         val after = playlistDao.rawById(playlistId)
                         changed = SnapshotStaleness.normalize(before?.dispatcharrAccountProfileIds.orEmpty()) !=
                             SnapshotStaleness.normalize(after?.dispatcharrAccountProfileIds.orEmpty()) ||
                             before?.dispatcharrCatchupEnabled != after?.dispatcharrCatchupEnabled
                     }
                 } else {
+                    // Held since the switch (a server address change): its stored sign-in stays here.
+                    if (hostHolds.isHeld(target.id)) return
                     val a = authenticate(playlistId, target.id, base, target.username, target.password, target.apiKey)
                     val me = a.me ?: client.fetchMe(base, a.key)
                         ?: error("Could not read ${target.username} from the server.")
@@ -1564,6 +1612,7 @@ class ProfileManager @Inject constructor(
                     val updated = target.applyMe(me, a.key)
                     store.upsert(updated)
                     followServerRole(updated.id, updated.userLevel)
+                    runCatching { tagVerified(playlistId, updated.id) }
                     if (ProfileScope.current() == target.id) ProfileScope.activate(updated.toOverlay())
                     val o1 = target.toOverlay()
                     val o2 = updated.toOverlay()
@@ -1585,6 +1634,260 @@ class ProfileManager @Inject constructor(
         } catch (t: Throwable) {
             Log.w(TAG, "[SWITCH] warm switch verification failed (stored profile kept): ${t.message}")
         }
+    }
+
+    // ---- Server address change (security fix A-APP-1, shared spec 2026-11-11) ----
+    // Edit Playlist, a device setup in place, and a Google Drive pull can move
+    // a playlist to another scheme, host, or port. Every non-default profile's
+    // stored sign-in is held from before the first request until users/me
+    // with the DEFAULT profile's sign-in proves the new address is the same
+    // server, or the profile signs in again. Logs never carry a key or a
+    // password, only the [PROFILE-HOST] lines below.
+
+    /** A held profile the user picked: the "Sign in to Dispatcharr" form is up for it. */
+    data class HeldSignIn(val playlistId: String, val profileId: String, val playlistName: String)
+
+    private val _heldSignIn = kotlinx.coroutines.flow.MutableStateFlow<HeldSignIn?>(null)
+    val heldSignIn: kotlinx.coroutines.flow.StateFlow<HeldSignIn?> = _heldSignIn
+
+    /** Playlists whose live profile a hold left for the default one; their screen reloads once the change lands. */
+    private val leftLive = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val checks = HashMap<String, kotlinx.coroutines.Job>()
+
+    fun isSignInHeld(profileId: String): Boolean = hostHolds.isHeld(profileId)
+
+    /** [profileId]'s Dispatcharr username (the held sign-in form's prefill), or "". */
+    fun profileUsername(profileId: String): String = store.byId(profileId)?.username.orEmpty()
+
+    /** The held profiles' stored sign-ins on [playlistId], only so a save can tell them from the playlist's own. Never sent. */
+    fun heldSignIns(playlistId: String): List<ProfileHostHold.SignIn> =
+        store.forPlaylist(playlistId).filter { !it.isDefault && hostHolds.isHeld(it.id) }
+            .map { ProfileHostHold.SignIn(it.apiKey, it.username, it.password) }
+
+    /**
+     * A route change on [playlistId]: BEFORE the caller sends anything, hold
+     * every non-default profile's stored sign-in, and leave a held active
+     * profile for the default one the way the tombstone path does, minus that
+     * path's sign-in (it would go to whichever address is current, and a
+     * failed one would leave the held profile active). Synchronous, with no
+     * network, no Room, and no lock, so it is safe inside the Drive pull's
+     * transaction. True when a profile is held.
+     */
+    fun holdSignInsForRouteChange(playlistId: String, oldBase: String?, oldLan: String?, newBase: String?, newLan: String?): Boolean {
+        if (!ProfileHostHold.routeChanged(oldBase, newBase, oldLan, newLan)) return false
+        val ids = ProfileHostHold.toHold(store.forPlaylist(playlistId))
+        if (ids.isEmpty() && hostHolds.hold(playlistId) == null) return false
+        val activeId = store.activeProfileId(playlistId)
+        val live = ProfileScope.activeOverlay()?.let { it.playlistId == playlistId && it.profileId in ids } == true
+        // Memory first: from here no row is overlaid with a held sign-in.
+        ProfileScope.held = ProfileScope.held + ids
+        val rec = hostHolds.hold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan)) ?: return false
+        ProfileScope.held = hostHolds.heldProfileIds()
+        Log.i(TAG, "[PROFILE-HOST] hold playlist=${playlistId.take(8)} profiles=${rec.profileIds.size}")
+        if (activeId != null && hostHolds.isHeld(activeId)) {
+            store.setActiveProfileId(playlistId, null)
+            if (live) {
+                ProfileScope.activate(null)
+                tokenStore.clear(playlistId)
+                CapabilityCorrections.clear(playlistId)
+                closePlayer.trySend(Unit)
+                leftLive += playlistId
+                scope.launch { runCatching { timeshift.stopAllRetained("profile sign-in held") } }
+            }
+            refreshActiveRole(playlistId)
+            Log.i(TAG, "[PROFILE-HOST] switched playlist=${playlistId.take(8)} to the default profile")
+        }
+        return true
+    }
+
+    /**
+     * The route change on [playlistId] has landed, or its save failed and the
+     * row is back. [reloadUi]: the caller did not reload the playlist on
+     * screen, so a profile the hold left gets a silent channel refresh as the
+     * default one. Then the same-server check runs.
+     */
+    fun routeChangeSettled(playlistId: String, reloadUi: Boolean) {
+        if (leftLive.remove(playlistId) && reloadUi) {
+            scope.launch { reloads.send(Reload(playlistId, switchGen.get(), fromSwitch = false)) }
+        }
+        if (hostHolds.hold(playlistId) != null) scheduleSameServerCheck(playlistId)
+    }
+
+    /**
+     * Every successful users/me with the DEFAULT profile's sign-in reports
+     * here, from every path that reads it. With no hold the identity is
+     * recorded. With a hold it is only compared with the identity recorded
+     * before the change (never recorded), and the check runs again for any
+     * address still unproven. [key] must be the playlist's own key; another
+     * profile's answer is ignored.
+     */
+    suspend fun noteDefaultMe(playlistId: String, base: String, key: String, userId: Int, username: String) {
+        val row = playlistDao.rawById(playlistId) ?: return
+        val own = row.apiKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (own != key.trim()) return
+        val current = ProfileHostHold.routes(row.urlString, row.lanUrlString)
+        val identity = ProfileHostHold.Identity(userId, username.trim())
+        when (val o = hostHolds.onAnswer(playlistId, ProfileHostHold.routeKey(base), current, ProfileHostHold.Answer.Me(identity))) {
+            is HostHoldBook.Outcome.Failed ->
+                Log.i(TAG, "[PROFILE-HOST] same-server check failed reason=${o.reason} playlist=${playlistId.take(8)}")
+            // Profiles from before tags existed belong to the server this record came from.
+            HostHoldBook.Outcome.Recorded ->
+                hostHolds.tagUntagged(store.forPlaylist(playlistId).filterNot { it.isDefault }.map { it.id }, identity)
+            HostHoldBook.Outcome.Proven -> {
+                Log.i(TAG, "[PROFILE-HOST] same-server check passed reason=same-user playlist=${playlistId.take(8)}")
+                scheduleSameServerCheck(playlistId)
+            }
+            HostHoldBook.Outcome.Ignored -> if (hostHolds.hold(playlistId) != null) scheduleSameServerCheck(playlistId)
+        }
+    }
+
+    /**
+     * Tag [profileId] with the default identity users/me answers now at
+     * [base], where it just signed in: the live answer, never the frozen
+     * record. With no answer it stays untagged and never lifts on a check.
+     */
+    private suspend fun tagLive(playlistId: String, profileId: String, base: String) {
+        val key = playlistDao.rawById(playlistId)?.apiKey?.takeIf { it.isNotBlank() }
+        val me = key?.let { (client.checkMe(base, it) as? DispatcharrClient.MeCheck.Ok)?.me }
+        hostHolds.tag(profileId, me?.let { ProfileHostHold.Identity(it.id, it.username) })
+        if (me != null && key != null) runCatching { noteDefaultMe(playlistId, base, key, me.id, me.username) }
+    }
+
+    /** [profileId] was verified by a switch: tagged with the record when that is a live answer here. */
+    private suspend fun tagVerified(playlistId: String, profileId: String) {
+        val row = playlistDao.rawById(playlistId) ?: return
+        hostHolds.liveRecord(playlistId, ProfileHostHold.routes(row.urlString, row.lanUrlString))?.let { hostHolds.tag(profileId, it) }
+    }
+
+    private fun scheduleSameServerCheck(playlistId: String) {
+        synchronized(checks) {
+            if (checks[playlistId]?.isActive == true) return
+            checks[playlistId] = scope.launch {
+                try {
+                    sameServerCheck(playlistId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.w(TAG, "[PROFILE-HOST] same-server check failed reason=error playlist=${playlistId.take(8)} (${t.javaClass.simpleName})")
+                }
+            }
+        }
+    }
+
+    /**
+     * users/me with the default profile's sign-in at each address the
+     * playlist uses now that no check has proven, through the request gate.
+     * Same user id and username as recorded before the change at every one:
+     * the hold lifts. Anything else keeps it.
+     */
+    private suspend fun sameServerCheck(playlistId: String) {
+        val rec = hostHolds.hold(playlistId) ?: return
+        val row = playlistDao.rawById(playlistId) ?: return
+        // The snapshot taken before the change; with none it is not the same server.
+        if (rec.expected() == null) {
+            Log.i(TAG, "[PROFILE-HOST] same-server check failed reason=no-record playlist=${playlistId.take(8)}")
+            return
+        }
+        val current = ProfileHostHold.routes(row.urlString, row.lanUrlString)
+        val unproven = ProfileHostHold.unproven(current, rec.trusted)
+        if (unproven.isEmpty()) {
+            // Every address in use is proven: an earlier answer matched, or it is one the snapshot came from (a failed save, or a move back).
+            liftHeld(playlistId, current, "proven")
+            return
+        }
+        val key = row.apiKey?.takeIf { it.isNotBlank() }
+        // Primes this playlist's auth header mode and User-Agent for the calls below.
+        if (key != null) repository.effectiveBaseUrl(row)
+        for (url in listOfNotNull(row.urlString, row.lanUrlString).filter { ProfileHostHold.routeKey(it) in unproven }) {
+            val answer = if (key == null) ProfileHostHold.Answer.NoKey else when (val r = client.checkMe(url, key)) {
+                is DispatcharrClient.MeCheck.Ok -> ProfileHostHold.Answer.Me(ProfileHostHold.Identity(r.me.id, r.me.username))
+                DispatcharrClient.MeCheck.Rejected -> ProfileHostHold.Answer.Rejected
+                DispatcharrClient.MeCheck.Unreachable -> ProfileHostHold.Answer.Unreachable
+            }
+            when (val o = hostHolds.onAnswer(playlistId, ProfileHostHold.routeKey(url), current, answer)) {
+                is HostHoldBook.Outcome.Failed -> {
+                    Log.i(TAG, "[PROFILE-HOST] same-server check failed reason=${o.reason} playlist=${playlistId.take(8)}")
+                    return
+                }
+                HostHoldBook.Outcome.Proven ->
+                    Log.i(TAG, "[PROFILE-HOST] same-server check passed reason=same-user playlist=${playlistId.take(8)}")
+                else -> Unit
+            }
+        }
+        liftHeld(playlistId, current, "same-user")
+    }
+
+    /** Lifts the held profiles whose tag is the snapshot; the rest stay held and ask to sign in. */
+    private fun liftHeld(playlistId: String, current: Set<String>, reason: String) {
+        val ids = hostHolds.liftMatching(playlistId, current)
+        ProfileScope.held = hostHolds.heldProfileIds()
+        if (ids.isEmpty()) return
+        val kept = hostHolds.hold(playlistId)?.profileIds?.size ?: 0
+        Log.i(TAG, "[PROFILE-HOST] lifted playlist=${playlistId.take(8)} profiles=${ids.size} kept=$kept reason=$reason")
+    }
+
+    /** [profileId] signed in again, was removed, or was just added: it is no longer held. */
+    private fun dropHold(profileId: String, reason: String) {
+        val pid = hostHolds.liftProfile(profileId) ?: return
+        ProfileScope.held = hostHolds.heldProfileIds()
+        Log.i(TAG, "[PROFILE-HOST] lifted playlist=${pid.take(8)} profiles=1 reason=$reason")
+    }
+
+    /**
+     * The playlist was deleted: its recorded identity and its hold go. Held
+     * profiles a sync merge moved to another playlist stay held until they
+     * sign in again.
+     */
+    fun forgetPlaylistHost(playlistId: String) {
+        val moved = hostHolds.hold(playlistId)?.profileIds.orEmpty()
+            .filter { id -> store.byId(id)?.playlistId?.let { it != playlistId } == true }.toSet()
+        hostHolds.forgetPlaylist(playlistId, moved)
+        ProfileScope.held = hostHolds.heldProfileIds()
+    }
+
+    /** Cancel on the form: stay on the current profile. */
+    fun closeHeldSignIn() {
+        if (_heldSignIn.value != null) Log.i(TAG, "[PROFILE-HOST] sign-in form closed")
+        _heldSignIn.value = null
+    }
+
+    /**
+     * The form for a held profile: sign in at the playlist's current address
+     * with the typed username and password (the existing login path and
+     * throttle), read the account's current key from users/me, replace that
+     * profile's key and password, lift its hold only, and finish the switch.
+     * Only for the profile whose switch opened the form (its PIN, if any,
+     * passed there). Never logs the password or the key.
+     */
+    suspend fun signInHeldProfile(playlistId: String, profileId: String, username: String, password: String): Result<Unit> = runCatching {
+        val req = _heldSignIn.value
+        check(req != null && req.playlistId == playlistId && req.profileId == profileId) { "Choose the profile again." }
+        val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId && !it.isDefault } ?: error("Profile not found")
+        val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
+        val base = repository.effectiveBaseUrl(row)
+        val jwt = client.login(base, username.trim(), password)
+        val key = client.fetchCurrentUserApiKey(base, jwt.access)
+        val me = client.fetchMe(base, key) ?: throw DispatcharrError.Transport("Could not read the account.")
+        // Another account's sign-in never becomes this profile's.
+        if (!me.username.equals(p.username, ignoreCase = true)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
+        store.update(profileId) { it.copy(password = password).applyMe(me, key) }
+        dropHold(profileId, "sign-in")
+        runCatching { tagLive(playlistId, profileId, base) }
+        // The form closes now and the switch's scrim takes over; run it on
+        // the manager's scope so closing the form never cancels it.
+        ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
+        scope.launch { finishHeldSwitch(playlistId, profileId) }
+        Unit
+    }
+
+    private suspend fun finishHeldSwitch(playlistId: String, profileId: String) {
+        val r = switchTo(playlistId, profileId, bypassPin = true)
+        if (r.isSuccess && _launchPicker.value?.playlistId == playlistId) {
+            switchTickets.remove(profileId)
+            _launchPicker.value = null
+            releaseLaunchHoldIfClear()
+        }
+        r.exceptionOrNull()?.let { Log.w(TAG, "[PROFILE-HOST] switch after sign-in failed (${it.javaClass.simpleName})") }
     }
 
     /** [username] is the Dispatcharr username, never the display name. */
@@ -1684,7 +1987,9 @@ class ProfileManager @Inject constructor(
     }
 
     /** The default profile's /me/ facts onto the playlist row, like the probe writes them. */
-    private suspend fun applyMeToDefaultRow(playlistId: String, profileId: String, me: MeResponse) {
+    private suspend fun applyMeToDefaultRow(playlistId: String, profileId: String, me: MeResponse, base: String, key: String) {
+        // The default profile's users/me: recorded, or the same-server check while a hold is in place.
+        runCatching { noteDefaultMe(playlistId, base, key, me.id, me.username) }
         val props: JsonObject? = me.customProperties
         fun flag(name: String): Boolean = (props?.get(name) as? JsonPrimitive)?.booleanOrNull != false
         kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) {

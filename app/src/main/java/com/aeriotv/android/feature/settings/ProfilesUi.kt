@@ -190,7 +190,9 @@ class ProfilesViewModel @Inject constructor(
     fun switchTo(playlistId: String, profileId: String, onDone: (String?) -> Unit) {
         viewModelScope.launch {
             val r = manager.switchTo(playlistId, profileId)
-            onDone(r.exceptionOrNull()?.let { it.message ?: "Switch failed" })
+            // A held profile (its playlist moved to another server address)
+            // opened the sign-in form instead: no error line here.
+            onDone(r.exceptionOrNull()?.takeUnless { it is com.aeriotv.android.core.profiles.ProfileSignInHeld }?.let { it.message ?: "Switch failed" })
         }
     }
 
