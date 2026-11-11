@@ -43,9 +43,14 @@ object PlaybackHeaders {
         if (playlist == null) return emptyMap()
         return buildMap {
             val key = playlist.apiKey?.takeIf { it.isNotBlank() }
-            // A key the server already rejected is left off: each stream open
-            // would otherwise count against its failed-key throttle.
-            if (isDispatcharr(playlist) && key != null && !DispatcharrRequestGate.isKeyRejected(key)) {
+            // A key the server already rejected stays here on purpose: every
+            // stream open passes StreamGate, which stops an open built with a
+            // held key before any request goes out ("API key no longer
+            // valid"), and sends it again once it is proven good or replaced.
+            // Leaving it off (2026-11-09 to 11-11) sent the open keyless: a
+            // plain 401 the player could not tell from any other, so it sat in
+            // the reconnect loop.
+            if (isDispatcharr(playlist) && key != null) {
                 put("X-API-Key", key)
                 put("Authorization", "ApiKey $key")
             }

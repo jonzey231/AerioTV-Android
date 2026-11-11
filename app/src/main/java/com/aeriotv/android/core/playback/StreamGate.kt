@@ -135,10 +135,10 @@ object StreamGate {
         return StreamRateLimitedException(r.seconds, r.reason)
     }
 
-    /** [request] with its key rewritten to [rewrite] (StreamAuth): the new key, or none. */
+    /** [request] with its key rewritten to [rewrite] (StreamAuth): the new key. A held key never gets here. */
     private fun withKey(request: okhttp3.Request, rewrite: StreamAuth.Rewrite): okhttp3.Request = when (rewrite) {
         StreamAuth.Rewrite.Keep -> request
-        StreamAuth.Rewrite.Strip -> request.newBuilder().removeHeader("X-API-Key").removeHeader("Authorization").build()
+        StreamAuth.Rewrite.Held -> throw StreamKeyRejectedException()
         is StreamAuth.Rewrite.Replace -> request.newBuilder().apply {
             StreamAuth.authHeaders(rewrite.key).forEach { (k, v) -> header(k, v) }
         }.build()
@@ -149,9 +149,11 @@ object StreamGate {
         com.aeriotv.android.core.network.DispatcharrLaunchGate.awaitBlocking()
         val url = chain.request().url.toString()
         // Per open: the key this request was built with, as it stands now
-        // (replaced by a re-sign-in, or held and stripped). StreamAuth.
+        // (replaced by a re-sign-in, or held). A held key stops the open here,
+        // before any request goes out: no keyless retry. StreamAuth.
         val builtKey = StreamAuth.keyOf { chain.request().header(it) }
         val rewrite = StreamAuth.rewriteFor(builtKey)
+        if (rewrite == StreamAuth.Rewrite.Held) throw StreamKeyRejectedException()
         val request = withKey(chain.request(), rewrite)
         beforeOpen(url)
         var resp: Response = chain.proceed(request)
@@ -163,11 +165,6 @@ object StreamGate {
             }
         }
         if (resp.code == 401) {
-            // The key was held and stripped: the stream stops, the open never retries.
-            if (rewrite == StreamAuth.Rewrite.Strip) {
-                resp.close()
-                throw StreamKeyRejectedException()
-            }
             val sentKey = StreamAuth.keyOf { request.header(it) }
             if (sentKey != null) {
                 when (val out = StreamAuth.onUnauthorized(sentKey)) {
@@ -247,7 +244,7 @@ object StreamGate {
             val url = dataSpec.uri.toString()
             val spec = when (val rewrite = StreamAuth.rewriteFor(builtKey)) {
                 StreamAuth.Rewrite.Keep -> dataSpec
-                StreamAuth.Rewrite.Strip -> throw StreamKeyRejectedException()
+                StreamAuth.Rewrite.Held -> throw StreamKeyRejectedException()
                 is StreamAuth.Rewrite.Replace -> dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(rewrite.key))
             }
             beforeOpen(url)

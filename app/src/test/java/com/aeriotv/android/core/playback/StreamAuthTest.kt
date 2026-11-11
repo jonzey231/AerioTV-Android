@@ -22,7 +22,7 @@ import org.junit.Test
  * Stream 401s (Logan 2026-11-10): a local stand-in for the stream URL answers
  * 401 `{"detail":"Invalid API key"}` unless the request carries the good key.
  * The broker is a stub. Shows that a 401 reaches the broker once for every
- * stream that hits it, that a held key is never sent again (stripped per
+ * stream that hits it, that a held key is never sent again (no request at all per
  * open), that a re-sign-in retries the open once with the new key and every
  * later open built with the old key goes out with the new one, and that a key
  * the probe accepts leaves the 401 alone and is not probed again at once.
@@ -103,11 +103,56 @@ class StreamAuthTest {
         assertEquals(1, brokerCalls.get())
         assertEquals("Home", DispatcharrRequestGate.prompt.value?.playlistName)
         // Every later open (a reconnect, a retry, another tile) built with the
-        // dead key goes out without it and stops; the broker is not asked again.
+        // dead key stops before any request: not even a keyless one goes out,
+        // and the broker is not asked again.
         repeat(9) { expectStopped("DEAD") }
         assertEquals(1, brokerCalls.get())
-        assertEquals(1, sentKeys.count { it == "DEAD" })
-        assertEquals(10, sentKeys.size)
+        assertEquals("only the first open reached the server", listOf("DEAD"), sentKeys.toList())
+    }
+
+    @Test fun afterARelaunchReHeldTheKeyNoOpenReachesTheServer() {
+        // The hold is memory only: after a relaunch the first API call (or stream)
+        // with the dead key is refused and the broker holds it again. From then on
+        // the playlist's stream headers still carry the key, so every open is
+        // recognized and stopped locally (2026-11-11: it used to go out keyless,
+        // get a plain 401, and sit in the reconnect loop).
+        StreamAuth.handler = { brokerCalls.incrementAndGet(); StreamAuth.Outcome.Held }
+        DispatcharrRequestGate.markKeyRejected("p1", "DEAD", "Home")
+        val playlist = com.aeriotv.android.core.data.db.entity.PlaylistEntity(
+            id = "p1", name = "Home", urlString = "http://127.0.0.1:1",
+            sourceType = com.aeriotv.android.core.data.SourceType.DispatcharrApiKey.name, apiKey = "DEAD",
+        )
+        val headers = com.aeriotv.android.core.network.PlaybackHeaders.forPlaylist(playlist)
+        assertEquals("the held key stays in the stream headers", "DEAD", StreamAuth.keyOf(headers))
+        repeat(5) {
+            val b = Request.Builder().url(streamUrl())
+            headers.forEach { (k, v) -> b.header(k, v) }
+            try {
+                client.newCall(b.build()).execute().close()
+                fail("the open should stop before the network")
+            } catch (_: StreamKeyRejectedException) {
+            }
+        }
+        assertEquals("nothing reached the server", 0, sentKeys.size)
+        assertEquals("no probe for a key already held", 0, brokerCalls.get())
+    }
+
+    @Test fun aHeldKeyProvenGoodAgainPlaysWithTheSameHeaders() {
+        goodKey = "BACK"
+        DispatcharrRequestGate.markKeyRejected("p1", "BACK", "Home")
+        expectStopped("BACK")
+        assertEquals(0, sentKeys.size)
+        // The automatic re-check (or a sign-in) proved it: the next open goes out with it.
+        DispatcharrRequestGate.clearKey("BACK")
+        open("BACK").use { assertEquals(200, it.code) }
+        assertEquals(listOf("BACK"), sentKeys.toList())
+    }
+
+    @Test fun aHeldKeyWithAReplacementGoesOutAsTheNewKey() {
+        DispatcharrRequestGate.markKeyRejected("p1", "OLD", "Home")
+        DispatcharrRequestGate.noteKeyReplaced("OLD", "GOOD")
+        open("OLD").use { assertEquals(200, it.code) }
+        assertEquals(listOf("GOOD"), sentKeys.toList())
     }
 
     @Test fun streamsThatHitTheSame401TogetherShareOneBrokerCall() {

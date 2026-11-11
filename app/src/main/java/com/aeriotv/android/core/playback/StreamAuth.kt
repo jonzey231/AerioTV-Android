@@ -25,7 +25,10 @@ class StreamKeyRejectedException(cause: Throwable? = null) :
  * Multiview compositor, on-device recording) passes [StreamGate], which:
  *  - per open, rewrites the key the request was built with to its current
  *    state ([rewriteFor]): a key a re-sign-in replaced goes out as the new
- *    key; a held key is stripped (never sent again);
+ *    key; an open built with a held key never goes out at all (no request,
+ *    not even a keyless one) and stops with [StreamKeyRejectedException]
+ *    (2026-11-11: after a relaunch re-held the key, tunes went out keyless,
+ *    got a plain 401, and sat in the reconnect loop);
  *  - on a 401 that carried a key, asks the key broker once ([onUnauthorized],
  *    one at a time per key across every stream): one probe, then a silent
  *    re-sign-in when a password is stored (the open is retried once with the
@@ -46,7 +49,8 @@ object StreamAuth {
     sealed interface Rewrite {
         data object Keep : Rewrite
         data class Replace(val key: String) : Rewrite
-        data object Strip : Rewrite
+        /** The key is held: the open stops before any request. */
+        data object Held : Rewrite
     }
 
     /** The broker's 401 handling (DispatcharrAuthBroker registers it). */
@@ -98,7 +102,7 @@ object StreamAuth {
     fun rewriteFor(key: String?): Rewrite {
         if (key == null) return Rewrite.Keep
         DispatcharrRequestGate.replacementFor(key)?.takeIf { !isHeld(it) }?.let { return Rewrite.Replace(it) }
-        if (isHeld(key)) return Rewrite.Strip
+        if (isHeld(key)) return Rewrite.Held
         return Rewrite.Keep
     }
 
@@ -109,7 +113,7 @@ object StreamAuth {
     fun onUnauthorized(key: String): Outcome {
         when (val r = rewriteFor(key)) {
             is Rewrite.Replace -> return Outcome.Retry(r.key)
-            Rewrite.Strip -> return Outcome.Held
+            Rewrite.Held -> return Outcome.Held
             Rewrite.Keep -> Unit
         }
         val h = DispatcharrRequestGate.keyHash(key)
