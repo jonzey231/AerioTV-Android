@@ -30,6 +30,27 @@ object ProfileRoster {
             .sortedWith(compareBy<ProfileRow> { if (it.order >= 0) it.order else Int.MAX_VALUE }.thenBy { it.username.lowercase() })
 
     /**
+     * A manual add ("Enter details", or an API key) of [username]: the synced
+     * roster row offered for that user under "From your other devices" (the
+     * same case-insensitive match the suggestions use), or null when there is
+     * none and the add is a plain one. A user already on this device has no
+     * suggestion, so no row.
+     */
+    fun rowForManualAdd(rows: List<ProfileRow>, localUsernames: Collection<String>, username: String): ProfileRow? {
+        val name = username.trim().lowercase()
+        if (name.isEmpty()) return null
+        return suggestions(rows, localUsernames).firstOrNull { it.username.lowercase() == name }
+    }
+
+    /**
+     * The stamp an add reports to Dispatcharr Sync: a roster add keeps the
+     * row's own `updatedAt`, so the server row stays the newest for every
+     * field this device did not change; 0 means now (a plain add, or a row
+     * from an older writer with no stamp).
+     */
+    fun addStampAt(seed: ProfileRow?): Long = seed?.updatedAt?.takeIf { it > 0 } ?: 0L
+
+    /**
      * The row's display name, role, order, and avatar on [p]. Absent fields
      * (older writer: blank name, "" role, -1 order, null avatar) keep the
      * local value. The PIN is applied separately (PinStore).

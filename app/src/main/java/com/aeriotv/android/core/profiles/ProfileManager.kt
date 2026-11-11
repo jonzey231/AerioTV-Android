@@ -799,8 +799,23 @@ class ProfileManager @Inject constructor(
         if (store.forPlaylist(playlistId).any { it.username.equals(name, ignoreCase = true) }) {
             return Result.failure(IllegalStateException("$name already has a profile."))
         }
+        rosterRowForManualAdd(playlistId, name)?.let { row ->
+            return addFromRoster(playlistId, row, DispatcharrUserSummary(id = 0, username = name), password, apiKey, fallbackRole = role)
+        }
         return addProfile(playlistId, DispatcharrUserSummary(id = 0, username = name), password, apiKey, role)
     }
+
+    /**
+     * A manual add of a user the synced roster already has (offered under
+     * "From your other devices") finishes as a roster add: the row's role,
+     * PIN, avatar, name, order, and stamp, with the credentials typed here. A
+     * plain add would stamp the row now with no PIN and the picked role, and
+     * the next push would drop that profile's PIN and Child role on every
+     * device. Null = a plain add.
+     */
+    private fun rosterRowForManualAdd(playlistId: String, username: String): com.aeriotv.android.core.sync.dsync.ProfileRow? =
+        ProfileRoster.rowForManualAdd(_roster.value[playlistId].orEmpty(), store.forPlaylist(playlistId).map { it.username }, username)
+            ?.also { Log.i(TAG, "[DSYNC] profiles: manual add of ${it.username} is in the synced roster; finishing as a roster add") }
 
     /**
      * Manual add by API key only: GET /api/accounts/users/me/ with [apiKey]
@@ -817,6 +832,16 @@ class ProfileManager @Inject constructor(
             ?: return Result.failure(IllegalStateException("This API key was not accepted by the server."))
         if (store.forPlaylist(playlistId).any { it.username.equals(me.username, ignoreCase = true) }) {
             return Result.failure(IllegalStateException("${me.username} already has a profile."))
+        }
+        rosterRowForManualAdd(playlistId, me.username)?.let { row ->
+            return addFromRoster(
+                playlistId,
+                row,
+                DispatcharrUserSummary(id = me.id, username = me.username, userLevel = me.userLevel, isSuperuser = me.isSuperuser, isStaff = me.isStaff),
+                null,
+                key,
+                fallbackRole = role,
+            )
         }
         return addProfile(
             playlistId,
@@ -926,7 +951,7 @@ class ProfileManager @Inject constructor(
             }
             // Keep the row's own stamp: the server row stays authoritative
             // for every field this device did not change.
-            mutated(id, "roster-add", seed.updatedAt)
+            mutated(id, "roster-add", ProfileRoster.addStampAt(seed))
         } else {
             mutated(id, "add")
         }
@@ -1089,8 +1114,10 @@ class ProfileManager @Inject constructor(
         apiKey: String?,
         /** A device setup keeps the sender's profile id. */
         wantedId: String? = null,
+        /** A manual add's picked role, for a row from an older writer that carries none. */
+        fallbackRole: ProfileRole? = null,
     ): Result<DispatcharrProfile> {
-        val role = ProfileRole.fromWire(row.role)
+        val role = ProfileRole.fromWire(row.role) ?: fallbackRole
         // One step: the row's fields and PIN are applied inside addProfile
         // before the sync hook fires (an applyRow after the add raced the push).
         val added = addProfile(playlistId, user, password, apiKey, role, seed = row, wantedId = wantedId).getOrElse { return Result.failure(it) }
@@ -1337,6 +1364,9 @@ class ProfileManager @Inject constructor(
      * because this device pushed it, so its undo writes the tombstone.
      */
     fun markFreshAddUndoable(profileId: String) {
+        // A manual add that finished as a roster add is already undoable, and
+        // its undo must write no tombstone: the row is on the server.
+        if (profileId in rosterUndoable.value) return
         freshUndoable += profileId
         rosterUndoable.update { it + profileId }
     }
