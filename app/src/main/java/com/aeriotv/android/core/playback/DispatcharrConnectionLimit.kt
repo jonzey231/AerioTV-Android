@@ -35,13 +35,21 @@ object DispatcharrConnectionLimit {
         /** Not a limit: the server is rate-limiting this network (API key
          *  lockout, [StreamGate]). Same card: a countdown, then the give-up copy. */
         RATE_LIMITED,
+        /** Not a limit: the server refused this playlist's API key and the key
+         *  is held ([StreamAuth]). Same card; Retry opens nothing with the
+         *  held key, so it only plays again once the key is replaced. */
+        KEY_REJECTED,
     }
 
     data class Notice(
         val kind: Kind,
         val title: String,
         val message: String,
-    )
+    ) {
+        /** "Close another stream, then press Retry." belongs under the two limit refusals only. */
+        val closeAnotherStreamHint: Boolean
+            get() = kind == Kind.USER_STREAM_LIMIT || kind == Kind.PROVIDER_LIMIT
+    }
 
     /** True while the active playlist is a Dispatcharr API (Direct Connect)
      *  source. Published by PlaylistRepository whenever the active playlist
@@ -57,6 +65,15 @@ object DispatcharrConnectionLimit {
         kind = Kind.STREAM_ENDED,
         title = "Stream ended",
         message = "This stream was stopped by the server. Press Retry to start it again.",
+    )
+
+    /** A stream 401 whose key is held as rejected (Apple LiveStopNotice.keyRejected):
+     *  the live stream stops, and the "API key no longer valid" prompt points
+     *  at Edit Playlist. */
+    val KEY_REJECTED = Notice(
+        kind = Kind.KEY_REJECTED,
+        title = com.aeriotv.android.core.network.KEY_REJECTED_TITLE,
+        message = com.aeriotv.android.core.network.KEY_REJECTED_MESSAGE,
     )
 
     private const val USER_LIMIT_PREFIX = "Stream limit exceeded"

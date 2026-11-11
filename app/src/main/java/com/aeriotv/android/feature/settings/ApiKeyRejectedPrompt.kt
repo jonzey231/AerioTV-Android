@@ -29,7 +29,7 @@ object EditPlaylistRequest {
 }
 
 /** Title of the rejected-key prompt. */
-const val API_KEY_REJECTED_TITLE = "API key no longer valid"
+const val API_KEY_REJECTED_TITLE = com.aeriotv.android.core.network.KEY_REJECTED_TITLE
 
 /** Body of the rejected-key prompt (key-only playlist, or a password playlist whose re-login was refused too). */
 fun apiKeyRejectedBody(playlistName: String, passwordToo: Boolean): String {

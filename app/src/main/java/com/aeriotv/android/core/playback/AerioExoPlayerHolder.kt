@@ -5399,19 +5399,32 @@ class AerioExoPlayerHolder @Inject constructor(
      * A stream open was answered 401 and the key broker held the key
      * (StreamAuth, Logan 2026-11-10): the stream stops. No reload ladder, no
      * failover walk and no retry: each would be another open the server
-     * counts against this network's failed-key limit. The "Sign-in not
-     * accepted" prompt shows from the request gate. Returns true when this
-     * holder now owns the error.
+     * counts against this network's failed-key limit. The player shows the
+     * "API key no longer valid" notice on the limit card (Apple
+     * LiveStopNotice.keyRejected, 2026-11-11), and the prompt shows from the
+     * request gate. Retry is one fresh tune: StreamGate strips the held key,
+     * so nothing is sent with it, and a key replaced in Edit Playlist plays.
+     * Returns true when this holder now owns the error, including the
+     * duplicate second sighting (load error, then terminal player error).
      */
     private fun handleStreamKeyRejected(error: Throwable): Boolean {
         StreamAuth.find(error) ?: return false
+        if (_connectionLimit.value?.kind == DispatcharrConnectionLimit.Kind.KEY_REJECTED) return true
         Log.w(TAG, "[AUTH] stream key rejected ch=$currentChannelId; stopping, no retry or failover")
         tracer.recover("stream key rejected")
         stoppingRetryJob?.cancel()
         stoppingRetryJob = null
         rateLimitJob?.cancel()
+        val url = lastPlayUrl
+        val catchup = isCatchup
+        if (!catchup) {
+            reconnectUrl = url ?: reconnectUrl
+            reconnectChannelId = currentChannelIdForRebuild ?: currentChannelId ?: reconnectChannelId
+        }
+        connectionLimitWasCatchup = catchup
         liveFailover.resetWalk()
         liveFailover.publishServerStatus(null)
+        _connectionLimit.value = DispatcharrConnectionLimit.KEY_REJECTED
         stop()
         return true
     }

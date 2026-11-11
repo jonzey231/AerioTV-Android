@@ -35,10 +35,7 @@ sealed class DispatcharrError(message: String) : Exception(message) {
      * sent. An [Unauthorized] so every caller that stops on a 401 stops here
      * too; the auth broker never tries to recover it.
      */
-    class KeyRejected : Unauthorized(
-        "Dispatcharr no longer accepts this playlist's API key. Enter the current key in Edit Playlist, " +
-            "or ask your Dispatcharr administrator for a new one.",
-    )
+    class KeyRejected : Unauthorized(KEY_REJECTED_MESSAGE)
     class RefreshExpired(message: String) : DispatcharrError(message)
     class UnexpectedResponse(message: String) : DispatcharrError(message)
     open class Transport(message: String) : DispatcharrError(message)
@@ -153,6 +150,14 @@ fun secondsPhrase(seconds: Long): String = if (seconds == 1L) "1 second" else "$
 /** The countdown line while a 429 is waited out before the next automatic try. */
 fun serverBusyCountdown(seconds: Long, reason: RateLimitReason = RateLimitReason.Other): String =
     "${rateLimitLead(reason)} Trying again in ${secondsPhrase(seconds)}."
+
+/** Title of the rejected-key prompt and of the live player's stop notice (Apple keyRejectedTitle). */
+const val KEY_REJECTED_TITLE = "API key no longer valid"
+
+/** A call or stream the rejected-key gate held: nothing was sent with that key (Apple keyRejectedErrorMessage). */
+const val KEY_REJECTED_MESSAGE =
+    "Dispatcharr no longer accepts this playlist's API key. Enter the current key in Edit Playlist, " +
+        "or ask your Dispatcharr administrator for a new one."
 
 /**
  * The stream-limit refusal ("Stream limit exceeded (2 concurrent streams

@@ -13,11 +13,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * shows), the stream stops, and no stream opens with that key again.
  */
 class StreamKeyRejectedException(cause: Throwable? = null) :
-    IOException(
-        "Dispatcharr no longer accepts this playlist's API key. Enter the current key in Edit Playlist, " +
-            "or ask your Dispatcharr administrator for a new one.",
-        cause,
-    )
+    IOException(com.aeriotv.android.core.network.KEY_REJECTED_MESSAGE, cause)
 
 /**
  * HTTP 401 on Dispatcharr stream opens (Logan 2026-11-10). A Google TV on an
