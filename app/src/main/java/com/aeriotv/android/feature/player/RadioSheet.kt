@@ -64,8 +64,12 @@ fun RadioTransportCard(
     recheckSwitchStreamAllowed: suspend (String) -> Boolean,
     isDispatcharrAdmin: Boolean,
     modifier: Modifier = Modifier,
-    tabletWidth: Dp? = null,
-    /** The caller's row gives the frame (phone, Control a TV button beside it). */
+    /** The nav bar's measured width, like every card above the bar; null
+     *  until measured (then the phone bar's frame). */
+    frameWidth: Dp? = null,
+    /** Tablets: 18 dp side padding; phones 12 dp. */
+    tablet: Boolean = false,
+    /** The caller's row gives the frame (the Control a TV button beside it). */
     inRow: Boolean = false,
 ) {
     val dvrCanRecord = com.aeriotv.android.ui.LocalDvrAccess.current == "manage"
@@ -151,10 +155,10 @@ fun RadioTransportCard(
     val programme = nowProgramme(channel)
 
     Box(
-        modifier = if (tabletWidth != null) {
-            modifier.width(tabletWidth).floatingNavChrome(RoundedCornerShape(percent = 50))
-        } else if (inRow) {
+        modifier = if (inRow) {
             modifier.floatingNavChrome(RoundedCornerShape(percent = 50))
+        } else if (frameWidth != null) {
+            modifier.width(frameWidth).floatingNavChrome(RoundedCornerShape(percent = 50))
         } else {
             modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
                 .floatingNavChrome(RoundedCornerShape(percent = 50))
@@ -162,7 +166,7 @@ fun RadioTransportCard(
     ) {
         CastMiniController(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            horizontalPadding = if (tabletWidth != null) 18.dp else 12.dp,
+            horizontalPadding = if (tablet) 18.dp else 12.dp,
             title = channel.name,
             deviceName = null,
             artUri = logo,

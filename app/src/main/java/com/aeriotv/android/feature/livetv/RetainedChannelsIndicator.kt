@@ -2,6 +2,7 @@ package com.aeriotv.android.feature.livetv
 
 import androidx.compose.foundation.background
 import com.aeriotv.android.feature.main.floatingNavChrome
+import com.aeriotv.android.feature.main.dockCardHeight
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -201,15 +202,9 @@ private fun RetainedChannelsSheet(
  */
 val LocalRetainedChannelIds = androidx.compose.runtime.compositionLocalOf { emptySet<String>() }
 
-/** Kept Live card vertical padding, the cast card's 8 dp. */
-val RetainedCardVerticalPadding = 8.dp
-/** Kept Live card trailing control height, the cast card's 48 dp. */
+/** Dock card trailing control height, the cast card's 48 dp. The card's
+ *  height is the nav bar's measured height (dockCardHeight). */
 val RetainedCardControlHeight = 48.dp
-/**
- * Height of the Kept Live card (64 dp): the Control a TV button beside it on
- * phones takes this diameter so the row reads as one shape (Logan 2026-10-05).
- */
-val RetainedCardHeight = RetainedCardVerticalPadding * 2 + RetainedCardControlHeight
 
 /**
  * Keep Recent Channels Live card (Apple parity, Logan 2026-10-04), phone and
@@ -238,10 +233,11 @@ fun RetainedChannelsPill(
 /**
  * Kept Live dock card (Logan 2026-10-05): the exact shape of the cast card
  * (CastMiniController inside CastTransportCard): the same capsule and
- * floating nav chrome, 8 dp vertical padding, 18 dp (tablet) or 12 dp (phone)
- * side padding, 40 dp tile, 12 dp gap, a bold title and an accent subtitle,
- * and a 48 dp trailing control, so both cards measure the same height and
- * radius. Several kept channels stay one capsule; tap opens the list.
+ * floating nav chrome, the nav bar's measured height (dockCardHeight, Logan
+ * 2026-11-11), 18 dp (tablet) or 12 dp (phone) side padding, 40 dp tile,
+ * 12 dp gap, a bold title and an accent subtitle, and a 48 dp trailing
+ * control, so both cards measure the same height and radius. Several kept
+ * channels stay one capsule; tap opens the list.
  */
 @Composable
 private fun RetainedChannelsCard(
@@ -261,7 +257,8 @@ private fun RetainedChannelsCard(
             .floatingNavChrome(capsuleShape)
             .clip(capsuleShape)
             .clickable(onClick = { if (single) onTune(latest.channelId) else onOpenList() })
-            .padding(horizontal = if (tablet) 18.dp else 12.dp, vertical = RetainedCardVerticalPadding),
+            .dockCardHeight()
+            .padding(horizontal = if (tablet) 18.dp else 12.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
         val logo = latest.logoUrl

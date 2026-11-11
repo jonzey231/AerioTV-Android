@@ -74,9 +74,12 @@ fun CastTransportCard(
      *  pre-check the player's Switch Stream runs before opening. */
     recheckSwitchStreamAllowed: suspend (String) -> Boolean,
     modifier: Modifier = Modifier,
-    /** Tablets (iPad parity, Logan 2026-10-05): the card's fixed width; it
-     *  then takes the tab pill's capsule and chrome. Null on phones. */
-    tabletWidth: androidx.compose.ui.unit.Dp? = null,
+    /** The nav bar's measured width (Logan 2026-10-05, 2026-11-11): every
+     *  card above the bar takes it. Null until the bar is measured; then
+     *  the phone bar's frame (600 dp cap, 20 dp side margins). */
+    frameWidth: androidx.compose.ui.unit.Dp? = null,
+    /** Tablets: 18 dp side padding (iPad parity); phones 12 dp. */
+    tablet: Boolean = false,
     /** Phone-composited Multiview on a web receiver (2026-10-06): the sheet
      *  shows its grid preview (tap a tile for its audio). */
     multiviewCast: com.aeriotv.android.core.cast.multiview.MultiviewCastController? = null,
@@ -340,9 +343,9 @@ fun CastTransportCard(
     }
 
     Box(
-        modifier = if (tabletWidth != null) {
+        modifier = if (frameWidth != null) {
             modifier
-                .width(tabletWidth)
+                .width(frameWidth)
                 .floatingNavChrome(RoundedCornerShape(percent = 50))
         } else {
             // Phones (Logan 2026-10-05): the Kept Live pill's capsule and
@@ -357,7 +360,7 @@ fun CastTransportCard(
     ) {
         CastMiniController(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            horizontalPadding = if (tabletWidth != null) 18.dp else 12.dp,
+            horizontalPadding = if (tablet) 18.dp else 12.dp,
             title = when {
                 switchingTo != null -> "Switching to $switchingTo"
                 hasContent -> title

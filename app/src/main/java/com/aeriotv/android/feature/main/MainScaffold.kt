@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -109,6 +110,7 @@ import com.aeriotv.android.feature.dvr.DvrViewModel
 import com.aeriotv.android.feature.favorites.FavoritesTabContent
 import com.aeriotv.android.feature.favorites.FavoritesViewModel
 import com.aeriotv.android.feature.livetv.LiveTVTabContent
+import com.aeriotv.android.feature.main.DockPlacement.dockGate
 import com.aeriotv.android.feature.livetv.rememberLiveTvFormFactor
 import com.aeriotv.android.feature.miniplayer.MiniPlayerRow
 import com.aeriotv.android.feature.miniplayer.MiniPlayerSession
@@ -1594,30 +1596,40 @@ fun MainScaffold(
                 }
                 val companionTv = companionConn
                     as? com.aeriotv.android.core.cast.companion.CompanionRemoteController.Conn.Connected
-                // Tablets (sw >= 600 dp) and the measured width of the
-                // tablet's wrap-content tab capsule (set by the pill below).
+                // Tablets (sw >= 600 dp): the tablet tab pill, the card side
+                // padding and the tablet dock order.
                 val tabletNav = androidx.compose.ui.platform.LocalConfiguration.current
                     .smallestScreenWidthDp >= 600
-                var navBarWidthPx by remember { mutableStateOf(0) }
-                // Every card above the nav bar takes exactly the bar's measured
-                // frame (Logan 2026-10-05, all platforms). Tablets: the floating
-                // pill's measured width, centered (screen width minus 32 dp, at
-                // most 620 dp, only until the pill has been measured).
+                val dockDensity = LocalDensity.current
+                // The bar's capsule as measured (DockPlacement, set by the
+                // tab bar below), and only when measured for the dock's
+                // current width; until then the dock is hidden anyway.
+                val dockBar = DockPlacement.bar
+                    ?.takeIf { it.containerWidth == DockPlacement.containerWidth }
+                // ONE sizing rule for every card above the nav bar (Logan
+                // 2026-10-05, restated 2026-11-11 with Apple 87d06a8): the
+                // card's width is the bar's measured width, centered with
+                // it, and its height the bar's measured height
+                // (LocalDockCardHeight, provided below).
                 //
                 // Narrow bar (2026-11-09): the tablet pill is wrap-content, so
                 // with few tabs (a playlist with no On Demand, no DVR) it is
                 // narrow, and a card in its frame was squeezed. Below
                 // [DockCardMinWidth] the cards take the full-width frame (the
-                // normal screen margins) instead. Phones are already there:
-                // the phone bar and every phone card row span the width minus
-                // 20 dp margins whatever the tab count, with the Control a TV
-                // button at the row's trailing end.
-                val tabletCardWidth = if (tabletNav) {
-                    val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
-                    val fullFrame = minOf(620.dp, (screenW - 32.dp).coerceAtLeast(0.dp))
-                    val measured = with(LocalDensity.current) { navBarWidthPx.toDp() }
-                    if (navBarWidthPx > 0 && measured >= DockCardMinWidth) measured else fullFrame
+                // normal screen margins, at most 620 dp) instead.
+                // Before the first measurement (the dock is hidden then,
+                // DockPlacement) tablets use that full-width frame and phones
+                // the frame the phone bar is built with.
+                val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+                val dockCardWidth: Dp? = if (dockBar != null) {
+                    val measured = with(dockDensity) { dockBar.width.toDp() }
+                    val container = with(dockDensity) { dockBar.containerWidth.toDp() }
+                    if (measured >= DockCardMinWidth) measured
+                    else minOf(620.dp, (container - 32.dp).coerceAtLeast(0.dp))
+                } else if (tabletNav) {
+                    minOf(620.dp, (screenWidth - 32.dp).coerceAtLeast(0.dp))
                 } else null
+                val dockCardHeight: Dp? = dockBar?.let { with(dockDensity) { it.height.toDp() } }
                 // GH #33: round floating "Control a TV" button above the right
                 // end of the tab bar -- appears when a controllable AerioTV TV
                 // is discovered on the LAN OR a Google Cast route exists, so the
@@ -1629,11 +1641,23 @@ fun MainScaffold(
                     companionConn !is com.aeriotv.android.core.cast.companion
                         .CompanionRemoteController.Conn.Connected &&
                     !casting && !isTv
-                // Tablets (sw >= 600 dp): the button sits static at the
-                // trailing edge on the pill row (below) and never moves with
-                // the collapse (Logan 2026-10-04). Phones keep the above-the-bar
-                // spot that drops level with the minimized pill.
-                val phoneFab = showControlFab && bottomBarVisible && !tabletNav
+                // Large screens (Logan 2026-11-11, Apple 87d06a8
+                // controlATVOnBarRow): the button sits on the bar's own row at
+                // the trailing edge, at the bar's height, and the cards keep
+                // the bar's full width. Decided from the measured layout, not
+                // the size class: a capsule that leaves room on its right for
+                // a bar-height circle, its edge margin and the 12 dp gap
+                // (tablets and an unfolded foldable with a narrow pill, a
+                // phone in landscape). Until measured (dock hidden), the
+                // tablet's pill row, as before.
+                val fabOnBarRow = if (dockBar != null) {
+                    dockBar.sideInset >= dockBar.height +
+                        with(dockDensity) { (BarRowFabEdgeMargin + 12.dp).roundToPx() }
+                } else tabletNav
+                // Phones: the button rides the lowest card above the bar (or
+                // its own row), and drops level with the minimized pill when
+                // the bar collapses.
+                val phoneFab = showControlFab && bottomBarVisible && !fabOnBarRow
                 // Keep Recent Channels Live pill (Apple parity, Logan
                 // 2026-10-04): one compact line sharing the Control a TV
                 // button's row, pill leading and filling the width, button
@@ -1662,8 +1686,8 @@ fun MainScaffold(
                 val mvStaging by multiviewStore.isStaging.collectAsStateWithLifecycle()
                 val mvTiles by multiviewStore.selected.collectAsStateWithLifecycle()
                 val showMv = mvStaging && mvTiles.isNotEmpty() && !isTv
-                val mvRowFrame = if (tabletCardWidth != null) {
-                    Modifier.width(tabletCardWidth)
+                val mvRowFrame = if (dockCardWidth != null) {
+                    Modifier.width(dockCardWidth)
                 } else {
                     Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp)
                 }
@@ -1673,58 +1697,68 @@ fun MainScaffold(
                     .collectAsStateWithLifecycle()
                 val mvBgState = mvBg
                 // Dock stack (Apple parity, HomeView.swift dock VStack). Every
-                // card takes the nav bar's measured frame.
+                // card takes the nav bar's measured frame and height.
                 // Phones, top to bottom: cast card, background Multiview,
-                // staging Multiview, Kept Live directly above the tab bar. The
-                // Control a TV button rides the LOWEST card row at that card's
-                // height (the card narrows), or its own row with no cards.
-                // Tablets, top to bottom: staging Multiview, background
-                // Multiview, Kept Live, cast card at the bottom; no circle
-                // beside them (the tablet button lives on the pill row).
+                // staging Multiview, Kept Live, Set up directly above the tab
+                // bar. Tablets, top to bottom: staging Multiview, background
+                // Multiview, Kept Live, cast card, Set up at the bottom.
+                // Unless the button is on the bar's row (fabOnBarRow), the
+                // Control a TV button rides the LOWEST card row at that
+                // card's height (the card narrows by the button and the gap,
+                // so card plus button span the bar), or its own row with no
+                // cards.
                 val showMvBg = mvBgState != null && !isTv
                 val radioOnDock = com.aeriotv.android.feature.player.RadioMode.state
                     .collectAsStateWithLifecycle().value != null && !isTv && !casting
                 val setupCard = setupOffer
                 val fabRow = when {
                     !phoneFab -> 0
-                    // Set up a TV card: the lowest row (the cast card's spot,
-                    // directly above the tab bar), so the button rides it the
-                    // way it rides Kept Live.
+                    // Set up a TV card: the lowest row (directly above the
+                    // tab bar), so the button rides it the way it rides Kept
+                    // Live.
                     setupCard != null -> 6
-                    showKept -> 1
-                    showMv -> 2
-                    showMvBg -> 3
                     // Radio Mode card row (Apple parity, Logan 2026-10-15):
                     // the card narrows and the button sits at its trailing
                     // edge, like Kept Live. The button hides while casting,
-                    // so the cast card never shares the row.
+                    // so the cast card never shares the row. On tablets the
+                    // Radio card is the lowest card after Set up.
+                    tabletNav && radioOnDock -> 5
+                    showKept -> 1
+                    tabletNav && showMvBg -> 3
+                    showMv -> 2
+                    showMvBg -> 3
                     radioOnDock -> 5
                     else -> 4
                 }
+                // The circle beside a card takes that card's measured height
+                // (Logan 2026-11-11); the bar's height until it is measured.
+                var fabCardHeightPx by remember { mutableIntStateOf(0) }
+                fun fabCardMeasure(row: Int): Modifier =
+                    if (fabRow == row) Modifier.onSizeChanged { fabCardHeightPx = it.height } else Modifier
                 @Composable
                 fun DockFab() {
                     Spacer(Modifier.width(12.dp))
                     CompanionControlFab(
                         onClick = { showCompanionPicker = true },
-                        diameter = com.aeriotv.android.feature.livetv.RetainedCardHeight,
+                        diameter = if (fabCardHeightPx > 0) with(dockDensity) { fabCardHeightPx.toDp() }
+                            else dockCardHeight ?: (com.aeriotv.android.feature.livetv.RetainedCardControlHeight + DockCardVerticalPadding * 2),
                     )
                 }
                 fun gapAfter(row: Int) = if (tabletNav) 12.dp else if (fabRow == row) 10.dp else 8.dp
-                // Set up a TV dock card (setupOffer): the cast card's place,
+                // Set up a TV dock card (setupOffer): the lowest card,
                 // directly above the tab bar; the Control a TV button rides
                 // its row like the other dock cards.
                 @Composable
                 fun DockSetup() {
                     val o = setupCard ?: return
                     if (isTv) return
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.dockGate().fillMaxWidth(), contentAlignment = Alignment.Center) {
                         Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
                             com.aeriotv.android.feature.devicesetup.SetupTvDockCard(
                                 target = o.target,
-                                tablet = tabletNav,
                                 onSetUp = o.onSetUp,
                                 onDismiss = o.onDismiss,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).then(fabCardMeasure(6)),
                             )
                             if (fabRow == 6) DockFab()
                         }
@@ -1734,7 +1768,7 @@ fun MainScaffold(
                 @Composable
                 fun DockKept() {
                     if (showKept) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Box(Modifier.dockGate().fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
                                 com.aeriotv.android.feature.livetv.RetainedChannelsPill(
                                     retained = keptRowList,
@@ -1743,7 +1777,7 @@ fun MainScaffold(
                                     onStop = retainedVm::stop,
                                     onStopAll = retainedVm::stopAll,
                                     capsule = tabletNav,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f).then(fabCardMeasure(1)),
                                 )
                                 if (fabRow == 1) DockFab()
                             }
@@ -1754,14 +1788,14 @@ fun MainScaffold(
                 @Composable
                 fun DockMvStaging() {
                     if (showMv) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Box(Modifier.dockGate().fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
                                 com.aeriotv.android.feature.multiview.MultiviewDockCard(
                                     tiles = mvTiles,
                                     tablet = tabletNav,
                                     onOpen = { showMultiviewSheet = true },
                                     onPlay = playStagedMultiview,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f).then(fabCardMeasure(2)),
                                 )
                                 if (fabRow == 2) DockFab()
                             }
@@ -1772,7 +1806,7 @@ fun MainScaffold(
                 @Composable
                 fun DockMvBg() {
                     if (showMvBg && mvBgState != null) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Box(Modifier.dockGate().fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Row(mvRowFrame, verticalAlignment = Alignment.CenterVertically) {
                                 com.aeriotv.android.feature.multiview.MultiviewDockCard(
                                     tiles = mvBgState.tiles,
@@ -1785,7 +1819,7 @@ fun MainScaffold(
                                         // The mirrored pile ends with the tiles.
                                         if (!multiviewStore.isStaging.value) multiviewStore.clear()
                                     },
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f).then(fabCardMeasure(3)),
                                 )
                                 if (fabRow == 3) DockFab()
                             }
@@ -1796,7 +1830,7 @@ fun MainScaffold(
                 @Composable
                 fun DockFabOnly() {
                     if (fabRow == 4) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Box(Modifier.dockGate().fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Row(mvRowFrame, horizontalArrangement = Arrangement.End) {
                                 CompanionControlFab(onClick = { showCompanionPicker = true })
                             }
@@ -1818,7 +1852,9 @@ fun MainScaffold(
                                 (capsPlaylist?.canSwitchStream() ?: false),
                         ) {
                         com.aeriotv.android.feature.cast.CastTransportCard(
-                            tabletWidth = tabletCardWidth,
+                            modifier = Modifier.dockGate(),
+                            frameWidth = dockCardWidth,
+                            tablet = tabletNav,
                             multiviewCast = multiviewCast,
                             compositeHeaders = if (mvWebReceiver) ({
                                 com.aeriotv.android.core.network.PlaybackHeaders.forPlaylist(state.playlist)
@@ -1864,15 +1900,14 @@ fun MainScaffold(
                 @Composable
                 fun DockRadio() {
                     if (radio != null && !isTv && !casting) {
-                        val radioRow = fabRow == 5 && tabletCardWidth == null
-                        var radioCardPx by remember { mutableStateOf(0) }
-                        val density = LocalDensity.current
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        val radioRow = fabRow == 5
+                        Box(Modifier.dockGate().fillMaxWidth(), contentAlignment = Alignment.Center) {
                         Row(if (radioRow) mvRowFrame else Modifier, verticalAlignment = Alignment.CenterVertically) {
                         com.aeriotv.android.feature.player.RadioTransportCard(
-                            modifier = if (radioRow) Modifier.weight(1f).onSizeChanged { radioCardPx = it.height } else Modifier,
+                            modifier = if (radioRow) Modifier.weight(1f).then(fabCardMeasure(5)) else Modifier,
                             inRow = radioRow,
-                            tabletWidth = tabletCardWidth,
+                            frameWidth = dockCardWidth,
+                            tablet = tabletNav,
                             nowProgramme = { ch -> state.epgByChannel[ch.guideMatchKey]?.nowPlaying() },
                             loadChannelStreams = { channelIntPk ->
                                 val m3uNames = viewModel.loadM3uAccountNames()
@@ -1896,23 +1931,18 @@ fun MainScaffold(
                             recheckSwitchStreamAllowed = { trigger -> viewModel.recheckSwitchStreamAllowed(trigger) },
                             isDispatcharrAdmin = capsPlaylist?.canSwitchStream() ?: false,
                         )
-                        if (radioRow) {
-                            Spacer(Modifier.width(12.dp))
-                            CompanionControlFab(
-                                onClick = { showCompanionPicker = true },
-                                diameter = if (radioCardPx > 0) with(density) { radioCardPx.toDp() }
-                                    else com.aeriotv.android.feature.livetv.RetainedCardHeight,
-                            )
-                        }
+                        if (radioRow) DockFab()
                         }
                         }
                         Spacer(Modifier.height(if (tabletNav) 12.dp else if (radioRow) 10.dp else 8.dp))
                     }
                 }
-                if (tabletNav) {
-                    DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockRadio(); DockCast(); DockSetup()
-                } else {
-                    DockRadio(); DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly(); DockSetup()
+                CompositionLocalProvider(LocalDockCardHeight provides dockCardHeight) {
+                    if (tabletNav) {
+                        DockMvStaging(); DockMvBg(); DockKept(); DockFabOnly(); DockRadio(); DockCast(); DockSetup()
+                    } else {
+                        DockRadio(); DockCast(); DockMvBg(); DockMvStaging(); DockKept(); DockFabOnly(); DockSetup()
+                    }
                 }
                 val miniState = miniPlayerState
                 // Phase 139 / audit #22: on TV the mini-player is a top-right
@@ -1931,7 +1961,7 @@ fun MainScaffold(
                     val nowProgramme = state.epgByChannel[channel.guideMatchKey]?.nowPlaying()
                     // The nav bar's frame, like every card above it.
                     Box(
-                        modifier = (if (tabletCardWidth != null) Modifier.width(tabletCardWidth)
+                        modifier = Modifier.dockGate().then(if (dockCardWidth != null) Modifier.width(dockCardWidth)
                             else Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(horizontal = 20.dp))
                             .clip(RoundedCornerShape(20.dp))
                             .border(
@@ -1980,8 +2010,27 @@ fun MainScaffold(
                     )
                     val density = LocalDensity.current
                     var barSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+                    // A size change (rotation, fold) while a phone bar is
+                    // collapsed: bring it back, since the dock waits for the
+                    // bar to be measured at the new width (DockPlacement).
+                    // 5 s without a measurement shows the dock unmeasured.
+                    val dockWidthNow = DockPlacement.containerWidth
+                    LaunchedEffect(dockWidthNow) {
+                        if (dockWidthNow <= 0) return@LaunchedEffect
+                        if (!DockPlacement.ready(dockWidthNow)) bottomBarVisible = true
+                        kotlinx.coroutines.delay(5_000)
+                        DockPlacement.onTimeout(dockWidthNow)
+                    }
+                    val fadeRun = DockPlacement.fadeRun
+                    LaunchedEffect(fadeRun) { DockPlacement.runFade(fadeRun) }
                     Box(
-                        Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        Modifier.fillMaxWidth()
+                            // The dock's width at this layout: the cards and
+                            // the button show once the bar is measured at it.
+                            .onSizeChanged {
+                                if (DockPlacement.containerWidth != it.width) DockPlacement.containerWidth = it.width
+                            }
+                            .padding(bottom = 8.dp)
                             // While the bar is (or is coming back) out, this
                             // strip owns every touch in it. During the 420 ms
                             // restore the bar is still scaled toward the pill,
@@ -2022,8 +2071,18 @@ fun MainScaffold(
                                     }
                                 },
                                 tablet = tabletNav,
+                                // The capsule's size and the dock width it is
+                                // centered in (layout sizes, so the collapse
+                                // scale below never skews them).
+                                capsuleModifier = Modifier.onGloballyPositioned { c ->
+                                    val container = c.parentLayoutCoordinates?.size?.width
+                                        ?: return@onGloballyPositioned
+                                    DockPlacement.onBarMeasured(
+                                        DockBarMeasure(c.size.width, c.size.height, container),
+                                    )
+                                },
                                 modifier = Modifier
-                                    .onSizeChanged { barSize = it; navBarWidthPx = it.width }
+                                    .onSizeChanged { barSize = it }
                                     .graphicsLayer {
                                         transformOrigin = androidx.compose.ui.graphics.TransformOrigin(pivotX.coerceIn(0f, 1f), 0.5f)
                                         val sx = 1f - collapse * (1f - pillW / barSize.width.coerceAtLeast(1))
@@ -2047,18 +2106,26 @@ fun MainScaffold(
                                     .padding(start = 20.dp)
                                     .graphicsLayer { alpha = reveal; scaleX = 0.6f + 0.4f * reveal; scaleY = 0.6f + 0.4f * reveal },
                             )
-                            if (showControlFab && !tabletNav) {
+                            if (showControlFab && !fabOnBarRow) {
                                 Box(
-                                    Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
+                                    Modifier.align(Alignment.CenterEnd).dockGate().padding(end = 16.dp)
                                         .graphicsLayer { alpha = reveal },
                                 ) {
                                     CompanionControlFab(onClick = { showCompanionPicker = true })
                                 }
                             }
                         }
-                        if (showControlFab && tabletNav) {
-                            Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)) {
-                                CompanionControlFab(onClick = { showCompanionPicker = true }, tablet = true)
+                        // Large screens (fabOnBarRow, Logan 2026-11-11): the
+                        // button on the bar's own row at the trailing edge, a
+                        // circle of the bar's measured height, centered on the
+                        // bar. It stays put while a phone bar collapses.
+                        if (showControlFab && fabOnBarRow) {
+                            Box(Modifier.align(Alignment.CenterEnd).dockGate().padding(end = BarRowFabEdgeMargin)) {
+                                CompanionControlFab(
+                                    onClick = { showCompanionPicker = true },
+                                    tablet = true,
+                                    diameter = dockCardHeight,
+                                )
                             }
                         }
                     }
@@ -2147,6 +2214,132 @@ internal fun Modifier.floatingNavChrome(shape: androidx.compose.ui.graphics.Shap
  */
 internal val DockCardMinWidth = 240.dp
 
+/** The Control a TV button's margin from the trailing edge when it sits on
+ *  the bar's row (the tablet pill row's 16 dp, Logan 2026-10-04). */
+internal val BarRowFabEdgeMargin = 16.dp
+
+/**
+ * One height rule for every card above the nav bar (Logan 2026-11-11, Apple
+ * 87d06a8 DockCardHeight): the floating tab bar's measured height, provided
+ * by the dock in MainScaffold. A card keeps [DockCardVerticalPadding] inside
+ * it; content that needs more (a cast card with its codec note lines, a
+ * large Text Size) grows rather than being squeezed. Null (the card's own
+ * height) until the bar is measured.
+ */
+internal val LocalDockCardHeight = androidx.compose.runtime.compositionLocalOf<Dp?> { null }
+
+/** A dock card's vertical padding inside the bar's height: the cards' 48 dp
+ *  trailing controls fill the 56 dp bar with 4 dp above and below. */
+internal val DockCardVerticalPadding = 4.dp
+
+/** See [LocalDockCardHeight]. Goes where a dock card had its vertical
+ *  padding, after its capsule chrome and click target. */
+@Composable
+internal fun Modifier.dockCardHeight(): Modifier {
+    val h = LocalDockCardHeight.current
+    return (if (h != null) this.heightIn(min = h) else this)
+        .padding(vertical = DockCardVerticalPadding)
+}
+
+/**
+ * The floating tab bar's capsule as measured (Logan 2026-11-11, Apple
+ * 87d06a8): its width and height in px, and the width of the dock it sits
+ * in at that measurement. Both bars center their capsule in the dock, so
+ * the inset on each side is [sideInset].
+ */
+internal data class DockBarMeasure(val width: Int, val height: Int, val containerWidth: Int) {
+    val sideInset: Int get() = (containerWidth - width) / 2
+}
+
+/**
+ * Where the dock cards and the Control a TV button may be drawn (Logan
+ * 2026-11-11, Apple 87d06a8 placementReady). They are laid out from the
+ * bar's measured capsule, so at launch and after every size change
+ * (rotation, fold) they stay hidden until the capsule is measured at the
+ * dock's new width, then fade in over 0.2 s: never a frame at a stale width
+ * or in the other layout's spot. 5 s without a measurement shows them
+ * anyway. Process-wide like Apple's RemoteSessionCardMetrics, so coming
+ * back from the player (the scaffold composes again) does not fade them in
+ * a second time.
+ */
+internal object DockPlacement {
+    var bar by mutableStateOf<DockBarMeasure?>(null)
+        private set
+    /** The dock's width after the latest layout, 0 before the first. */
+    var containerWidth by mutableIntStateOf(0)
+    /** The dock width the 5 s timeout gave up at, 0 when none. */
+    private var timedOutWidth by mutableIntStateOf(0)
+    /** 0 while hidden, 1 when shown; read in the draw phase only. */
+    val fade = androidx.compose.runtime.mutableFloatStateOf(0f)
+    /** Bumped to run the 0.2 s fade-in. */
+    var fadeRun by mutableIntStateOf(0)
+        private set
+
+    fun onBarMeasured(m: DockBarMeasure) {
+        val prev = bar
+        if (m == prev) return
+        bar = m
+        if (prev == null || prev.containerWidth != m.containerWidth) {
+            // Measured for a new window width: fade in from hidden.
+            fade.floatValue = 0f
+            fadeRun++
+        }
+        android.util.Log.i(
+            "TabBar",
+            "[TABBAR] bar measured w=${m.width} h=${m.height} container=${m.containerWidth} side=${m.sideInset}",
+        )
+    }
+
+    private var fadeDone = 0
+
+    /** The 0.2 s fade-in for [run] (MainScaffold's LaunchedEffect on
+     *  [fadeRun]). Left early (the scaffold went away for the player), it
+     *  finishes at full opacity so the dock is not stuck half faded. */
+    suspend fun runFade(run: Int) {
+        if (run == 0 || run == fadeDone) return
+        try {
+            androidx.compose.animation.core.animate(
+                0f, 1f,
+                animationSpec = tween(200, easing = androidx.compose.animation.core.EaseIn),
+            ) { v, _ -> fade.floatValue = v }
+        } finally {
+            if (run == fadeRun) {
+                fade.floatValue = 1f
+                fadeDone = run
+            }
+        }
+    }
+
+    fun onTimeout(width: Int) {
+        if (width <= 0 || ready(width)) return
+        android.util.Log.w("TabBar", "[TABBAR] bar not measured 5 s after launch or a size change; dock shown unmeasured")
+        timedOutWidth = width
+        fade.floatValue = 0f
+        fadeRun++
+    }
+
+    /** True when the dock may be drawn at a dock width of [width] px. */
+    fun ready(width: Int): Boolean =
+        width > 0 && (bar?.containerWidth == width || timedOutWidth == width)
+
+    /**
+     * Draws the dock row it wraps only once [ready] for the width it is laid
+     * out at, faded by [fade]. Checked at layout time against the row's own
+     * constraints (the dock's width), so the frame of a size change, which
+     * still carries the previous measurement, never draws it. An unplaced
+     * row draws nothing and takes no touches; it keeps its space so nothing
+     * above it moves.
+     */
+    fun Modifier.dockGate(): Modifier = this.layout { measurable, constraints ->
+        val p = measurable.measure(constraints)
+        layout(p.width, p.height) {
+            if (ready(constraints.maxWidth)) {
+                p.placeWithLayer(0, 0) { alpha = fade.floatValue }
+            }
+        }
+    }
+}
+
 /**
  * GH #33: round floating button above the right end of the tab bar -- entry
  * to control a discovered TV. Matches the card chrome (surface + faint
@@ -2197,9 +2390,12 @@ private fun FloatingTabBar(
     onSelect: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
     tablet: Boolean = false,
+    /** On the capsule itself, inside the side margins: the dock measures
+     *  the bar here (DockPlacement). */
+    capsuleModifier: Modifier = Modifier,
 ) {
     if (tablet) {
-        TabletTabBar(tabs, selected, onSelect, modifier)
+        TabletTabBar(tabs, selected, onSelect, modifier, capsuleModifier)
         return
     }
     // 2026-07-12 (user report: mistapping channels behind the pill when
@@ -2215,6 +2411,7 @@ private fun FloatingTabBar(
             .widthIn(max = 600.dp)
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
+            .then(capsuleModifier)
             .floatingNavChrome(RoundedCornerShape(36.dp))
             // iPhone bar height (~53 pt): the Android pill measured ~69 dp
             // (Logan 2026-09-09). Outer 6 + item 5 + icon 22 + label 12 + 5 + 6.
@@ -2272,11 +2469,13 @@ private fun TabletTabBar(
     selected: AppTab,
     onSelect: (AppTab) -> Unit,
     modifier: Modifier = Modifier,
+    capsuleModifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
     androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Row(
             modifier = modifier
+                .then(capsuleModifier)
                 .height(56.dp)
                 .floatingNavChrome(RoundedCornerShape(28.dp))
                 // 10 dp outer + 14 dp item padding = 24 dp to the edge;

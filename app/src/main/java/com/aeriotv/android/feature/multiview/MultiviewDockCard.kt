@@ -49,7 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.aeriotv.android.feature.livetv.RetainedCardControlHeight
-import com.aeriotv.android.feature.livetv.RetainedCardVerticalPadding
+import com.aeriotv.android.feature.main.dockCardHeight
 import com.aeriotv.android.feature.main.floatingNavChrome
 import com.aeriotv.android.ui.theme.textAccent
 
@@ -67,8 +67,8 @@ fun multiviewStagedTitle(count: Int): String =
 /**
  * Multiview staging dock card (Logan 2026-10-06), phones and tablets: the
  * exact shape of the cast card and the Kept Live card (capsule, floating nav
- * chrome, 8 dp vertical padding, 12 dp phone / 18 dp tablet side padding,
- * 40 dp tile, 48 dp trailing control). Tap opens the staged list sheet; the
+ * chrome, the nav bar's measured height, 12 dp phone / 18 dp tablet side
+ * padding, 40 dp tile, 48 dp trailing control). Tap opens the staged list sheet; the
  * accent "Play" plays (Play Here, or the play-where prompt while a Cast
  * Connect session to the AerioTV TV app is active). Android TV keeps the
  * in-guide [MultiviewStagingBanner] instead.
@@ -92,7 +92,9 @@ fun MultiviewDockCard(
             .floatingNavChrome(capsule)
             .clip(capsule)
             .clickable(onClick = onOpen)
-            .padding(horizontal = if (tablet) 18.dp else 12.dp, vertical = RetainedCardVerticalPadding),
+            // The nav bar's measured height (Logan 2026-11-11).
+            .dockCardHeight()
+            .padding(horizontal = if (tablet) 18.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(

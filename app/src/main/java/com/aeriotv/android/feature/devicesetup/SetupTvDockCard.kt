@@ -3,7 +3,6 @@ package com.aeriotv.android.feature.devicesetup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
@@ -32,12 +31,11 @@ import androidx.compose.ui.unit.dp
 import com.aeriotv.android.core.setup.SetupCrypto
 import com.aeriotv.android.core.setup.SetupTarget
 import com.aeriotv.android.feature.livetv.RetainedCardControlHeight
-import com.aeriotv.android.feature.livetv.RetainedCardVerticalPadding
+import com.aeriotv.android.feature.main.dockCardHeight
 import com.aeriotv.android.feature.main.floatingNavChrome
 import com.aeriotv.android.feature.multiview.AccentTextControl
 import com.aeriotv.android.ui.settings.SettingsCardMetrics
 import com.aeriotv.android.ui.settings.settingsCardFill
-import com.aeriotv.android.ui.theme.textAccent
 
 /**
  * TVs the user dismissed from the dock, by name and current key, until the
@@ -50,15 +48,12 @@ object SetupDockDismissals {
     fun dismiss(t: SetupTarget) { if (!isDismissed(t)) keys.add(idOf(t)) }
 }
 
-/** Second line of the dock card and the Settings banner. */
 /** Device-type icon for a receiver's advertised `kind` (absent = TV). */
 fun setupKindIcon(kind: String): androidx.compose.ui.graphics.vector.ImageVector = when (kind) {
     com.aeriotv.android.core.setup.SetupProtocol.KIND_PHONE -> Icons.Filled.PhoneAndroid
     com.aeriotv.android.core.setup.SetupProtocol.KIND_TABLET -> Icons.Filled.Tablet
     else -> Icons.Filled.Tv
 }
-
-fun setupWaitingLine(t: SetupTarget) = "Waiting for setup, key ${t.fingerprint}"
 
 /**
  * The TV the dock card is offering right now (null when none, when the
@@ -75,9 +70,11 @@ class SetupTvOffer(
 val LocalSetupTvOffer = staticCompositionLocalOf<SetupTvOffer?> { null }
 
 /**
- * Settings root banner for the TV in [LocalSetupTvOffer]: the dock card's
- * content (TV name, waiting line with the key, Set up, dismiss) in a
- * settings card at the very top of the list.
+ * Settings root banner for the device in [LocalSetupTvOffer]: its icon, its
+ * name on one line, Set up, and dismiss, in a settings card at the very top
+ * of the list. The key check lives on the next screen ("Check that the
+ * device shows XXXX"), so the banner no longer carries a "Waiting for setup,
+ * key XXXX" line (Logan 2026-11-11, Apple 87d06a8).
  */
 @Composable
 fun SetupTvSettingsBanner(offer: SetupTvOffer, modifier: Modifier = Modifier) {
@@ -100,23 +97,15 @@ fun SetupTvSettingsBanner(offer: SetupTvOffer, modifier: Modifier = Modifier) {
             Icon(setupKindIcon(offer.target.kind), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         }
         Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = offer.target.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = setupWaitingLine(offer.target),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.textAccent,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            text = offer.target.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         Box(modifier = Modifier.heightIn(min = RetainedCardControlHeight), contentAlignment = Alignment.Center) {
             AccentTextControl(label = "Set up", onClick = offer.onSetUp)
         }
@@ -127,15 +116,19 @@ fun SetupTvSettingsBanner(offer: SetupTvOffer, modifier: Modifier = Modifier) {
 }
 
 /**
- * Dock card for a TV advertising `_aeriotv-setup._tcp` (docs/DeviceSetupHandoff.md),
- * phones and tablets: the same capsule shell as the other dock cards (floating
- * nav chrome, 8 dp vertical padding, 12 dp phone / 18 dp tablet side padding,
- * 40 dp tile, 48 dp trailing control), placed in the nav bar's measured frame.
+ * Dock card for a device advertising `_aeriotv-setup._tcp`
+ * (docs/DeviceSetupHandoff.md), phones and tablets: one row (Logan
+ * 2026-11-11, Apple 87d06a8) with the device name on one line (truncating),
+ * Set up, and dismiss, in the same capsule shell as the other dock cards
+ * (floating nav chrome, the nav bar's measured height and frame, 48 dp
+ * trailing controls). No device tile and no key line; the key check is on
+ * the next screen. The name starts 18 dp in on every device (Apple's
+ * leading padding), clear of the capsule's rounded end now that no tile
+ * fills it.
  */
 @Composable
 fun SetupTvDockCard(
     target: SetupTarget,
-    tablet: Boolean,
     onSetUp: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -146,36 +139,19 @@ fun SetupTvDockCard(
             .floatingNavChrome(capsule)
             .clip(capsule)
             .clickable(onClick = onSetUp)
-            .padding(start = if (tablet) 18.dp else 12.dp, end = 4.dp, top = RetainedCardVerticalPadding, bottom = RetainedCardVerticalPadding),
+            .dockCardHeight()
+            .padding(start = 18.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.background),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(setupKindIcon(target.kind), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = target.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = setupWaitingLine(target),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.textAccent,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            text = target.name,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         Box(modifier = Modifier.heightIn(min = RetainedCardControlHeight), contentAlignment = Alignment.Center) {
             AccentTextControl(label = "Set up", onClick = onSetUp)
         }

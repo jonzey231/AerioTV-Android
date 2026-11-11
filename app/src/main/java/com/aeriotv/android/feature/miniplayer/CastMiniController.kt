@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.aeriotv.android.feature.main.dockCardHeight
 
 /**
  * The cast card's row, anchored above the floating tab bar whenever this phone
@@ -81,7 +82,10 @@ fun CastMiniController(
             .fillMaxWidth()
             .background(containerColor)
             .clickable(onClick = onTap)
-            .padding(horizontal = horizontalPadding, vertical = 8.dp),
+            // The nav bar's measured height, like every dock card (Logan
+            // 2026-11-11); the codec note lines grow it.
+            .dockCardHeight()
+            .padding(horizontal = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
