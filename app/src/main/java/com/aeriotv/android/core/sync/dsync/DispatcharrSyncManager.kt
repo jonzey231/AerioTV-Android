@@ -481,6 +481,20 @@ class DispatcharrSyncManager @Inject constructor(
         return ok
     }
 
+    /**
+     * The user's App Data key names from the same list call [pullAll] makes
+     * (GET users/me/app-data/), or null when it could not be read.
+     */
+    private suspend fun listedKeys(s: Session): List<String>? {
+        val c = freshConn(s) ?: return null
+        val list = runCatching { client.appDataList(c.base, c.apiKey) }.getOrNull()
+        if (list == null || !list.ok) return null
+        return runCatching {
+            val root = json.parseToJsonElement(list.body.orEmpty()) as? JsonObject
+            (root?.get("apps") as? JsonArray)?.mapNotNull { (it as? JsonObject)?.get("key").asStr() }.orEmpty()
+        }.getOrNull()
+    }
+
     /** Playlist id -> the debounced no-session push. */
     private val peekPushJobs = HashMap<String, Job>()
 
@@ -524,6 +538,15 @@ class DispatcharrSyncManager @Inject constructor(
             val peek = Session(playlistId, profileKey, token, peek = true)
             if (!isAdmin(peek)) {
                 Log.i(TAG, "[DSYNC] profiles: no-session push skipped ($what): last-active profile cannot write profiles; kept for the next session")
+                return@withLock
+            }
+            // The list call a session starts with, before anything is read or
+            // written here: a legacy key listed means the next session must
+            // move it first. The pending mark stays set, so that session sends
+            // this change after its move.
+            val listed = listedKeys(peek)
+            if (!DsyncKeyName.noSessionPushAllowed(listed)) {
+                Log.i(TAG, "[DSYNC] profiles: no-session push left to the session ($what): ${if (listed == null) "key list not read" else "legacy keys listed"}")
                 return@withLock
             }
             Log.i(TAG, "[DSYNC] profiles: no-session push ($what) under the last-active profile")

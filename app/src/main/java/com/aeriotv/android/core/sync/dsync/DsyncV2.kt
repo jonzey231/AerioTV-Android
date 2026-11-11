@@ -66,6 +66,16 @@ object DsyncKeyName {
     /** Any user's main key (the restore probe, which runs before the username is read). */
     fun isMain(name: String): Boolean = name.endsWith(SUFFIX) && name.length > SUFFIX.length && DsyncKey.isValidKeyName(name)
 
+    /**
+     * A no-session `profiles` push (the launch picker's add or remove) may
+     * write only after the same list call a session makes shows no legacy
+     * key for the user. A session moves those first ([renamePlan]); a write
+     * before that would create `<user>.aeriotv`, and the legacy data would
+     * never move. [listed] null = the list call failed: nothing was read, so
+     * the change waits for the next session as well.
+     */
+    fun noSessionPushAllowed(listed: Collection<String>?): Boolean = listed != null && listed.none(::isLegacy)
+
     /** Legacy keys to move under [main]: every `app.molinete.aerio*` key, sorted, when [main] is absent from the list. */
     fun renamePlan(listed: Collection<String>, main: String): List<String> =
         if (main in listed) emptyList() else listed.filter(::isLegacy).sorted()
