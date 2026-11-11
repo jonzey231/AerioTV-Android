@@ -323,10 +323,24 @@ class ProfileManager @Inject constructor(
         val drop = store.forPlaylist(playlistId).filter { it.id in pendingPinAdds && !pinStore.hasPin(it.id) && !it.isDefault }
         drop.forEach { p ->
             pendingPinAdds.remove(p.id)
-            deleteLocal(p, fromSync = false)
-            Log.i(TAG, "[PROFILE] add of ${p.username} undone: no PIN while a Child exists")
+            // A roster add goes on this device only, so it is offered again.
+            val rosterAdd = undoesRosterAdd(p.id)
+            deleteLocal(p, fromSync = false, tombstone = ProfileRoster.undoWritesTombstone(rosterAdd))
+            freshUndoable.remove(p.id)
+            rosterUndoable.update { it - p.id }
+            Log.i(TAG, "[PROFILE] add of ${p.username} undone: no PIN while a Child exists${if (rosterAdd) " (roster add: this device only)" else ""}")
         }
     }
+
+    /** Profiles added from the synced roster in this process (a roster add, or a manual add that finished as one). */
+    private val rosterAddIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Undoing [profileId]'s add leaves no tombstone: it came from the roster,
+     * or it was added during a roster pause and could not tell (a tombstone
+     * then could delete that user's row everywhere once the pause ends).
+     */
+    private fun undoesRosterAdd(profileId: String): Boolean = profileId in rosterAddIds || hostHolds.isPausedAdd(profileId)
 
     // ---- Device Admin PIN (device-local, never synced) ----
     // A PIN tied to no profile: set in onboarding when the first profile is a
@@ -946,6 +960,7 @@ class ProfileManager @Inject constructor(
             // FIRST store write, so the row never exists (or syncs) half built.
             .let { if (seed != null) ProfileRoster.applyRow(it, seed) else it }
         store.upsert(profile)
+        if (seed != null) rosterAddIds += id
         // Signed in just now at the playlist's current address: no older hold
         // applies to this id, and its tag is the server it signed in at.
         dropHold(id, "added")
@@ -1421,8 +1436,8 @@ class ProfileManager @Inject constructor(
         check(profileId in rosterUndoable.value) { "Only a profile just added here can be undone." }
         val p = store.byId(profileId) ?: run { rosterUndoable.update { it - profileId }; return@runCatching }
         check(!p.isDefault) { "The default profile cannot be removed." }
-        val fresh = freshUndoable.remove(profileId)
-        deleteLocal(p, fromSync = false, tombstone = fresh)
+        freshUndoable.remove(profileId)
+        deleteLocal(p, fromSync = false, tombstone = ProfileRoster.undoWritesTombstone(undoesRosterAdd(profileId)))
         rosterUndoable.update { it - profileId }
         refreshActiveRole()
         Log.i(TAG, "[PROFILES] undo add ${p.username}")
@@ -1477,6 +1492,7 @@ class ProfileManager @Inject constructor(
         else if (held && !fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "local-remove", 0L) }
         else if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "undo-add", 0L) }
         dropHold(profileId, "removed")
+        rosterAddIds -= profileId
         hostHolds.tag(profileId, null)
         hostHolds.clearPausedAdd(profileId)
         store.remove(profileId)

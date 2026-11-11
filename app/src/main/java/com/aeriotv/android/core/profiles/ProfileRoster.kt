@@ -43,6 +43,16 @@ object ProfileRoster {
     }
 
     /**
+     * Undoing a fresh add (the onboarding Remove, or Cancel on the "PIN
+     * Required" step after an add while a Child exists): a roster add,
+     * including a manual add that finished as one, is removed on this device
+     * only, with no tombstone, so its row stays on the server and is offered
+     * again under "From your other devices". A plain add keeps the tombstone
+     * it always had (its row exists only because this device pushed it).
+     */
+    fun undoWritesTombstone(rosterAdd: Boolean): Boolean = !rosterAdd
+
+    /**
      * The stamp an add reports to Dispatcharr Sync: a roster add keeps the
      * row's own `updatedAt`, so the server row stays the newest for every
      * field this device did not change; 0 means now (a plain add, or a row
