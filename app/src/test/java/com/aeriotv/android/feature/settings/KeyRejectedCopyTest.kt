@@ -38,6 +38,18 @@ class KeyRejectedCopyTest {
         assertFalse(labels(isTv = true, canSignIn = true).contains("Edit Playlist"))
     }
 
+    @Test fun childNeverSeesEditPlaylist() {
+        // Apple parity (2026-11-11): Edit Playlist is hidden for a Child on every device.
+        assertEquals(listOf("Sign In", "Not Now"), KeyRejectedCopy.buttons(isTv = false, canSignIn = true, isChild = true).map(KeyRejectedCopy::label))
+        assertEquals(listOf("Not Now"), KeyRejectedCopy.buttons(isTv = false, canSignIn = false, isChild = true).map(KeyRejectedCopy::label))
+        assertEquals(listOf("Update from Phone", "Not Now"), KeyRejectedCopy.buttons(isTv = true, canSignIn = false, isChild = true).map(KeyRejectedCopy::label))
+        for (tv in listOf(true, false)) for (sign in listOf(true, false)) {
+            assertFalse(KeyRejectedCopy.buttons(tv, sign, isChild = true).contains(Button.EditPlaylist))
+        }
+        // Everyone else keeps it on phones and tablets.
+        assertTrue(KeyRejectedCopy.buttons(isTv = false, canSignIn = false, isChild = false).contains(Button.EditPlaylist))
+    }
+
     @Test fun promptCopy() {
         assertEquals("API key no longer valid", KeyRejectedCopy.TITLE)
         assertEquals(KeyRejectedCopy.TITLE, API_KEY_REJECTED_TITLE)

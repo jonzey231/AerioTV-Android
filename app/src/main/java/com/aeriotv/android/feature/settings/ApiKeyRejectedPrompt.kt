@@ -46,7 +46,7 @@ const val API_KEY_REJECTED_TITLE = KeyRejectedCopy.TITLE
  * focus; Fix Login, docs/DeviceSetupHandoff.md), "Sign In with Remote" (the
  * same sign-in form; key entry stays in Settings > Edit Playlist), and "Not
  * Now". The sign-in buttons follow the Set up gate (no Child profile, not
- * while the launch PIN screen is up).
+ * while the launch PIN screen is up), and a Child never sees Edit Playlist.
  */
 @Composable
 fun ApiKeyRejectedPromptHost(
@@ -102,9 +102,11 @@ fun ApiKeyRejectedPromptHost(
     val launchGate by signInVm.launchGate.collectAsStateWithLifecycle()
     val launchPicker by signInVm.launchPicker.collectAsStateWithLifecycle()
     val profileToken by com.aeriotv.android.core.profiles.ProfileScope.token.collectAsStateWithLifecycle()
+    // A Child never gets Edit Playlist (the Settings root hides it too).
+    val activeRole by com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle()
     val p = prompt ?: return
     val canSignIn = remember(p, launchGate, launchPicker, profileToken) { signInVm.canSignIn(p.playlistId) }
-    val buttons = KeyRejectedCopy.buttons(isTv, canSignIn)
+    val buttons = KeyRejectedCopy.buttons(isTv, canSignIn, isChild = activeRole == com.aeriotv.android.core.profiles.ProfileRole.Child)
     val focus = remember(p) { FocusRequester() }
     LaunchedEffect(p) { runCatching { focus.requestFocus() } }
     val act: (KeyRejectedCopy.Button) -> Unit = { b ->

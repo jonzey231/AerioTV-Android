@@ -45,11 +45,13 @@ object KeyRejectedCopy {
      * Update from Phone, Sign In with Remote, Not Now (key entry stays in
      * Settings > Edit Playlist). [canSignIn] false (a Child profile, or the
      * launch PIN screen is up; the Set up gate) drops the button that opens
-     * the sign-in form.
+     * the sign-in form. [isChild] (a Child profile is active) drops Edit
+     * Playlist, which a Child cannot open (Apple parity, 2026-11-11); TVs
+     * never show it.
      */
-    fun buttons(isTv: Boolean, canSignIn: Boolean): List<Button> =
+    fun buttons(isTv: Boolean, canSignIn: Boolean, isChild: Boolean = false): List<Button> =
         if (isTv) listOfNotNull(Button.UpdateFromPhone, Button.SignInWithRemote.takeIf { canSignIn }, Button.NotNow)
-        else listOfNotNull(Button.SignIn.takeIf { canSignIn }, Button.EditPlaylist, Button.NotNow)
+        else listOfNotNull(Button.SignIn.takeIf { canSignIn }, Button.EditPlaylist.takeUnless { isChild }, Button.NotNow)
 
     fun label(b: Button): String = when (b) {
         Button.UpdateFromPhone -> UPDATE_FROM_PHONE
