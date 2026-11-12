@@ -249,6 +249,7 @@ fun HeldProfileSignInHost(manager: ProfileManager) {
         onCancel = { manager.closeHeldSignIn() },
         onSignedIn = { manager.closeHeldSignIn() },
         heldProfileId = r.profileId,
-        message = KeyRejectedCopy.hostChanged(r.playlistName),
+        // A profile with no stored sign-in gets the plain form.
+        message = if (r.addressChanged) KeyRejectedCopy.hostChanged(r.playlistName) else null,
     )
 }

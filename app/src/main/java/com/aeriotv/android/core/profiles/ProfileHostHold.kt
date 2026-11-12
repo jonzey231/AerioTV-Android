@@ -110,6 +110,23 @@ object ProfileHostHold {
 
     data class SignIn(val apiKey: String?, val username: String?, val password: String?)
 
+    /**
+     * A non-default profile with no stored sign-in (no API key and no
+     * password; 2026-11-11, security). It never runs on the playlist's own
+     * sign-in: it is treated exactly like a held profile.
+     */
+    fun hasNoSignIn(p: DispatcharrProfile): Boolean =
+        !p.isDefault && p.apiKey.isNullOrBlank() && p.password.isNullOrBlank()
+
+    /**
+     * [p]'s sign-in cannot be used now: held after a server change ([held]),
+     * or none stored. Picking it opens the sign-in form; when it is the
+     * profile a launch or a playlist change reopens, a Child stays with
+     * nothing sent to the playlist's addresses and anyone else leaves for
+     * the default profile, as a held profile does.
+     */
+    fun signInUnusable(p: DispatcharrProfile, held: Boolean): Boolean = !p.isDefault && (held || hasNoSignIn(p))
+
     /** The stored sign-in a switch, a token login, or a re-check may send for [p]: none while held. */
     fun usable(p: DispatcharrProfile, held: Boolean): SignIn =
         if (held && !p.isDefault) SignIn(null, p.username, null) else SignIn(p.apiKey, p.username, p.password)

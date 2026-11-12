@@ -221,7 +221,9 @@ class PlaylistRepository @Inject constructor(
             playlist.urlString.takeIf { it.isNotBlank() },
             playlist.lanUrlString?.takeIf { it.isNotBlank() },
         )
-        activeCredentials.set(prefixes, playlist.apiKey)
+        // The active profile's key, never the playlist's own while another
+        // profile is installed (a sign-in written under defaultOnly).
+        activeCredentials.set(prefixes, com.aeriotv.android.core.profiles.ProfileScope.activeKeyFor(playlist.id, playlist.apiKey))
     }
 
     /**

@@ -169,15 +169,20 @@ class ProfileManager @Inject constructor(
         }
         val pid = store.lastActivePlaylistId ?: return
         var active = store.activeProfileId(pid)?.let(store::byId)
-        if (active != null && !active.isDefault && hostHolds.isHeld(active.id)) {
+        // Held, or with no stored sign-in (treated the same, 2026-11-11).
+        if (active != null && !active.isDefault && unusable(active.id)) {
             if (ProfileHostHold.staysActiveWhenHeld(active.effectiveRole())) {
                 // A held Child stays active (no reset to the default, so no
                 // launch picker either), sending nothing until the hold lifts.
-                seal(active.id, hostHolds.hold(pid)?.current.orEmpty())
-                Log.i(TAG, "[PROFILE-HOST] restored the held Child on ${pid.take(8)}; it stays until the hold lifts or a PIN switch")
+                val held = hostHolds.isHeld(active.id)
+                val row = if (held) null else rawRowBlocking(pid)
+                seal(active.id, hostHolds.hold(pid)?.current?.takeIf { it.isNotEmpty() }
+                    ?: row?.let { ProfileHostHold.routes(it.urlString, it.lanUrlString) }.orEmpty())
+                if (!held) openNoSignInForm(pid, active.id, row?.name.orEmpty())
+                Log.i(TAG, "[PROFILE-HOST] restored the ${if (held) "held" else "signed-out"} Child on ${pid.take(8)}; it stays until it signs in, the hold lifts, or a PIN switch")
             } else {
                 store.setActiveProfileId(pid, null)
-                Log.i(TAG, "[PROFILE-HOST] restored the default profile on ${pid.take(8)}: the active profile's sign-in is held")
+                Log.i(TAG, "[PROFILE-HOST] restored the default profile on ${pid.take(8)}: the active profile's sign-in is held or missing")
                 active = null
             }
         }
@@ -245,7 +250,7 @@ class ProfileManager @Inject constructor(
     suspend fun pickAtLaunch(profileId: String): Result<Unit> {
         val pk = _launchPicker.value ?: return Result.success(Unit)
         if (pinStore.hasPin(profileId) && !switchTickets.contains(profileId)) return Result.failure(IllegalStateException("Enter PIN"))
-        if (profileId == activeProfileIdNow(pk.playlistId) && !hostHolds.isHeld(profileId)) {
+        if (profileId == activeProfileIdNow(pk.playlistId) && !unusable(profileId)) {
             switchTickets.remove(profileId)
             _launchPicker.value = null
             releaseLaunchHoldIfClear()
@@ -719,10 +724,13 @@ class ProfileManager @Inject constructor(
         store.lastActivePlaylistId = pid
         playlistDao.rawById(pid)?.let { ensureDefaultProfile(it) }
         var active = store.activeProfileId(pid)?.let(store::byId)
-        if (active != null && !active.isDefault && hostHolds.isHeld(active.id)) {
+        if (active != null && !active.isDefault && unusable(active.id)) {
             if (ProfileHostHold.staysActiveWhenHeld(active.effectiveRole())) {
-                // A held Child stays, sending nothing to its playlist's addresses.
-                playlistDao.rawById(pid)?.let { seal(active!!.id, ProfileHostHold.routes(it.urlString, it.lanUrlString)) }
+                // A held Child (or one with no stored sign-in) stays, sending nothing to its playlist's addresses.
+                playlistDao.rawById(pid)?.let {
+                    seal(active!!.id, ProfileHostHold.routes(it.urlString, it.lanUrlString))
+                    openNoSignInForm(pid, active!!.id, it.name)
+                }
             } else {
                 // Its sign-in is held after a server address change: the default profile it is.
                 store.setActiveProfileId(pid, null)
@@ -1552,11 +1560,13 @@ class ProfileManager @Inject constructor(
         if (!bypassPin && pinStore.hasPin(profileId)) {
             check(switchTickets.remove(profileId)) { "Enter PIN" }
         }
-        if (hostHolds.isHeld(profileId)) {
-            // Its sign-in is held after a server address change: nothing is
-            // sent with it. The "Sign in to Dispatcharr" form asks for a fresh one.
-            _heldSignIn.value = HeldSignIn(playlistId, profileId, playlistDao.rawById(playlistId)?.name.orEmpty())
-            Log.i(TAG, "[PROFILE-HOST] sign-in form opened for a held profile on ${playlistId.take(8)}")
+        if (unusable(profileId)) {
+            // Its sign-in is held after a server address change, or it has
+            // none stored: nothing is sent, and never the playlist's own.
+            // The "Sign in to Dispatcharr" form asks for a fresh one.
+            val held = hostHolds.isHeld(profileId)
+            _heldSignIn.value = HeldSignIn(playlistId, profileId, playlistDao.rawById(playlistId)?.name.orEmpty(), addressChanged = held)
+            Log.i(TAG, "[PROFILE-HOST] sign-in form opened for a ${if (held) "held" else "signed-out"} profile on ${playlistId.take(8)}")
             throw ProfileSignInHeld()
         }
         val gen = switchGen.incrementAndGet()
@@ -1602,7 +1612,7 @@ class ProfileManager @Inject constructor(
             mutex.withLock {
                 tLock = System.currentTimeMillis()
                 // A hold that landed since switchTo looked: never activate it.
-                if (!target.isDefault && hostHolds.isHeld(target.id)) throw ProfileSignInHeld()
+                if (!target.isDefault && unusable(target.id)) throw ProfileSignInHeld()
                 if (target.isDefault) {
                     ProfileScope.activate(null)
                     store.setActiveProfileId(playlistId, null)
@@ -1649,7 +1659,7 @@ class ProfileManager @Inject constructor(
                 store.setActiveProfileId(playlistId, null)
                 if (me != null) applyMeToDefaultRow(playlistId, target.id, me, base, a.key)
             } else {
-                if (hostHolds.isHeld(target.id)) throw ProfileSignInHeld()
+                if (unusable(target.id)) throw ProfileSignInHeld()
                 val held = ProfileHostHold.usable(target, hostHolds.isHeld(target.id))
                 val a = authenticate(playlistId, target.id, base, target.username, held.password, held.apiKey)
                 path = a.path
@@ -1770,7 +1780,13 @@ class ProfileManager @Inject constructor(
     // password, only the [PROFILE-HOST] lines below.
 
     /** A held profile the user picked: the "Sign in to Dispatcharr" form is up for it. */
-    data class HeldSignIn(val playlistId: String, val profileId: String, val playlistName: String)
+    data class HeldSignIn(
+        val playlistId: String,
+        val profileId: String,
+        val playlistName: String,
+        /** Held after a server address change; false = it has no stored sign-in (the plain form). */
+        val addressChanged: Boolean = true,
+    )
 
     private val _heldSignIn = kotlinx.coroutines.flow.MutableStateFlow<HeldSignIn?>(null)
     val heldSignIn: kotlinx.coroutines.flow.StateFlow<HeldSignIn?> = _heldSignIn
@@ -1788,7 +1804,19 @@ class ProfileManager @Inject constructor(
     private val leftLive = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val checks = HashMap<String, kotlinx.coroutines.Job>()
 
-    fun isSignInHeld(profileId: String): Boolean = hostHolds.isHeld(profileId)
+    fun isSignInHeld(profileId: String): Boolean = unusable(profileId)
+
+    /** [profileId] is non-default and its sign-in cannot be used: held, or none stored (treated the same). */
+    private fun unusable(profileId: String): Boolean =
+        store.byId(profileId)?.let { ProfileHostHold.signInUnusable(it, hostHolds.isHeld(it.id)) } == true
+
+    /** Open the plain sign-in form for [profileId], which has no stored sign-in. */
+    private fun openNoSignInForm(playlistId: String, profileId: String, playlistName: String) {
+        if (hostHolds.isHeld(profileId)) return
+        if (store.byId(profileId)?.let(ProfileHostHold::hasNoSignIn) != true) return
+        _heldSignIn.value = HeldSignIn(playlistId, profileId, playlistName, addressChanged = false)
+        Log.i(TAG, "[PROFILE] sign-in form opened: the active profile on ${playlistId.take(8)} has no stored sign-in")
+    }
 
     /** Playlists whose Dispatcharr Sync `profiles` category is paused (some profile on them is held). */
     private val _rosterPaused = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
@@ -1803,7 +1831,9 @@ class ProfileManager @Inject constructor(
      */
     private fun heldChanged() {
         val heldNow = hostHolds.heldProfileIds()
-        val released = ProfileScope.sealed - heldNow
+        // A Child with no stored sign-in stays sealed until it signs in.
+        val signedOut = ProfileScope.sealed.filter { id -> store.byId(id)?.let(ProfileHostHold::hasNoSignIn) == true }
+        val released = ProfileScope.sealed - heldNow - signedOut.toSet()
         if (released.isNotEmpty()) {
             ProfileScope.sealed = ProfileScope.sealed - released
             if (ProfileScope.sealed.isEmpty()) ProfileScope.sealedRoutes = emptySet()
@@ -1876,6 +1906,10 @@ class ProfileManager @Inject constructor(
         if (ids.isEmpty()) return false
         return placeHold(toPlaylist, ids, ProfileHostHold.routes(fromBase, fromLan), hostHolds.recorded(fromPlaylist), ProfileHostHold.routes(toBase, toLan))
     }
+
+    /** The playlist row, read off the main thread (restoreSync runs before any coroutine). Null on failure. */
+    private fun rawRowBlocking(playlistId: String): com.aeriotv.android.core.data.db.entity.PlaylistEntity? =
+        runCatching { kotlinx.coroutines.runBlocking(Dispatchers.IO) { playlistDao.rawById(playlistId) } }.getOrNull()
 
     /** Keep the held Child [profileId] installed with no sign-in, and refuse Dispatcharr requests to [routes]. */
     private fun seal(profileId: String, routes: Set<String>) {
@@ -2098,6 +2132,8 @@ class ProfileManager @Inject constructor(
         if (!me.username.equals(p.username, ignoreCase = true)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }
         dropHold(profileId, "sign-in")
+        // A Child that had no stored sign-in is no longer sealed.
+        heldChanged()
         runCatching { tagLive(playlistId, profileId, base) }
         // The form closes now and the switch's scrim takes over; run it on
         // the manager's scope so closing the form never cancels it.

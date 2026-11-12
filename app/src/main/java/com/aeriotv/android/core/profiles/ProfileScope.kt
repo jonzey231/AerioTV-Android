@@ -102,6 +102,18 @@ object ProfileScope {
 
     fun activeOverlay(): Overlay? = overlay
 
+    /**
+     * The API key requests for [playlistId] may carry outside the row reads
+     * (image requests): the installed profile's (none while it is sealed or
+     * has none), else [rowKey], the playlist's own. Never the playlist's own
+     * while another profile is installed, even for a row read under
+     * [defaultOnly] (2026-11-11, security).
+     */
+    fun activeKeyFor(playlistId: String, rowKey: String?): String? {
+        val o = overlay?.takeIf { it.playlistId == playlistId } ?: return rowKey
+        return if (o.profileId in sealed) null else o.apiKey
+    }
+
     /** Install (or clear, with null) the active non-default profile. A held profile is never installed, except a held Child ([sealed]). */
     fun activate(newOverlay: Overlay?) {
         val next = newOverlay?.takeUnless { it.profileId in held && it.profileId !in sealed }
