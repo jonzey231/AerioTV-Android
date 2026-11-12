@@ -100,7 +100,7 @@ fun PinEntryDialog(
     lockSeconds: (() -> Int)? = null,
     /** Start focus on Clear instead of "1" (a step that follows another pad). */
     focusClear: Boolean = false,
-    /** Entering an existing PIN: its stored length (null = unknown, 6 dots). */
+    /** Entering an existing PIN: its stored length (null = unknown: a dot per digit typed). */
     pinLength: Int? = null,
     /** Setting a new PIN: 4 dots that grow to 6 as digits are typed. */
     setting: Boolean = false,
@@ -226,13 +226,10 @@ fun PinEntryDialog(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+                    // Unknown length (a synced PIN): dots appear as digits are typed.
                     PinDots(
                         filled = entries.size,
-                        count = when {
-                            fixed != null -> fixed
-                            setting -> entries.size.coerceIn(PinRules.MIN_LENGTH, PinRules.MAX_LENGTH)
-                            else -> PinRules.MAX_LENGTH
-                        },
+                        count = PinRules.dotCount(knownLength = fixed, setting = setting, typed = entries.size),
                     )
                     Text(
                         error.orEmpty(),
@@ -286,7 +283,8 @@ fun PinEntryDialog(
 
 @Composable
 private fun PinDots(filled: Int, count: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    // The row keeps its height while empty, so nothing moves on the first digit.
+    Row(Modifier.height(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         repeat(count) { i ->
             val on = i < filled
             Box(

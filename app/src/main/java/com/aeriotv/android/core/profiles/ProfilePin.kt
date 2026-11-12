@@ -60,6 +60,30 @@ object PinRules {
     fun hashV2(saltHex: String, normalized: String): String =
         com.aeriotv.android.core.sync.dsync.DsyncPinHash.hash(saltHex, normalized)
 
+    /**
+     * Check [entries] against a v2 record. The PIN's length on a correct
+     * entry (what this device stores, so later pads show that many dots), or
+     * null on a wrong one, which teaches no length.
+     */
+    fun checkV2(type: PinType, hash: String, saltHex: String, entries: List<String>): Int? {
+        val n = normalize(type, entries) ?: return null
+        return if (matches(hashV2(saltHex, n), hash)) n.length else null
+    }
+
+    /**
+     * How many dots a PIN pad shows (owner 2026-11-12, Apple 1951293). A
+     * known length: that many. Setting a PIN: at least the minimum, one more
+     * per digit up to the maximum. An unknown length (a PIN that arrived
+     * through Dispatcharr Sync, which syncs only the hash and salt): one dot
+     * per digit typed, never a fixed row of empty dots (a 4-digit PIN showed
+     * 6). The first correct entry stores the length ([checkV2]).
+     */
+    fun dotCount(knownLength: Int?, setting: Boolean, typed: Int): Int = when {
+        knownLength != null -> knownLength.coerceIn(MIN_LENGTH, MAX_LENGTH)
+        setting -> typed.coerceIn(MIN_LENGTH, MAX_LENGTH)
+        else -> typed.coerceIn(0, MAX_LENGTH)
+    }
+
     /** Wire names in the Dispatcharr Sync `profiles` key. */
     fun wireType(type: PinType?): String = when (type) {
         PinType.Numbers -> "numbers"
@@ -211,9 +235,10 @@ class ProfilePinStore @Inject constructor(
         val r = record(profileId) ?: return true
         val n = PinRules.normalize(r.type, entries) ?: return false
         if (r.salt != null) {
-            val ok = PinRules.matches(PinRules.hashV2(r.salt, n), r.hash)
-            if (ok) saveLength(profileId, n.length)
-            return ok
+            // The first correct entry stores the length (a synced PIN arrives without one).
+            val len = PinRules.checkV2(r.type, r.hash, r.salt, entries) ?: return false
+            saveLength(profileId, len)
+            return true
         }
         val ok = PinRules.matches(PinRules.hash(deviceSalt(), profileId, r.type, n), r.hash)
         if (ok) {

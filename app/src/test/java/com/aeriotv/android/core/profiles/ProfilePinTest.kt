@@ -34,6 +34,33 @@ class ProfilePinTest {
         assertTrue(PinRules.matches(h, PinRules.hash(salt, "p1", PinType.Numbers, "2580")))
     }
 
+    @Test fun unknownLengthShowsADotPerDigitTyped() {
+        // A synced PIN has no length here: no fixed row of empty dots.
+        assertEquals(0, PinRules.dotCount(knownLength = null, setting = false, typed = 0))
+        assertEquals(3, PinRules.dotCount(knownLength = null, setting = false, typed = 3))
+        assertEquals(PinRules.MAX_LENGTH, PinRules.dotCount(knownLength = null, setting = false, typed = 9))
+        // A known length shows that many.
+        assertEquals(4, PinRules.dotCount(knownLength = 4, setting = false, typed = 1))
+        assertEquals(6, PinRules.dotCount(knownLength = 6, setting = false, typed = 0))
+        // Setting a PIN starts at the minimum and grows.
+        assertEquals(PinRules.MIN_LENGTH, PinRules.dotCount(knownLength = null, setting = true, typed = 2))
+        assertEquals(5, PinRules.dotCount(knownLength = null, setting = true, typed = 5))
+    }
+
+    @Test fun aSyncedPinLearnsItsLengthOnTheFirstCorrectEntry() {
+        // Only the hash and salt sync; the length is what checkV2 hands the store.
+        val saltHex = "0".repeat(32)
+        val hash = PinRules.hashV2(saltHex, "1234")
+        // A wrong entry teaches no length.
+        assertNull(PinRules.checkV2(PinType.Numbers, hash, saltHex, listOf("1", "2", "3", "5")))
+        // Too short to be a PIN: no length either.
+        assertNull(PinRules.checkV2(PinType.Numbers, hash, saltHex, listOf("1", "2", "3")))
+        // The first correct entry: 4, so the pad shows 4 dots from then on.
+        assertEquals(4, PinRules.checkV2(PinType.Numbers, hash, saltHex, listOf("1", "2", "3", "4")))
+        val six = PinRules.hashV2(saltHex, "UDLRUD")
+        assertEquals(6, PinRules.checkV2(PinType.Directions, six, saltHex, listOf("Up", "Down", "Left", "Right", "Up", "Down")))
+    }
+
     @Test fun backoffLocksAfterFiveAndDoubles() {
         var b = PinBackoff()
         val t = 1_000_000L
