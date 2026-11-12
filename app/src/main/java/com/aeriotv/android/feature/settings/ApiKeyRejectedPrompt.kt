@@ -111,6 +111,9 @@ fun ApiKeyRejectedPromptHost(
     // A Child never gets Edit Playlist (the Settings root hides it too).
     val activeRole by com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle()
     val p = prompt ?: return
+    // Never over the launch PIN gate or the launch picker: the prompt (and
+    // its Edit Playlist, Sign In, and Update from Phone) waits until it passes.
+    if (!LaunchPromptGate.promptShows(pending = true, gateUp = launchGate != null, pickerUp = launchPicker != null)) return
     val canSignIn = remember(p, launchGate, launchPicker, profileToken) { signInVm.canSignIn(p.playlistId) }
     val isChild = activeRole == com.aeriotv.android.core.profiles.ProfileRole.Child
     // The refused key is a non-default profile's own: only its own sign-in (APP7-1).

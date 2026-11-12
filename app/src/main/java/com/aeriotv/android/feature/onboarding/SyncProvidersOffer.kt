@@ -98,7 +98,9 @@ fun SyncProvidersOfferHost(
     var offer by remember { mutableStateOf<SyncProvidersOfferViewModel.Offer?>(null) }
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
-    LaunchedEffect(armed) { if (armed && offer == null) offer = vm.evaluate() }
+    // Waits for the launch PIN gate and the launch picker.
+    val locked = com.aeriotv.android.feature.settings.launchLocked()
+    LaunchedEffect(armed, locked) { if (armed && !locked && offer == null) offer = vm.evaluate() }
 
     val consent = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
@@ -110,6 +112,7 @@ fun SyncProvidersOfferHost(
     }
 
     val o = offer ?: return
+    if (locked) return
     val focus = remember { FocusRequester() }
     LaunchedEffect(o) { runCatching { focus.requestFocus() } }
     SettingsAlertDialog(

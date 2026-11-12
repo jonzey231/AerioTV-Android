@@ -91,7 +91,9 @@ fun UpdateGate(currentRoute: String?) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val onMainTabs = currentRoute == Routes.MAIN
+    // Waits for the launch PIN gate and the launch picker: no download or install before it passes.
+    val locked = com.aeriotv.android.feature.settings.launchLocked()
+    val onMainTabs = currentRoute == Routes.MAIN && !locked
     val whatsNewSettled = lastSeenWhatsNew == BuildConfig.VERSION_NAME
     val visible = !sessionDismissed && onMainTabs && when (state) {
         is UpdateState.Available -> whatsNewSettled

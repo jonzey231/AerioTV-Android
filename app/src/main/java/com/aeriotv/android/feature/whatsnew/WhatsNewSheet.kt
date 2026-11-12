@@ -261,7 +261,9 @@ fun WhatsNewGate() {
         shownThisSession = true
     }
 
-    if (visible) {
+    // Waits for the launch PIN gate and the launch picker.
+    val locked = com.aeriotv.android.feature.settings.launchLocked()
+    if (visible && !locked) {
         WhatsNewSheet(
             version = current,
             items = WhatsNewContent.CURRENT,

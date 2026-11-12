@@ -305,6 +305,9 @@ fun KeyRejectedSignInDialog(
 @Composable
 fun HeldProfileSignInHost(manager: ProfileManager) {
     val request by manager.heldSignIn.collectAsStateWithLifecycle()
+    // Waits for the launch PIN gate (a signed-out Child restored at launch opens it there).
+    val gate by manager.launchGate.collectAsStateWithLifecycle()
+    if (!LaunchPromptGate.heldFormShows(requested = request != null, gateUp = gate != null)) return
     val r = request ?: return
     val vm: KeyRejectedSignInViewModel = androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel(key = "held-profile-sign-in")
     KeyRejectedSignInDialog(
