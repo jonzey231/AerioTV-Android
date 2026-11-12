@@ -547,7 +547,9 @@ fun ProfilesSection(playlistId: String) {
     var avatarFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var removing by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var adding by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
+    // A refused action shows a dialog (title, reason, OK), never red text here.
+    var refusal by remember { mutableStateOf<ProfileRefusal?>(null) }
+    fun refuse(title: String?, reason: String?) { ProfileRefusal.of(title, reason)?.let { refusal = it } }
     var busy by remember { mutableStateOf(false) }
     var pinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var userQrFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
@@ -589,7 +591,7 @@ fun ProfilesSection(playlistId: String) {
         liftedId = null
         Log.i("ProfilesUi", "[PROFILES] pick-up drop id=${d.from} from=${d.from} to=${d.to} save=${d.changed}")
         if (d.changed) {
-            status = vm.setOrder(playlistId, d.order.map { it.id }).exceptionOrNull()?.message
+            refuse(null, vm.setOrder(playlistId, d.order.map { it.id }).exceptionOrNull()?.message)
         }
         // Placed where it started: nothing is saved and no sheet opens.
     }
@@ -606,9 +608,9 @@ fun ProfilesSection(playlistId: String) {
         actionsFor = p
     }
     fun doSwitch(p: DispatcharrProfile) {
-        busy = true; status = null
+        busy = true
         com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Guide)
-        vm.switchTo(playlistId, p.id) { err -> busy = false; status = err }
+        vm.switchTo(playlistId, p.id) { err -> busy = false; refuse("Switch to this profile", err) }
     }
     val rowFocus = remember { mutableMapOf<String, androidx.compose.ui.focus.FocusRequester>() }
     // After a removal, focus lands on the next row (or the previous one when
@@ -617,7 +619,7 @@ fun ProfilesSection(playlistId: String) {
         val i = profiles.indexOfFirst { it.id == p.id }
         val next = profiles.getOrNull(i + 1) ?: profiles.getOrNull(i - 1)
         val err = vm.remove(p.id).exceptionOrNull()?.message
-        status = err
+        refuse("Remove Profile", err)
         if (err == null && next != null) rowFocus[next.id]?.let { restoreFocus(it, "next profile row after remove") }
     }
     // TV: when the scrim drops, focus returns to the row that started the switch.
@@ -749,9 +751,6 @@ fun ProfilesSection(playlistId: String) {
             if (busy) {
                 Row(Modifier.padding(16.dp)) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
             }
-            status?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp))
-            }
         }
         SettingsSectionFooter(
             "Each profile signs in as its own Dispatcharr user. Favorites, recordings, and watch history are kept per profile on this device.",
@@ -807,7 +806,10 @@ fun ProfilesSection(playlistId: String) {
                         val at = if (isTv) -1 else profiles.indexOfFirst { it.id == p.id }
                         fun moveRow(how: com.aeriotv.android.core.profiles.ProfileManager.Move) {
                             actionsFor = null
-                            status = vm.move(playlistId, p.id, how).exceptionOrNull()?.message
+                            refuse(
+                                if (how == com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) "Move Up" else "Move Down",
+                                vm.move(playlistId, p.id, how).exceptionOrNull()?.message,
+                            )
                             scope.launch { rowFocus[p.id]?.let { restoreFocus(it, "profile row after move") } }
                         }
                         if (!isTv && at > 0) ChoiceRow(label = "Move Up", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
@@ -850,14 +852,19 @@ fun ProfilesSection(playlistId: String) {
     userQrFor?.let { p ->
         com.aeriotv.android.feature.qrscan.UserQrFlow(playlistId, p.id, onClose = { userQrFor = null })
     }
-    settingPin?.let { p -> SetPinFlow(playlistId, p, vm) { err -> settingPin = null; status = err } }
-    removingPin?.let { p -> RemovePinFlow(playlistId, p, vm) { err -> removingPin = null; status = err } }
-    roleFor?.let { p -> RoleFlow(playlistId, p, vm) { err -> roleFor = null; status = err } }
-    resettingPin?.let { p -> ResetPinFlow(playlistId, p, vm) { err -> resettingPin = null; status = err } }
-    channelProfilesFor?.let { p -> ChannelProfilesDialog(playlistId, p, vm) { err -> channelProfilesFor = null; status = err } }
+    settingPin?.let { p ->
+        // The action's title as it was offered: Change PIN with a PIN, else Set PIN.
+        val title = remember(p.id) { if (vm.hasPin(p.id)) "Change PIN" else "Set PIN" }
+        SetPinFlow(playlistId, p, vm) { err -> settingPin = null; refuse(title, err) }
+    }
+    removingPin?.let { p -> RemovePinFlow(playlistId, p, vm) { err -> removingPin = null; refuse("Remove PIN", err) } }
+    roleFor?.let { p -> RoleFlow(playlistId, p, vm) { err -> roleFor = null; refuse("Role", err) } }
+    resettingPin?.let { p -> ResetPinFlow(playlistId, p, vm) { err -> resettingPin = null; refuse("Reset PIN", err) } }
+    channelProfilesFor?.let { p -> ChannelProfilesDialog(playlistId, p, vm) { err -> channelProfilesFor = null; refuse("Channel Profiles", err) } }
+    refusal?.let { r -> ProfileRefusalDialog(r) { refusal = null } }
     avatarFor?.let { p ->
         AvatarPickerDialog(profile = p, onDismiss = { avatarFor = null; rowFocus[p.id]?.let { fr -> scope.launch { restoreFocus(fr, "profile row after avatar") } } }) { spec ->
-            status = vm.setAvatar(playlistId, p.id, spec).exceptionOrNull()?.message
+            refuse("Avatar", vm.setAvatar(playlistId, p.id, spec).exceptionOrNull()?.message)
             avatarFor = null
             rowFocus[p.id]?.let { fr -> scope.launch { restoreFocus(fr, "profile row after avatar") } }
         }

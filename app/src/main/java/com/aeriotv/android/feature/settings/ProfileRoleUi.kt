@@ -94,7 +94,8 @@ fun ManageProfilesPage(onBack: () -> Unit) {
     var unlocked by rememberSaveable { mutableStateOf(false) }
     var asking by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
+    // A refused action shows a dialog (title, reason, OK), never red text here.
+    var refusal by remember { mutableStateOf<ProfileRefusal?>(null) }
     var pinFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var confirm by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -116,10 +117,10 @@ fun ManageProfilesPage(onBack: () -> Unit) {
     }
 
     fun doSwitch(p: DispatcharrProfile) {
-        busy = true; status = null
+        busy = true
         // A switch lands on the Live TV root: focus the guide grid after.
         com.aeriotv.android.core.profiles.ProfileSwitchFocus.arm(com.aeriotv.android.core.profiles.ProfileSwitchFocus.Target.Guide)
-        vm.switchTo(pid, p.id) { err -> busy = false; status = err }
+        vm.switchTo(pid, p.id) { err -> busy = false; ProfileRefusal.of("Switch to this profile", err)?.let { refusal = it } }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -180,9 +181,9 @@ fun ManageProfilesPage(onBack: () -> Unit) {
                     }
                 }
             }
-            status?.let { item("status") { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
         }
     }
+    refusal?.let { r -> ProfileRefusalDialog(r) { refusal = null } }
     if (asking) {
         AdminPinDialog(pid, vm, title = "Enter a PIN from an Admin or Standard profile", onDismiss = { asking = false }) {
             asking = false
