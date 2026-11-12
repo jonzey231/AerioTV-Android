@@ -99,10 +99,14 @@ object ProfileHostHold {
      */
     fun staysActiveWhenHeld(role: ProfileRole): Boolean = role == ProfileRole.Child
 
-    /** The profiles a route change holds: every non-default profile with a stored key or password. */
+    /**
+     * The profiles a route change holds: every non-default profile, with or
+     * without a stored sign-in (item 9). A keyless one is held like the rest:
+     * picking it opens the sign-in form with the "server address changed"
+     * line, and the roster pause runs while it is held.
+     */
     fun toHold(profiles: List<DispatcharrProfile>): Set<String> =
-        profiles.filter { !it.isDefault && (!it.apiKey.isNullOrBlank() || !it.password.isNullOrBlank()) }
-            .map { it.id }.toSet()
+        profiles.filter { !it.isDefault }.map { it.id }.toSet()
 
     data class SignIn(val apiKey: String?, val username: String?, val password: String?)
 

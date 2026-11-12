@@ -1836,7 +1836,8 @@ class ProfileManager @Inject constructor(
      * local URLs can differ, so the moved sign-ins can land on an address
      * they were never used at. When either route differs they are held like
      * a route change, trusted at the old playlist's routes and checked
-     * against the identity recorded for it. Profiles already held stay held.
+     * against the identity recorded for it (every moved non-default profile,
+     * keyless ones included). Profiles already held stay held.
      * Synchronous, no network, no lock. True when a profile is held.
      */
     fun holdMergedSignIns(

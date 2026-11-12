@@ -105,11 +105,21 @@ class ProfileHostHoldTest {
 
     // ---- The hold and the frozen identity ----
 
-    @Test fun onlyNonDefaultProfilesWithAStoredSignInAreHeld() {
+    @Test fun everyNonDefaultProfileIsHeldWithOrWithoutAStoredSignIn() {
         val held = ProfileHostHold.toHold(
             listOf(profile("A", isDefault = true), profile("B"), profile("C", key = null, password = "pw"), profile("D", key = null)),
         )
-        assertEquals(setOf("B", "C"), held)
+        assertEquals(setOf("B", "C", "D"), held)
+    }
+
+    @Test fun aPlaylistWithOnlyKeylessExtraProfilesPausesTheRosterAfterARouteChange() {
+        val book = HostHoldBook(MemoryBacking())
+        book.record("P1", admin)
+        val ids = ProfileHostHold.toHold(listOf(profile("A", isDefault = true), profile("K1", key = null), profile("K2", key = null)))
+        assertEquals(setOf("K1", "K2"), ids)
+        assertNotNull(book.hold("P1", ids, ProfileHostHold.routes(oldServer, null)))
+        assertTrue(book.isPaused("P1"))
+        assertTrue(book.isHeld("K1") && book.isHeld("K2"))
     }
 
     @Test fun nothingToHoldPlacesNoHold() {
@@ -442,8 +452,8 @@ class ProfileHostHoldTest {
             "The server address for Home changed. Sign in again to use this profile.",
             KeyRejectedCopy.hostChanged("Home"),
         )
-        // A profile that never had a stored sign-in is not held: it behaves as before.
-        assertFalse(profile("E", key = null, password = null).id in ProfileHostHold.toHold(listOf(profile("E", key = null, password = null))))
+        // A keyless profile is held too, and so shows the same form and line (item 9).
+        assertTrue(profile("E", key = null, password = null).id in ProfileHostHold.toHold(listOf(profile("E", key = null, password = null))))
     }
 
     // ---- Copy ----
