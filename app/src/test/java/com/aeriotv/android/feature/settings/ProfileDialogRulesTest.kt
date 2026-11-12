@@ -90,6 +90,23 @@ class ProfileDialogRulesTest {
         assertEquals(8, ProfileDialogRules.formGapDp(isTv = false))
     }
 
+    @Test fun theTvFormIsCompactSoItFitsWithOneSuggestionRow() {
+        val f = ProfileDialogRules.TvForm
+        // Fields 48 (Material's 56), segment and radio padding trimmed, a 48 suggestion row.
+        assertEquals(48, f.FIELD_HEIGHT_DP)
+        assertEquals(6, f.SEGMENT_PADDING_DP)
+        assertEquals(0, f.RADIO_PADDING_DP)
+        assertEquals(48, f.SUGGESTION_ROW_DP)
+        // Less space between the suggestion row and the divider and heading.
+        assertEquals(0, f.DIVIDER_TOP_DP)
+        // The card's own padding: 16 above and below (24), 8 under the title (16), 12 over the buttons (24).
+        assertEquals(16, f.CARD_PADDING_DP)
+        assertEquals(8, f.TITLE_GAP_DP)
+        assertEquals(12, f.BUTTONS_GAP_DP)
+        // Measured at 1080p with one suggestion row: 478.5 dp of the 486 dp cap (90% of 540), no scroll.
+        assertTrue(478.5f <= 540 * ProfileDialogRules.maxHeightFraction(isTv = true, form = true))
+    }
+
     @Test fun onTvAddProfileSitsBesideCancelInTheButtonRow() {
         // TV: the submit leaves the scrolling form for the pinned button row.
         assertTrue(ProfileDialogRules.formSubmitInButtonRow(isTv = true))

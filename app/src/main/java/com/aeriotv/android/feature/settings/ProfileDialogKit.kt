@@ -75,6 +75,31 @@ object ProfileDialogRules {
     /** The gap between a form's parts: tighter on TV so the form fits. */
     fun formGapDp(isTv: Boolean): Int = if (isTv) 4 else 8
 
+    /**
+     * Add Profile's form on TV, compact so it fits at 1080p with one "From
+     * your other devices" row (owner 2026-11-12, Apple parity): text field
+     * height, the segmented control's and Role radios' inner padding, the
+     * suggestion row, and the card's own padding. Text keeps its TV style.
+     */
+    object TvForm {
+        /** A text field (Material's default is 56). */
+        const val FIELD_HEIGHT_DP = 48
+        /** The segmented control's item padding, top and bottom (10 elsewhere). */
+        const val SEGMENT_PADDING_DP = 6
+        /** A Role radio's padding, top and bottom (4 elsewhere). */
+        const val RADIO_PADDING_DP = 0
+        /** A suggestion row's minimum height (56 elsewhere). */
+        const val SUGGESTION_ROW_DP = 48
+        /** The space above the divider after the last suggestion (4 elsewhere). */
+        const val DIVIDER_TOP_DP = 0
+        /** The card's padding above and below (Material's is 24). */
+        const val CARD_PADDING_DP = 16
+        /** Between the title and the form (Material's is 16). */
+        const val TITLE_GAP_DP = 8
+        /** Between the form and the button row (Material's is 24). */
+        const val BUTTONS_GAP_DP = 12
+    }
+
     /** The height cap for a dialog: a form dialog on TV gets [TV_FORM_MAX_HEIGHT_FRACTION]. */
     fun maxHeightFraction(isTv: Boolean, form: Boolean): Float = if (isTv && form) TV_FORM_MAX_HEIGHT_FRACTION else MAX_HEIGHT_FRACTION
 
@@ -170,6 +195,9 @@ object ProfileDialogRules {
 /** True inside a profile dialog's content: its rows drop their own inset on phones and tablets. */
 internal val LocalInProfileDialog = staticCompositionLocalOf { false }
 
+/** True inside Add Profile's form on TV: fields, radios, and suggestion rows use [ProfileDialogRules.TvForm]. */
+val LocalTvCompactForm = staticCompositionLocalOf { false }
+
 /** The card's height cap (about 80% of the screen; 90% for a form dialog on TV). */
 @Composable
 private fun profileDialogMaxHeight(form: Boolean = false) = (
@@ -231,6 +259,10 @@ fun ProfileAlertDialog(
     /** A form (Add Profile): on TV it may grow to about 90% of the screen. */
     form: Boolean = false,
 ) {
+    if (form && com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+        TvFormDialog(onDismissRequest, confirmButton, modifier, dismissButton, title, text, outsideTapCancels)
+        return
+    }
     com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = confirmButton,
@@ -263,6 +295,65 @@ fun ProfileAlertDialog(
         },
         properties = DialogProperties(dismissOnClickOutside = outsideTapCancels),
     )
+}
+
+/**
+ * Add Profile's card on TV: the Settings dialog look (surface card, centered
+ * title, the form, Cancel and Add Profile at the bottom right, below the
+ * scrolling form) with tighter padding, so the form fits at 1080p
+ * ([ProfileDialogRules.TvForm]). The content scrolls on its own.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TvFormDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier,
+    dismissButton: (@Composable () -> Unit)?,
+    title: (@Composable () -> Unit)?,
+    text: (@Composable () -> Unit)?,
+    outsideTapCancels: Boolean,
+) {
+    androidx.compose.material3.BasicAlertDialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(dismissOnClickOutside = outsideTapCancels),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = modifier.heightIn(max = profileDialogMaxHeight(form = true)),
+        ) {
+            Column(Modifier.padding(horizontal = 24.dp, vertical = ProfileDialogRules.TvForm.CARD_PADDING_DP.dp)) {
+                title?.let { t ->
+                    CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+                        ProvideTextStyle(MaterialTheme.typography.headlineSmall.copy(textAlign = TextAlign.Center)) {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { t() }
+                        }
+                    }
+                    Spacer(Modifier.height(ProfileDialogRules.TvForm.TITLE_GAP_DP.dp))
+                }
+                text?.let { body ->
+                    Box(Modifier.weight(1f, fill = false).fillMaxWidth()) {
+                        CompositionLocalProvider(
+                            androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant,
+                            LocalInProfileDialog provides true,
+                        ) {
+                            ProvideTextStyle(MaterialTheme.typography.bodyMedium) { body() }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(ProfileDialogRules.TvForm.BUTTONS_GAP_DP.dp))
+                androidx.compose.foundation.layout.Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    dismissButton?.invoke()
+                    confirmButton()
+                }
+            }
+        }
+    }
 }
 
 /** The centered lines under a dialog's title that describe it (a role and username, a profile name). */

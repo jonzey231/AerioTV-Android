@@ -880,6 +880,10 @@ internal fun IconTextField(
     trailingFocused: () -> Boolean = { false },
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = aerioTextFieldKeyboardOptions(),
 ) {
+    if (com.aeriotv.android.feature.settings.LocalTvCompactForm.current) {
+        CompactIconTextField(value, onValueChange, placeholder, leading, enabled, visualTransformation, trailing, trailingFocused, keyboardOptions)
+        return
+    }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -905,6 +909,77 @@ internal fun IconTextField(
     )
 }
 
+
+/**
+ * [IconTextField] inside Add Profile's form on TV: the same outlined field
+ * (icon, placeholder, reveal eye, TV focus handling) at
+ * [com.aeriotv.android.feature.settings.ProfileDialogRules.TvForm.FIELD_HEIGHT_DP]
+ * with tighter inner padding, so the text keeps its size and is never
+ * clipped (Material's own field cannot go below 56 dp).
+ */
+@Composable
+private fun CompactIconTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    leading: ImageVector,
+    enabled: Boolean,
+    visualTransformation: VisualTransformation,
+    trailing: @Composable (() -> Unit)?,
+    trailingFocused: () -> Boolean,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors()
+    val textColor = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth()
+            .height(com.aeriotv.android.feature.settings.ProfileDialogRules.TvForm.FIELD_HEIGHT_DP.dp)
+            .tvFormFieldInput(
+                horizontalFocusEscape = trailing != null,
+                okSuppressed = trailingFocused,
+            ),
+        enabled = enabled,
+        singleLine = true,
+        textStyle = androidx.compose.material3.LocalTextStyle.current.copy(color = textColor),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+        visualTransformation = visualTransformation,
+        keyboardOptions = keyboardOptions,
+        interactionSource = interaction,
+        decorationBox = { inner ->
+            androidx.compose.material3.OutlinedTextFieldDefaults.DecorationBox(
+                value = value,
+                innerTextField = inner,
+                enabled = enabled,
+                singleLine = true,
+                visualTransformation = visualTransformation,
+                interactionSource = interaction,
+                placeholder = { Text(placeholder, style = androidx.compose.material3.LocalTextStyle.current.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = leading,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                trailingIcon = trailing,
+                colors = colors,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                container = {
+                    androidx.compose.material3.OutlinedTextFieldDefaults.Container(
+                        enabled = enabled,
+                        isError = false,
+                        interactionSource = interaction,
+                        colors = colors,
+                    )
+                },
+            )
+        },
+    )
+}
 
 @Composable
 internal fun PasswordField(
@@ -988,7 +1063,11 @@ private fun SegmentItem(
             .clip(RoundedCornerShape(18.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 10.dp),
+            .padding(
+                vertical = if (com.aeriotv.android.feature.settings.LocalTvCompactForm.current) {
+                    com.aeriotv.android.feature.settings.ProfileDialogRules.TvForm.SEGMENT_PADDING_DP.dp
+                } else 10.dp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Text(

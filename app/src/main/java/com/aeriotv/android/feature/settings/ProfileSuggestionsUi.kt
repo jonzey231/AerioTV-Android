@@ -170,7 +170,7 @@ internal fun RosterSuggestions(
                 Modifier
                     .weight(1f)
                     .then(if (isTv) Modifier.focusRequester(rowFocus) else Modifier)
-                    .heightIn(min = 56.dp)
+                    .heightIn(min = if (LocalTvCompactForm.current) ProfileDialogRules.TvForm.SUGGESTION_ROW_DP.dp else 56.dp)
                     .onFocusChanged { focused = it.isFocused }
                     .settingsRowCard(focused)
                     .then(if (isTv && !isAdded) Modifier.clickable(enabled = canAdd) { add(r) } else Modifier)
@@ -255,7 +255,10 @@ internal fun RosterSuggestions(
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (com.aeriotv.android.core.profiles.ProfileRoster.showsManualFormHeading(listedRows.size, formFollows)) {
-            androidx.compose.material3.HorizontalDivider(Modifier.padding(top = 4.dp), thickness = 1.dp)
+            androidx.compose.material3.HorizontalDivider(
+                Modifier.padding(top = if (LocalTvCompactForm.current) ProfileDialogRules.TvForm.DIVIDER_TOP_DP.dp else 4.dp),
+                thickness = 1.dp,
+            )
             // Same style as the "From your other devices" title above.
             Text(com.aeriotv.android.core.profiles.ProfileRoster.MANUAL_FORM_HEADING, style = MaterialTheme.typography.titleSmall)
         }

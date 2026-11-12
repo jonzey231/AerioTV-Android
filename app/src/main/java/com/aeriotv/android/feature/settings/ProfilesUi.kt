@@ -47,6 +47,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -1109,6 +1110,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
             onDismissRequest = onClose,
             title = { Text("Add Profile") },
             text = {
+                CompositionLocalProvider(LocalTvCompactForm provides isTv) {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(gap)) {
                     // Suggestions sit right above the form: set apart by a divider and a heading.
                     RosterSuggestions(playlistId, vm, users = null, onAdded = onClose, formFollows = true)
@@ -1121,6 +1123,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                         spacing = gap,
                         submit = rowSubmit,
                     )
+                }
                 }
             },
             confirmButton = {
@@ -1315,7 +1318,7 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
                             if (r == com.aeriotv.android.core.profiles.ProfileRole.Child && !vm.childGateClear(playlistId)) gate = true
                             else onSelect(r)
                         }
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                        .padding(horizontal = 4.dp, vertical = if (LocalTvCompactForm.current) ProfileDialogRules.TvForm.RADIO_PADDING_DP.dp else 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     androidx.compose.material3.RadioButton(
