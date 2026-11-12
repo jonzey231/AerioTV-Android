@@ -2,7 +2,6 @@ package com.aeriotv.android.core.setup
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -52,10 +51,30 @@ class SameAccountTest {
     }
 
     @Test
-    fun knownUserIsTheRowThenTheFactsThenTheDefaultProfile() {
-        assertEquals("row", FixLogin.knownUser(" row ", "facts", "profile"))
-        assertEquals("facts", FixLogin.knownUser("", "facts", "profile"))
-        assertEquals("profile", FixLogin.knownUser(null, "  ", "profile"))
-        assertNull(FixLogin.knownUser(null, "", " "))
+    fun knownAccountIsTheRecordedIdentityThenTheRowThenTheDefaultProfile() {
+        val recorded = com.aeriotv.android.core.profiles.ProfileHostHold.Identity(7, "Parent")
+        assertEquals(FixLogin.KnownAccount("Parent", 7), FixLogin.knownAccount(recorded, "row", "profile"))
+        assertEquals(FixLogin.KnownAccount("row", 0), FixLogin.knownAccount(null, " row ", "profile"))
+        assertEquals(FixLogin.KnownAccount("profile", 0), FixLogin.knownAccount(null, "  ", "profile"))
+        assertEquals(FixLogin.KnownAccount(null, 0), FixLogin.knownAccount(null, "", " "))
+        // A recorded id with a blank name still decides by the id.
+        assertEquals(FixLogin.KnownAccount("row", 7), FixLogin.knownAccount(com.aeriotv.android.core.profiles.ProfileHostHold.Identity(7, ""), "row", null))
+    }
+
+    @Test
+    fun anotherProfilesNameNeverStandsInForTheDefault() {
+        // No recorded identity and an API-key row (no username): the default
+        // profile's name decides, never a name a non-default profile wrote.
+        val known = FixLogin.knownAccount(null, null, "kid")
+        assertFalse(FixLogin.sameAccount(known.username, known.userId, "parent", 1, childInvolved = true))
+        assertTrue(FixLogin.sameAccount(known.username, known.userId, "KID", 12, childInvolved = true))
+    }
+
+    @Test
+    fun theRecordedIdIsComparedWheneverThereIsOne() {
+        val known = FixLogin.knownAccount(com.aeriotv.android.core.profiles.ProfileHostHold.Identity(12, "kid"), "kid", "kid")
+        // Same name, another account (deleted and recreated on the server): refused.
+        assertFalse(FixLogin.sameAccount(known.username, known.userId, "kid", 13, childInvolved = false))
+        assertTrue(FixLogin.sameAccount(known.username, known.userId, "kid", 12, childInvolved = false))
     }
 }

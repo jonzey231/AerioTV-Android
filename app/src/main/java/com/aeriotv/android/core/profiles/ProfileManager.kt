@@ -1276,10 +1276,8 @@ class ProfileManager @Inject constructor(
     fun defaultProfileUsername(playlistId: String): String? =
         store.forPlaylist(playlistId).firstOrNull { it.isDefault }?.username?.trim()?.takeIf { it.isNotEmpty() }
 
-    /** The default profile's Dispatcharr user id: the identity recorded for the playlist, else the profile's own (0 = none). */
-    fun defaultUserId(playlistId: String): Int =
-        hostHolds.recorded(playlistId)?.userId?.takeIf { it > 0 }
-            ?: store.forPlaylist(playlistId).firstOrNull { it.isDefault }?.userId?.takeIf { it > 0 } ?: 0
+    /** The default identity recorded for [playlistId] (users/me with the default sign-in; frozen while held), or null. */
+    fun recordedDefaultIdentity(playlistId: String): ProfileHostHold.Identity? = hostHolds.recorded(playlistId)
 
     /** The active or the default profile on [playlistId] is a Child. */
     fun childInvolved(playlistId: String): Boolean =

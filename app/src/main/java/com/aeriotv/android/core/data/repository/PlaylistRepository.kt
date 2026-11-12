@@ -576,20 +576,21 @@ class PlaylistRepository @Inject constructor(
     }
 
     /**
-     * Item 11: a sign-in reconnects only [playlistId]'s current account. The
-     * known user is the row's username, else the account facts, else the
-     * default profile's, plus the recorded default user id; with none, a
-     * Child is refused. A mismatch throws InvalidCredentials, which the
+     * Item 11: a sign-in reconnects only [playlistId]'s current account
+     * ([com.aeriotv.android.core.setup.FixLogin.knownAccount]: the recorded
+     * default identity, else the row's own username, else the default
+     * profile's; the recorded id whenever there is one); with none, a Child
+     * is refused. A mismatch throws InvalidCredentials, which the
      * sign-in form shows as its existing "did not accept" line.
      */
     private suspend fun requireSameAccount(playlistId: String, row: PlaylistEntity, me: com.aeriotv.android.core.network.MeResponse) {
         val profiles = profileManager.get()
-        val known = com.aeriotv.android.core.setup.FixLogin.knownUser(
+        val known = com.aeriotv.android.core.setup.FixLogin.knownAccount(
+            profiles.recordedDefaultIdentity(playlistId),
             row.username,
-            runCatching { appPreferences.dispatcharrAccountFactsOnce(playlistId).username }.getOrNull(),
             profiles.defaultProfileUsername(playlistId),
         )
-        if (!com.aeriotv.android.core.setup.FixLogin.sameAccount(known, profiles.defaultUserId(playlistId), me.username, me.id, profiles.childInvolved(playlistId))) {
+        if (!com.aeriotv.android.core.setup.FixLogin.sameAccount(known.username, known.userId, me.username, me.id, profiles.childInvolved(playlistId))) {
             Log.w("DispatcharrAuthBroker", "[AUTH] sign-in for ${playlistId.take(8)} refused: not the playlist's current account")
             throw com.aeriotv.android.core.network.DispatcharrError.InvalidCredentials("Dispatcharr did not accept that username or password.")
         }

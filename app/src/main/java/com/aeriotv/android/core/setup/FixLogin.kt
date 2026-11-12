@@ -134,9 +134,8 @@ object FixLogin {
      * Item 11 (security, 2026-11-11): the sign-in form and Fix Login reconnect
      * only the playlist's CURRENT account, whatever the account. Before
      * anything is written, users/me for the new sign-in must name the known
-     * user: [knownUsername] (the row's, else the account facts, else the
-     * default profile's), compared without case, and [knownUserId] when one
-     * is recorded (0 = none). With no known user, a Child ([childInvolved],
+     * user ([knownAccount]): [knownUsername], compared without case, and
+     * [knownUserId] whenever one is recorded (0 = none). With no known user, a Child ([childInvolved],
      * active or default) is refused and anyone else is allowed. Changing a
      * playlist's account stays in Edit Playlist, which a Child cannot open.
      */
@@ -151,6 +150,23 @@ object FixLogin {
     /** The known user for [sameAccount]: the first non-blank of [candidates], trimmed. */
     fun knownUser(vararg candidates: String?): String? =
         candidates.firstNotNullOfOrNull { it?.trim()?.takeIf { t -> t.isNotEmpty() } }
+
+    /** Who [sameAccount] compares against: a username (null = none) and a user id (0 = none). */
+    data class KnownAccount(val username: String?, val userId: Int)
+
+    /**
+     * The playlist's known account, from sources only the default profile
+     * writes (2026-11-11): the recorded default identity (the server-change
+     * record, user id and username), else the row's own username (the
+     * default's sign-in), else the default profile's username. The id is the
+     * recorded one only. Never the account facts, which a non-default
+     * profile's capability probe can write.
+     */
+    fun knownAccount(recorded: com.aeriotv.android.core.profiles.ProfileHostHold.Identity?, rowUsername: String?, defaultProfileUsername: String?): KnownAccount =
+        KnownAccount(
+            username = knownUser(recorded?.username, rowUsername, defaultProfileUsername),
+            userId = recorded?.userId?.takeIf { it > 0 } ?: 0,
+        )
 
     /**
      * Only the sign-in: the API key, and the username and password when the
