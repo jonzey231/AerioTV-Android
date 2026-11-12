@@ -41,4 +41,43 @@ class ProfileDialogRulesTest {
             roleDescription(ProfileRole.Child),
         )
     }
+
+    @Test fun theActionsFollowApplesOrder() {
+        // A full set (an Admin acting on another profile in the middle of the list, phone).
+        val all = ProfileDialogRules.actions(
+            isActive = false, roleAdmin = true, serverAdmin = false, isTv = false, index = 1, lastIndex = 2,
+            canEditAvatar = true, canPin = true, hasPin = true, canChannelProfiles = true, hasUserQr = true,
+            isAdmin = true, isDefault = false,
+        )
+        assertEquals(
+            listOf(
+                ProfileDialogRules.Action.Switch, ProfileDialogRules.Action.Rename, ProfileDialogRules.Action.Role,
+                ProfileDialogRules.Action.MoveUp, ProfileDialogRules.Action.MoveDown, ProfileDialogRules.Action.SetAvatar,
+                ProfileDialogRules.Action.SetPin, ProfileDialogRules.Action.RemovePin, ProfileDialogRules.Action.ResetPin,
+                ProfileDialogRules.Action.ChannelProfiles, ProfileDialogRules.Action.UserQr, ProfileDialogRules.Action.Remove,
+            ),
+            all,
+        )
+        // Channel Profiles comes before Show User QR Code.
+        assertTrue(all.indexOf(ProfileDialogRules.Action.ChannelProfiles) < all.indexOf(ProfileDialogRules.Action.UserQr))
+        // TV: no Move or QR; the active, default profile: no Switch, Reset PIN, or Remove.
+        val tvOwn = ProfileDialogRules.actions(
+            isActive = true, roleAdmin = true, serverAdmin = false, isTv = true, index = 0, lastIndex = 2,
+            canEditAvatar = true, canPin = true, hasPin = true, canChannelProfiles = true, hasUserQr = true,
+            isAdmin = true, isDefault = true,
+        )
+        assertEquals(
+            listOf(
+                ProfileDialogRules.Action.Rename, ProfileDialogRules.Action.Role, ProfileDialogRules.Action.SetAvatar,
+                ProfileDialogRules.Action.SetPin, ProfileDialogRules.Action.RemovePin, ProfileDialogRules.Action.ChannelProfiles,
+            ),
+            tvOwn,
+        )
+        // A Dispatcharr admin has no Role picker.
+        assertFalse(ProfileDialogRules.actions(
+            isActive = false, roleAdmin = true, serverAdmin = true, isTv = false, index = 0, lastIndex = 0,
+            canEditAvatar = false, canPin = false, hasPin = false, canChannelProfiles = false, hasUserQr = false,
+            isAdmin = true, isDefault = false,
+        ).contains(ProfileDialogRules.Action.Role))
+    }
 }

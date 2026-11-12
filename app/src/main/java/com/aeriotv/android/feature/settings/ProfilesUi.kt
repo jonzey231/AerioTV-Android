@@ -783,59 +783,57 @@ fun ProfilesSection(playlistId: String) {
                 )
             },
         ) {
-                    if (p.id != activeId) {
-                        ProfileActionButton(label = "Switch to this profile", onClick = {
-                            actionsFor = null
-                            Log.i("ProfilesUi", "[PROFILES] switch from actions")
-                            // The exact path the old short press used.
-                            if (busy) Unit
-                            else if (vm.hasPin(p.id)) pinFor = p
-                            else if (vm.isPlaying()) confirmSwitch = p
-                            else doSwitch(p)
-                        })
-                    }
-                    ProfileActionButton(label = "Rename", onClick = { actionsFor = null; renaming = p })
-                    if (vm.isRoleAdmin(playlistId)) {
-                        // Dispatcharr admins are always Admin: no Role picker.
-                        if (!com.aeriotv.android.core.profiles.ProfileRole.isServerAdmin(p.userLevel)) {
-                            ProfileActionButton(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
-                        }
-                        // TV reorders by pick-up (long press on the row); phones
-                        // and tablets keep Move Up / Move Down here.
-                        val at = if (isTv) -1 else profiles.indexOfFirst { it.id == p.id }
-                        fun moveRow(how: com.aeriotv.android.core.profiles.ProfileManager.Move) {
-                            actionsFor = null
-                            refuse(
-                                if (how == com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) "Move Up" else "Move Down",
-                                vm.move(playlistId, p.id, how).exceptionOrNull()?.message,
-                            )
-                            scope.launch { rowFocus[p.id]?.let { restoreFocus(it, "profile row after move") } }
-                        }
-                        if (!isTv && at > 0) ProfileActionButton(label = "Move Up", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
-                        if (!isTv && at in 0 until profiles.lastIndex) ProfileActionButton(label = "Move Down", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Later) })
-                    }
-                    if (vm.canEditAvatar(playlistId, p.id)) {
-                        ProfileActionButton(label = ProfileDialogRules.SET_AVATAR, onClick = { actionsFor = null; avatarFor = p })
-                    }
-                    if (canPin) {
-                        ProfileActionButton(label = if (hasPin) "Change PIN" else "Set PIN", onClick = { actionsFor = null; settingPin = p })
-                        if (hasPin) ProfileActionButton(label = "Remove PIN", onClick = { actionsFor = null; removingPin = p })
-                        // An Admin resets another profile's forgotten PIN.
-                        if (hasPin && vm.isRoleAdmin(playlistId) && p.id != activeId) {
-                            ProfileActionButton(label = "Reset PIN", onClick = { actionsFor = null; resettingPin = p })
-                        }
-                    }
-                    // Own profile, or an Admin for another; hidden without a saved API key.
-                    if (!isTv && (p.id == activeId || vm.isRoleAdmin(playlistId))) {
-                        val hasKey by androidx.compose.runtime.produceState(false, p.id) { value = vm.hasUserQr(playlistId, p.id) }
-                        if (hasKey) ProfileActionButton(label = com.aeriotv.android.feature.qrscan.SHOW_USER_QR_LABEL, onClick = { actionsFor = null; userQrFor = p })
-                    }
-                    if (canChannelProfiles) {
-                        ProfileActionButton(label = "Channel Profiles", onClick = { actionsFor = null; channelProfilesFor = p })
-                    }
-                    if (isAdmin && !p.isDefault) {
-                        ProfileActionButton(label = "Remove", destructive = true, newGroup = true, onClick = { actionsFor = null; removing = p })
-                    }
+            fun moveRow(how: com.aeriotv.android.core.profiles.ProfileManager.Move) {
+                actionsFor = null
+                refuse(
+                    if (how == com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) "Move Up" else "Move Down",
+                    vm.move(playlistId, p.id, how).exceptionOrNull()?.message,
+                )
+                scope.launch { rowFocus[p.id]?.let { restoreFocus(it, "profile row after move") } }
+            }
+            val roleAdmin = vm.isRoleAdmin(playlistId)
+            val isActiveRow = p.id == activeId
+            val wantsQr = !isTv && (isActiveRow || roleAdmin)
+            val hasKey by androidx.compose.runtime.produceState(false, p.id, wantsQr) { value = wantsQr && vm.hasUserQr(playlistId, p.id) }
+            // One order for every platform (Apple's ProfileActionsSheet).
+            ProfileDialogRules.actions(
+                isActive = isActiveRow,
+                roleAdmin = roleAdmin,
+                serverAdmin = com.aeriotv.android.core.profiles.ProfileRole.isServerAdmin(p.userLevel),
+                isTv = isTv,
+                index = profiles.indexOfFirst { it.id == p.id },
+                lastIndex = profiles.lastIndex,
+                canEditAvatar = vm.canEditAvatar(playlistId, p.id),
+                canPin = canPin,
+                hasPin = hasPin,
+                canChannelProfiles = canChannelProfiles,
+                hasUserQr = hasKey,
+                isAdmin = isAdmin,
+                isDefault = p.isDefault,
+            ).forEach { a ->
+                when (a) {
+                    ProfileDialogRules.Action.Switch -> ProfileActionButton(label = "Switch to this profile", onClick = {
+                        actionsFor = null
+                        Log.i("ProfilesUi", "[PROFILES] switch from actions")
+                        // The exact path the old short press used.
+                        if (busy) Unit
+                        else if (vm.hasPin(p.id)) pinFor = p
+                        else if (vm.isPlaying()) confirmSwitch = p
+                        else doSwitch(p)
+                    })
+                    ProfileDialogRules.Action.Rename -> ProfileActionButton(label = "Rename", onClick = { actionsFor = null; renaming = p })
+                    ProfileDialogRules.Action.Role -> ProfileActionButton(label = "Role: ${p.effectiveRole().label}", onClick = { actionsFor = null; roleFor = p })
+                    ProfileDialogRules.Action.MoveUp -> ProfileActionButton(label = "Move Up", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Earlier) })
+                    ProfileDialogRules.Action.MoveDown -> ProfileActionButton(label = "Move Down", onClick = { moveRow(com.aeriotv.android.core.profiles.ProfileManager.Move.Later) })
+                    ProfileDialogRules.Action.SetAvatar -> ProfileActionButton(label = ProfileDialogRules.SET_AVATAR, onClick = { actionsFor = null; avatarFor = p })
+                    ProfileDialogRules.Action.SetPin -> ProfileActionButton(label = if (hasPin) "Change PIN" else "Set PIN", onClick = { actionsFor = null; settingPin = p })
+                    ProfileDialogRules.Action.RemovePin -> ProfileActionButton(label = "Remove PIN", onClick = { actionsFor = null; removingPin = p })
+                    ProfileDialogRules.Action.ResetPin -> ProfileActionButton(label = "Reset PIN", onClick = { actionsFor = null; resettingPin = p })
+                    ProfileDialogRules.Action.ChannelProfiles -> ProfileActionButton(label = "Channel Profiles", onClick = { actionsFor = null; channelProfilesFor = p })
+                    ProfileDialogRules.Action.UserQr -> ProfileActionButton(label = com.aeriotv.android.feature.qrscan.SHOW_USER_QR_LABEL, onClick = { actionsFor = null; userQrFor = p })
+                    ProfileDialogRules.Action.Remove -> ProfileActionButton(label = "Remove", destructive = true, newGroup = true, onClick = { actionsFor = null; removing = p })
+                }
+            }
         }
     }
     pinFor?.let { p ->

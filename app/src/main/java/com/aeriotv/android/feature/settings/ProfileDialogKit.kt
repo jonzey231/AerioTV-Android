@@ -93,6 +93,53 @@ object ProfileDialogRules {
         }
     }
 
+    /** A profile's actions, in the order the actions dialog lists them (Apple's ProfileActionsSheet, word for word). */
+    enum class Action { Switch, Rename, Role, MoveUp, MoveDown, SetAvatar, SetPin, RemovePin, ResetPin, ChannelProfiles, UserQr, Remove }
+
+    /**
+     * The actions a profile's dialog offers, in Apple's order: Switch to this
+     * profile, Rename, Role, Move Up and Down, Set Avatar, the PIN actions,
+     * Channel Profiles, Show User QR Code, then Remove (Cancel follows).
+     * [roleAdmin]: an Admin or Standard profile is acting; [isAdmin]: the
+     * section's Admin gate (Remove).
+     */
+    fun actions(
+        isActive: Boolean,
+        roleAdmin: Boolean,
+        serverAdmin: Boolean,
+        isTv: Boolean,
+        index: Int,
+        lastIndex: Int,
+        canEditAvatar: Boolean,
+        canPin: Boolean,
+        hasPin: Boolean,
+        canChannelProfiles: Boolean,
+        hasUserQr: Boolean,
+        isAdmin: Boolean,
+        isDefault: Boolean,
+    ): List<Action> = buildList {
+        if (!isActive) add(Action.Switch)
+        add(Action.Rename)
+        if (roleAdmin) {
+            // Dispatcharr admins are always Admin: no Role picker.
+            if (!serverAdmin) add(Action.Role)
+            // TV reorders by pick-up; phones and tablets keep these.
+            if (!isTv && index > 0) add(Action.MoveUp)
+            if (!isTv && index in 0 until lastIndex) add(Action.MoveDown)
+        }
+        if (canEditAvatar) add(Action.SetAvatar)
+        if (canPin) {
+            add(Action.SetPin)
+            if (hasPin) add(Action.RemovePin)
+            // An Admin resets another profile's forgotten PIN.
+            if (hasPin && roleAdmin && !isActive) add(Action.ResetPin)
+        }
+        if (canChannelProfiles) add(Action.ChannelProfiles)
+        // Own profile, or an Admin for another, with a saved API key; phones and tablets only.
+        if (!isTv && (isActive || roleAdmin) && hasUserQr) add(Action.UserQr)
+        if (isAdmin && !isDefault) add(Action.Remove)
+    }
+
     /** What kinds of dialog a tap outside may close: only one whose Cancel it can stand for. */
     enum class Kind { WithCancel, OkOnly, PinWithoutCancel, LaunchGate, LaunchPicker, SignInForm, UserQr }
 
