@@ -88,7 +88,7 @@ class SetUpTvViewModel @Inject constructor(
 
     sealed interface Step {
         data object Pick : Step
-        /** First step for a target: "Copy entire setup from this device" or "Import this user only". */
+        /** First step for a target: "Copy this playlist and its profiles" or "Import this user only". */
         data class Scope(val target: SetupTarget) : Step
         /** "Import this user only" for a profile with no saved sign-in: the roster credential prompt. */
         data class Credential(val target: SetupTarget, val profileId: String, val username: String) : Step
@@ -513,7 +513,7 @@ private fun ScopeStep(s: SetUpTvViewModel.Step.Scope, userOnly: Boolean, onChoos
             .background(setupRowBackground())
             .selectableGroup(),
     ) {
-        listOf(false to "Copy entire setup from this device", true to "Import this user only").forEach { (value, label) ->
+        listOf(false to SetupChoiceCopy.PLAYLIST_AND_PROFILES, true to SetupChoiceCopy.USER_ONLY).forEach { (value, label) ->
             Row(
                 Modifier.fillMaxWidth()
                     .selectable(selected = pickedUserOnly == value, onClick = { pickedUserOnly = value }, role = Role.RadioButton)
@@ -572,7 +572,7 @@ private fun ChooseStep(
     }
     val picked = remember(source) {
         androidx.compose.runtime.mutableStateListOf<String>().apply {
-            // Copy entire setup: every profile that can be sent.
+            // Copy this playlist and its profiles: every profile that can be sent.
             addAll(source.choices.filter { it.isDefault || it.credentialLabel != null }.map { it.profileId })
         }
     }

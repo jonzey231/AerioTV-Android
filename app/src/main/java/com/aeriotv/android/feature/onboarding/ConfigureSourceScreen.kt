@@ -166,7 +166,7 @@ fun ConfigureSourceScreen(
     }
 
     // User QR from a device on this network (docs/DeviceSetupHandoff.md): look
-    // for the device showing it for 3 s; found = offer to copy its whole setup.
+    // for the device showing it for 3 s; found = offer to copy its playlist and profiles.
     val userQrContext = androidx.compose.ui.platform.LocalContext.current
     val userQrScope = androidx.compose.runtime.rememberCoroutineScope()
     var userQrProbing by remember { mutableStateOf(false) }
@@ -240,7 +240,7 @@ fun ConfigureSourceScreen(
                             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
                             .selectableGroup(),
                     ) {
-                        listOf(false to "Copy entire setup from this device", true to "Import this user only").forEach { (value, label) ->
+                        listOf(false to com.aeriotv.android.feature.devicesetup.SetupChoiceCopy.PLAYLIST_AND_PROFILES, true to com.aeriotv.android.feature.devicesetup.SetupChoiceCopy.USER_ONLY).forEach { (value, label) ->
                             androidx.compose.foundation.layout.Row(
                                 Modifier.fillMaxWidth()
                                     .selectable(selected = userOnly == value, onClick = { userOnly = value }, role = androidx.compose.ui.semantics.Role.RadioButton)

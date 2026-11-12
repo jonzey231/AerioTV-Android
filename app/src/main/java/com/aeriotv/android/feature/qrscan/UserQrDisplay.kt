@@ -113,8 +113,8 @@ class UserQrViewModel @Inject constructor(
 
     /**
      * While the code is on screen, a scanner on this network may ask for this
-     * device's whole setup (docs/DeviceSetupHandoff.md). Sends the same full
-     * payload as the banner flow's "Copy entire setup from this device".
+     * device's playlist and profiles (docs/DeviceSetupHandoff.md). Sends the
+     * same full payload as the banner flow's "Copy this playlist and its profiles".
      */
     fun source(t: Target, text: String): com.aeriotv.android.core.setup.UserQrSource? {
         val key = com.aeriotv.android.core.qr.ScannedCode.parseUserKey(text)?.apiKey ?: return null
