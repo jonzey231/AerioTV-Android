@@ -145,6 +145,29 @@ class KeyRejectedSignInViewModel @Inject constructor(
 
     fun reset() { if (_state.value !is State.Busy) _state.value = State.Idle }
 
+    /**
+     * The playlist's own sign-in from the form a switch to the default
+     * profile opened (its key was held as rejected; Roku spec 8.4 step 4).
+     * The choice, and its PIN, already authorized it, so there is no Set up
+     * gate; the same-account check (item 11) still applies.
+     */
+    fun submitForSwitch(playlistId: String, username: String, password: String) {
+        if (!KeyRejectedCopy.canSubmit(username, password, _state.value is State.Busy)) return
+        _state.value = State.Busy
+        viewModelScope.launch {
+            repository.signInWithPassword(playlistId, username, password).fold(
+                onSuccess = {
+                    Log.i(TAG, "[AUTH] sign-in for a switch to the default profile on ${playlistId.take(8)}: signed in, hold lifted")
+                    _state.value = State.Done(playlistId)
+                },
+                onFailure = {
+                    Log.w(TAG, "[AUTH] sign-in for a switch to the default profile on ${playlistId.take(8)} failed: ${it.javaClass.simpleName}")
+                    _state.value = State.Failed(KeyRejectedCopy.errorLine(it))
+                },
+            )
+        }
+    }
+
     fun submit(playlistId: String, username: String, password: String) {
         if (!KeyRejectedCopy.canSubmit(username, password, _state.value is State.Busy)) return
         if (!canSignIn(playlistId)) {
@@ -190,6 +213,8 @@ fun KeyRejectedSignInDialog(
     message: String? = null,
     /** [heldProfileId] is an active profile whose own key was refused (the rejected-key prompt), not a held one. */
     profileKeyRejected: Boolean = false,
+    /** The playlist's own form, opened by choosing the default profile whose key is held (no Set up gate). */
+    forSwitch: Boolean = false,
 ) {
     var username by rememberSaveable(playlistId, heldProfileId) { mutableStateOf("") }
     var password by rememberSaveable(playlistId, heldProfileId) { mutableStateOf("") }
@@ -221,6 +246,7 @@ fun KeyRejectedSignInDialog(
         when {
             heldProfileId != null && profileKeyRejected -> vm.submitProfile(playlistId, heldProfileId, username, password)
             heldProfileId != null -> vm.submitHeld(playlistId, heldProfileId, username, password)
+            forSwitch -> vm.submitForSwitch(playlistId, username, password)
             else -> vm.submit(playlistId, username, password)
         }
     }
@@ -285,9 +311,14 @@ fun HeldProfileSignInHost(manager: ProfileManager) {
         playlistId = r.playlistId,
         vm = vm,
         onCancel = { manager.closeHeldSignIn() },
-        onSignedIn = { manager.closeHeldSignIn() },
-        heldProfileId = r.profileId,
-        // A profile with no stored sign-in gets the plain form.
+        onSignedIn = {
+            // The default profile's playlist sign-in passed: the switch goes on.
+            if (r.playlistOwn) manager.continueSwitchAfterOwnSignIn(r.playlistId, r.profileId) else manager.closeHeldSignIn()
+        },
+        // The default profile signs in as the playlist (its own form, the known user).
+        heldProfileId = r.profileId.takeUnless { r.playlistOwn },
+        forSwitch = r.playlistOwn,
+        // A profile with no stored sign-in, or a held key, gets the plain form.
         message = if (r.addressChanged) KeyRejectedCopy.hostChanged(r.playlistName) else null,
     )
 }

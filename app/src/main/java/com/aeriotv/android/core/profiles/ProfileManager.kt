@@ -1570,6 +1570,18 @@ class ProfileManager @Inject constructor(
             Log.i(TAG, "[PROFILE-HOST] sign-in form opened for a ${if (held) "held" else "signed-out"} profile on ${playlistId.take(8)}")
             throw ProfileSignInHeld()
         }
+        // Its key is held as rejected (2026-11-12, Roku spec 8.4 step 4): the
+        // sign-in form opens now, before sync or playback is touched, and
+        // nothing is sent with the held key. A pass continues this switch.
+        store.byId(profileId)?.let { target ->
+            val row = playlistDao.rawById(playlistId)
+            val form = RejectedKeySwitch.formFor(target, row?.apiKey, com.aeriotv.android.core.network.DispatcharrRequestGate::isKeyRejected)
+            if (form != RejectedKeySwitch.Form.None) {
+                _heldSignIn.value = HeldSignIn(playlistId, profileId, row?.name.orEmpty(), addressChanged = false, playlistOwn = form == RejectedKeySwitch.Form.PlaylistOwn)
+                Log.i(TAG, "[AUTH] sign-in form opened: the chosen profile's key is held as rejected on ${playlistId.take(8)}")
+                throw ProfileSignInHeld()
+            }
+        }
         val gen = switchGen.incrementAndGet()
         watchdog?.cancel()
         watchdog = null
@@ -1787,8 +1799,10 @@ class ProfileManager @Inject constructor(
         val playlistId: String,
         val profileId: String,
         val playlistName: String,
-        /** Held after a server address change; false = it has no stored sign-in (the plain form). */
+        /** Held after a server address change; false = it has no stored sign-in, or its key is held as rejected (the plain form). */
         val addressChanged: Boolean = true,
+        /** The default profile, whose key (the playlist's own) is held as rejected: the playlist's own sign-in form, then the switch goes on. */
+        val playlistOwn: Boolean = false,
     )
 
     private val _heldSignIn = kotlinx.coroutines.flow.MutableStateFlow<HeldSignIn?>(null)
@@ -2108,6 +2122,19 @@ class ProfileManager @Inject constructor(
         heldChanged()
     }
 
+    /**
+     * The playlist's own sign-in passed in the form a switch to the default
+     * profile opened (its key was held as rejected): the switch goes on. Only
+     * for the request that form was opened for (its PIN, if any, passed).
+     */
+    fun continueSwitchAfterOwnSignIn(playlistId: String, profileId: String) {
+        val req = _heldSignIn.value
+        if (req == null || !req.playlistOwn || req.playlistId != playlistId || req.profileId != profileId) return
+        _heldSignIn.value = null
+        ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
+        scope.launch { finishHeldSwitch(playlistId, profileId) }
+    }
+
     /** Cancel on the form: stay on the current profile. */
     fun closeHeldSignIn() {
         if (_heldSignIn.value != null) Log.i(TAG, "[PROFILE-HOST] sign-in form closed")
@@ -2124,7 +2151,7 @@ class ProfileManager @Inject constructor(
      */
     suspend fun signInHeldProfile(playlistId: String, profileId: String, username: String, password: String): Result<Unit> = runCatching {
         val req = _heldSignIn.value
-        check(req != null && req.playlistId == playlistId && req.profileId == profileId) { "Choose the profile again." }
+        check(req != null && !req.playlistOwn && req.playlistId == playlistId && req.profileId == profileId) { "Choose the profile again." }
         val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId && !it.isDefault } ?: error("Profile not found")
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
@@ -2135,6 +2162,7 @@ class ProfileManager @Inject constructor(
         if (!ProfileHostHold.isOwnUser(p.username, me.username)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }
         ownSignInRepaired(playlistId, profileId)
+        DispatcharrLoginGate.reset(DispatcharrLoginGate.slotFor(playlistId, profileId))
         dropHold(profileId, "sign-in")
         // A Child that had no stored sign-in is no longer sealed.
         heldChanged()
