@@ -29,7 +29,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.aeriotv.android.core.data.repository.PlaylistRepository
-import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.profiles.ProfileManager
 import com.aeriotv.android.ui.settings.SettingsAlertDialog
 import com.aeriotv.android.ui.settings.SettingsDialogTextButton
@@ -51,7 +50,6 @@ import javax.inject.Inject
 class KeyRejectedSignInViewModel @Inject constructor(
     private val repository: PlaylistRepository,
     private val profiles: ProfileManager,
-    private val prefs: AppPreferences,
 ) : ViewModel() {
 
     sealed interface State {
@@ -78,12 +76,21 @@ class KeyRejectedSignInViewModel @Inject constructor(
             canSetUpTv = profiles.canSetUpTv(playlistId),
         )
 
-    /** The playlist's known username (its own, the account facts, or the default profile's), else "". */
+    /**
+     * The username the form starts with: the same known-user chain the
+     * sign-in is checked against (FixLogin.knownAccount, Apple parity
+     * 2026-11-12): the recorded default identity, else the playlist's own
+     * stored username, else the default profile's. Never the account facts,
+     * which a non-default profile's session can write. Else "".
+     */
     suspend fun knownUsername(playlistId: String): String {
         val row = runCatching { profiles.defaultPlaylistRow(playlistId) }.getOrNull()
-        val facts = runCatching { prefs.dispatcharrAccountFactsOnce(playlistId).username }.getOrNull()
-        val default = runCatching { profiles.setupSources(playlistId).firstOrNull { it.profile.isDefault }?.profile?.username }.getOrNull()
-        return KeyRejectedCopy.prefillUsername(row?.username, facts, default)
+        val known = com.aeriotv.android.core.setup.FixLogin.knownAccount(
+            profiles.recordedDefaultIdentity(playlistId),
+            row?.username,
+            profiles.defaultProfileUsername(playlistId),
+        )
+        return KeyRejectedCopy.prefillUsername(known.username)
     }
 
     /** A held profile's own username (the form for a profile whose playlist moved), else "". */

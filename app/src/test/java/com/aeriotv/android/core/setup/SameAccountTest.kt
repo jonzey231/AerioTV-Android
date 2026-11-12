@@ -62,6 +62,17 @@ class SameAccountTest {
     }
 
     @Test
+    fun theSignInFormStartsWithTheUserItIsCheckedAgainst() {
+        // The pre-fill is the same chain as the check, so the form never
+        // suggests a name the check would refuse.
+        val recorded = com.aeriotv.android.core.profiles.ProfileHostHold.Identity(7, "Parent")
+        assertEquals("Parent", com.aeriotv.android.feature.settings.KeyRejectedCopy.prefillUsername(FixLogin.knownAccount(recorded, "row", "profile").username))
+        assertEquals("row", com.aeriotv.android.feature.settings.KeyRejectedCopy.prefillUsername(FixLogin.knownAccount(null, "row", "profile").username))
+        assertEquals("profile", com.aeriotv.android.feature.settings.KeyRejectedCopy.prefillUsername(FixLogin.knownAccount(null, null, "profile").username))
+        assertEquals("", com.aeriotv.android.feature.settings.KeyRejectedCopy.prefillUsername(FixLogin.knownAccount(null, null, null).username))
+    }
+
+    @Test
     fun anotherProfilesNameNeverStandsInForTheDefault() {
         // No recorded identity and an API-key row (no username): the default
         // profile's name decides, never a name a non-default profile wrote.
