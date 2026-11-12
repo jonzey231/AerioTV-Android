@@ -2405,7 +2405,11 @@ class PlaylistViewModel @Inject constructor(
                     // Last Connected values go live (the repo just stamped them).
                     val updated = repository.activePlaylist()
                     _state.update {
+                        // A launch still on Setting Up finishes here (a recovery's refresh).
+                        val next = HeldListCopy.phaseAfterChannelsLanded(it.phase, channels.isNotEmpty())
                         it.copy(
+                            phase = next,
+                            bootstrapLine = if (next != it.phase) null else it.bootstrapLine,
                             channels = channels,
                             isLoading = false,
                             playlist = updated ?: it.playlist,
@@ -3306,12 +3310,19 @@ class PlaylistViewModel @Inject constructor(
             return
         }
         val kept = sameChannelsForGuide(_state.value.channels, channels)
+        // A launch still on Setting Up (a held profile whose hold has now
+        // lifted) finishes with these channels instead of staying up.
+        val finish: (UiState) -> UiState = {
+            val next = HeldListCopy.phaseAfterChannelsLanded(it.phase, hasChannels = true)
+            if (next != it.phase) Log.i(TAG, "[STARTUP] launch finished by $reason (${channels.size} channels)")
+            it.copy(phase = next, bootstrapLine = if (next != it.phase) null else it.bootstrapLine)
+        }
         if (kept) {
-            _state.update { it.copy(playlist = entity, isLoading = false, error = null) }
+            _state.update { finish(it.copy(playlist = entity, isLoading = false, error = null)) }
             Log.i(TAG, "[REFRESH] $reason landed (${channels.size} channels, unchanged; guide kept)")
             return
         }
-        val apply: (UiState) -> UiState = { it.copy(playlist = entity, channels = channels, isLoading = false, error = null) }
+        val apply: (UiState) -> UiState = { finish(it.copy(playlist = entity, channels = channels, isLoading = false, error = null)) }
         rebuildGuideCatalog(entity, "channels-changed", channelsOverride = channels, alsoApply = apply)
         Log.i(TAG, "[REFRESH] $reason landed (${channels.size} channels, changed; one guide install)")
         loadEpgIfConfigured(entity, keepCatalog = true)

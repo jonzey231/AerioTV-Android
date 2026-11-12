@@ -17,4 +17,12 @@ object HeldListCopy {
      * where it is and shows [LINE]; anyone else goes on to add a playlist.
      */
     fun launchGoesToAdd(held: Boolean): Boolean = !held
+
+    /**
+     * Channels landed from a later refresh (the hold lifted, a recovery):
+     * a launch still on the Setting Up screen finishes there, so it never
+     * stays up over a loaded list. Any other phase is left as it is.
+     */
+    fun phaseAfterChannelsLanded(current: PlaylistViewModel.Phase, hasChannels: Boolean): PlaylistViewModel.Phase =
+        if (current == PlaylistViewModel.Phase.Bootstrapping && hasChannels) PlaylistViewModel.Phase.ChannelsReady else current
 }

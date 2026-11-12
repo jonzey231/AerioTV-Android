@@ -26,4 +26,14 @@ class HeldListCopyTest {
         assertTrue(HeldListCopy.launchGoesToAdd(held = false))
         assertEquals(com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE, HeldListCopy.LINE)
     }
+
+    @Test fun aLaunchStillOnSettingUpFinishesWhenChannelsLand() {
+        // The hold lifted (or a recovery refreshed) while the launch waited: on to the guide.
+        assertEquals(PlaylistViewModel.Phase.ChannelsReady, HeldListCopy.phaseAfterChannelsLanded(PlaylistViewModel.Phase.Bootstrapping, hasChannels = true))
+        // Nothing loaded: it stays where it is.
+        assertEquals(PlaylistViewModel.Phase.Bootstrapping, HeldListCopy.phaseAfterChannelsLanded(PlaylistViewModel.Phase.Bootstrapping, hasChannels = false))
+        // Any other phase is left alone (a re-add on the Welcome screen is not interrupted).
+        assertEquals(PlaylistViewModel.Phase.NeedsUrl, HeldListCopy.phaseAfterChannelsLanded(PlaylistViewModel.Phase.NeedsUrl, hasChannels = true))
+        assertEquals(PlaylistViewModel.Phase.ChannelsReady, HeldListCopy.phaseAfterChannelsLanded(PlaylistViewModel.Phase.ChannelsReady, hasChannels = true))
+    }
 }
