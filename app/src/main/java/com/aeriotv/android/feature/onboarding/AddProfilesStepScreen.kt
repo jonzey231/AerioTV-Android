@@ -115,16 +115,20 @@ class AddProfilesStepViewModel @Inject constructor(
         Step.Skip
     }
 
-    /** The profiles this step added: the only ones its PIN walk's Cancel undoes (a setup handoff's stay). */
-    val addedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /**
+     * The adds the PIN step may undo (item 14, Apple parity): the current
+     * "Add selected" batch only. A manual add asks on its own right after it
+     * lands; Continue passes none, and a setup handoff's adds always stay.
+     */
+    val pinAdds = OnboardingPinAdds()
 
     suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
         (if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
         else manager.addProfileManual(playlistId, username, password, null, role))
-            .onSuccess { manager.markFreshAddUndoable(it.id); addedIds += it.id }
+            .onSuccess { manager.markFreshAddUndoable(it.id) }
 
     suspend fun add(playlistId: String, user: DispatcharrUserSummary, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
-        manager.addProfile(playlistId, user, password, apiKey, role).onSuccess { addedIds += it.id }
+        manager.addProfile(playlistId, user, password, apiKey, role).onSuccess { pinAdds.batchAdded(it.id) }
 
     private companion object { const val TAG = "AddProfilesStep" }
 }
@@ -142,16 +146,23 @@ fun AddProfilesStepScreen(
     vm: AddProfilesStepViewModel = hiltViewModel(),
 ) {
     // Assumption A (2026-10-29): once a Child exists, every Admin and Standard
-    // profile added here sets its PIN before the step ends; cancel undoes those adds.
+    // profile added here sets its PIN. As on Apple (item 14), the PIN step
+    // comes right after each manual add (ManualAddProfilesStep) and right
+    // after each "Add selected" batch, whose Cancel undoes only that batch;
+    // Continue walks any PIN still missing and undoes nothing.
     val pinVm: com.aeriotv.android.feature.settings.ProfilesViewModel = hiltViewModel()
-    var pinWalk by remember { mutableStateOf(false) }
+    var pinWalk by remember { mutableStateOf<List<String>?>(null) }
     val finishStep = onDone
-    @Suppress("NAME_SHADOWING")
-    val onDone: () -> Unit = {
-        if (pinVm.anyChild(playlistId) && pinVm.pinsMissingForChild(playlistId).isNotEmpty()) pinWalk = true else finishStep()
+    val endStep: (List<String>) -> Unit = { adds ->
+        if (pinVm.anyChild(playlistId) && pinVm.pinsMissingForChild(playlistId).isNotEmpty()) pinWalk = adds else finishStep()
     }
-    if (pinWalk) {
-        com.aeriotv.android.feature.settings.PinAfterAdd(playlistId, pinVm, vm.addedIds.toList()) { pinWalk = false; finishStep() }
+    // Continue (and a step with nothing to add): the walk passes no adds.
+    @Suppress("NAME_SHADOWING")
+    val onDone: () -> Unit = { endStep(vm.pinAdds.continueAdds()) }
+    // The end of an "Add selected" batch: its PIN step undoes only that batch.
+    val afterBatch: () -> Unit = { endStep(vm.pinAdds.batchAdds()) }
+    pinWalk?.let { adds ->
+        com.aeriotv.android.feature.settings.PinAfterAdd(playlistId, pinVm, adds) { pinWalk = null; finishStep() }
         return
     }
     var users by remember { mutableStateOf<List<DispatcharrUserSummary>?>(null) }
@@ -375,6 +386,7 @@ fun AddProfilesStepScreen(
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 val addSelected: () -> Unit = {
                         busy = true; error = null
+                        vm.pinAdds.startBatch()
                         scope.launch {
                             val failures = mutableListOf<String>()
                             list.filter { it.id in selected }.forEach { u ->
@@ -389,7 +401,7 @@ fun AddProfilesStepScreen(
                                 error = "Could not add: ${failures.joinToString(", ")}"
                                 selected.retainAll(list.filter { it.username in failures }.map { it.id })
                             } else if (needsCredential.isEmpty()) {
-                                onDone()
+                                afterBatch()
                             }
                         }
                 }
@@ -489,11 +501,11 @@ fun AddProfilesStepScreen(
             user = u,
             onSubmit = { password, key ->
                 vm.add(playlistId, u, password, key, roleOf(u)).fold(
-                    { needsCredential.remove(u); if (needsCredential.isEmpty() && error == null) onDone(); null },
+                    { needsCredential.remove(u); if (needsCredential.isEmpty() && error == null) afterBatch(); null },
                     { it.message ?: "Could not add profile" },
                 )
             },
-            onCancel = { needsCredential.remove(u); if (needsCredential.isEmpty() && error == null) onDone() },
+            onCancel = { needsCredential.remove(u); if (needsCredential.isEmpty() && error == null) afterBatch() },
         )
     }
 }
@@ -607,10 +619,17 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
         role = com.aeriotv.android.core.profiles.ProfileRole.User
         focusTarget = 2
     }
+    // Item 14 (Apple parity): an add that needs a PIN (a Child exists) asks
+    // right after it lands; Cancel there undoes only this add.
+    var pinAfterAdd by remember { mutableStateOf<List<String>?>(null) }
     // A Child add goes through the same Child-PIN gate as the role rows.
     suspend fun addWith(username: String, password: String?, apiKey: String?): String? =
         vm.addManual(playlistId, username, password, apiKey, role).fold(
-            { collapseAfterAdd(); null },
+            { p ->
+                pinAfterAdd = OnboardingPinAdds.afterManualAdd(p.id, profilesVm.needsPinAfterAdd(playlistId, p.id))
+                collapseAfterAdd()
+                null
+            },
             { it.message ?: "Could not add profile" },
         )
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -763,7 +782,7 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth()) }
             Spacer(Modifier.height(4.dp))
-            // onDone is the caller's wrapper: adding next to a Child walks the PIN step first.
+            // onDone is the caller's wrapper: next to a Child, Continue walks any PIN still missing (no adds to undo).
             // While Enter details is open, Add profile is the single filled primary.
             val continueModifier = Modifier
                 .fillMaxWidth()
@@ -803,5 +822,8 @@ private fun ManualAddProfilesStep(playlistId: String, vm: AddProfilesStepViewMod
         }
         }
     }
+    }
+    pinAfterAdd?.let { adds ->
+        com.aeriotv.android.feature.settings.PinAfterAdd(playlistId, profilesVm, adds) { pinAfterAdd = null }
     }
 }
