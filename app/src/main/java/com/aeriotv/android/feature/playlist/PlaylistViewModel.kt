@@ -156,6 +156,8 @@ class PlaylistViewModel @Inject constructor(
         val selectedGroup: String = ALL_GROUPS,
         val sortMode: SortMode = SortMode.ByNumber,
         val isLoading: Boolean = false,
+        /** Launch with no cached channels while the active Child is held ([HeldListCopy]): the line Setting Up shows as it stays. */
+        val bootstrapLine: String? = null,
         /** Add Playlist while a 429 counts down: "The server is busy. Trying again in N seconds." */
         val busyMessage: String? = null,
         val error: String? = null,
@@ -941,6 +943,7 @@ class PlaylistViewModel @Inject constructor(
                             channels = if (kept) it.channels else channels,
                             isLoading = false,
                             error = null,
+                            bootstrapLine = null,
                         )
                     }
                     // First time we have channels, kick the EPG load now (if
@@ -962,6 +965,11 @@ class PlaylistViewModel @Inject constructor(
                         // unreachable right now.
                         Log.w(TAG, "channel refresh failed; cached rail still visible", t)
                         _state.update { it.copy(isLoading = false) }
+                    } else if (!HeldListCopy.launchGoesToAdd(heldHere(saved))) {
+                        // A held Child (its playlist moved, no same-server check
+                        // yet) stays here with the line, never the add-playlist screen.
+                        Log.w(TAG, "[PROFILE-HOST] channel refresh refused: the active profile is held at this address; staying")
+                        _state.update { it.copy(isLoading = false, error = HeldListCopy.LINE, bootstrapLine = HeldListCopy.LINE) }
                     } else {
                         _state.update {
                             it.copy(
@@ -2403,13 +2411,12 @@ class PlaylistViewModel @Inject constructor(
                 },
                 onFailure = { t ->
                     Log.w(TAG, "refreshPlaylist failed", t)
+                    val line = HeldListCopy.refreshFailed(heldHere(active), LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error"))
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            playlistRefreshStatus = ActionStatus.Failure(
-                                "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
-                            ),
-                            error = "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
+                            playlistRefreshStatus = ActionStatus.Failure(line),
+                            error = line,
                         )
                     }
                 },
@@ -2523,13 +2530,12 @@ class PlaylistViewModel @Inject constructor(
                 },
                 onFailure = { t ->
                     Log.w(TAG, "refreshEverything failed", t)
+                    val line = HeldListCopy.refreshFailed(heldHere(active), LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error"))
                     _state.update {
                         it.copy(
                             isLoading = false,
-                            refreshAllStatus = ActionStatus.Failure(
-                                "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
-                            ),
-                            error = "Refresh failed: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
+                            refreshAllStatus = ActionStatus.Failure(line),
+                            error = line,
                         )
                     }
                 },
@@ -2622,6 +2628,11 @@ class PlaylistViewModel @Inject constructor(
      * active.
      */
     suspend fun ownSignInRow(playlistId: String): PlaylistEntity? = profileManager.defaultPlaylistRow(playlistId)
+
+    /** The active Child is held at [p]'s address after a server change: every request there is refused ([HeldListCopy]). */
+    private fun heldHere(p: PlaylistEntity): Boolean =
+        com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(p.urlString) ||
+            p.lanUrlString?.takeIf { it.isNotBlank() }?.let { com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(it) } == true
 
     /** The playlist Edit Playlist is editing: [playlistId] when given, else the active one. */
     private suspend fun editTarget(playlistId: String?): PlaylistEntity? =

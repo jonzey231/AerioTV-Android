@@ -67,6 +67,8 @@ fun SettingUpScreen(
      * rebuilt for a library this account may view.
      */
     savePlan: com.aeriotv.android.core.data.repository.PlaylistRepository.SavePlan? = null,
+    /** A line under the stages: a held Child's launch with nothing cached (HeldListCopy), which stays here. */
+    notice: String? = null,
 ) {
     val stageDriven = saveStage != null
     val planStages = savePlan?.stages ?: defaultSavePlanStages
@@ -133,6 +135,15 @@ fun SettingUpScreen(
                         showSynced = i == stages.lastIndex && status == StageStatus.Done,
                     )
                 }
+            }
+            if (notice != null) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = notice,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
             if (onSkip != null) {
                 Spacer(Modifier.height(28.dp))

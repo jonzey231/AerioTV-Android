@@ -625,6 +625,7 @@ fun AerioTVNavHost(
                             popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
                         }
                     },
+                    notice = state.bootstrapLine,
                 )
             }
 
