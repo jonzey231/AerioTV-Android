@@ -120,11 +120,11 @@ object ProfileHostHold {
 
     /**
      * A save that moves the playlist sends the playlist's own sign-in only.
-     * Edit Playlist shows the ACTIVE profile's sign-in when a non-default
-     * profile is active, so a request carrying a held profile's key,
-     * password, or username is that profile's sign-in: the playlist's own one
-     * ([own]) replaces it whole. Anything else (the playlist's own sign-in, or
-     * one typed fresh) goes as it is.
+     * Edit Playlist shows the playlist's own sign-in (item 13); a request
+     * that still carries a held profile's key, password, or username is that
+     * profile's sign-in: the playlist's own one ([own]) replaces it whole.
+     * Anything else (the playlist's own sign-in, or one typed fresh) goes as
+     * it is.
      */
     fun scrub(request: SignIn, own: SignIn, held: List<SignIn>): SignIn {
         fun key(a: String?, b: String?) = !a.isNullOrBlank() && !b.isNullOrBlank() && a.trim() == b.trim()

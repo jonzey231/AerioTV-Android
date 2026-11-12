@@ -114,9 +114,19 @@ fun EditPlaylistScreen(
     var url by remember(playlist?.id) { mutableStateOf(playlist?.urlString.orEmpty()) }
     var lanUrl by remember(playlist?.id) { mutableStateOf(playlist?.lanUrlString.orEmpty()) }
     var epgUrl by remember(playlist?.id) { mutableStateOf(playlist?.epgUrl.orEmpty()) }
-    var apiKey by remember(playlist?.id) { mutableStateOf(playlist?.apiKey.orEmpty()) }
-    var username by remember(playlist?.id) { mutableStateOf(playlist?.username.orEmpty()) }
-    var password by remember(playlist?.id) { mutableStateOf(playlist?.password.orEmpty()) }
+    // Item 13 (Apple parity): the sign-in fields show and edit the playlist's
+    // OWN sign-in (the default profile's), whatever profile is active; never
+    // a non-default profile's, which changes only through its own sign-in form.
+    val ownRow by androidx.compose.runtime.produceState<com.aeriotv.android.core.data.db.entity.PlaylistEntity?>(null, playlist?.id) {
+        value = playlist?.id?.let { viewModel.ownSignInRow(it) }
+    }
+    val ownLoaded = ownRow != null
+    val shownSignIn = com.aeriotv.android.core.profiles.EditPlaylistSignIn.shown(
+        ownRow?.let { com.aeriotv.android.core.profiles.ProfileHostHold.SignIn(it.apiKey, it.username, it.password) },
+    )
+    var apiKey by remember(playlist?.id, ownLoaded) { mutableStateOf(shownSignIn.apiKey.orEmpty()) }
+    var username by remember(playlist?.id, ownLoaded) { mutableStateOf(shownSignIn.username.orEmpty()) }
+    var password by remember(playlist?.id, ownLoaded) { mutableStateOf(shownSignIn.password.orEmpty()) }
     // Per-playlist Dispatcharr User-Agent (Apple `customUserAgent`). Blank =
     // the app default; the field's placeholder and helper both show it.
     var userAgent by remember(playlist?.id) { mutableStateOf(playlist?.customUserAgent.orEmpty()) }

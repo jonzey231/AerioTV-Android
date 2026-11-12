@@ -390,6 +390,11 @@ class PlaylistRepository @Inject constructor(
      * for it before anything fails.
      */
     suspend fun refreshDispatcharrSession(playlistId: String): Result<Boolean> {
+        // Item 13: Edit Playlist's Refresh Session is for the playlist's OWN
+        // sign-in. With a non-default profile active here, that sign-in is
+        // refreshed on the playlist's own row and its token is not kept (the
+        // session belongs to the active profile, whose sign-in stays as is).
+        if (com.aeriotv.android.core.profiles.ProfileScope.overlayFor(playlistId) != null) return refreshOwnSignIn(playlistId)
         val playlist = dao.byId(playlistId)
             ?: return Result.failure(IllegalStateException("Playlist not found."))
         val previousKey = playlist.apiKey?.trim().orEmpty()
@@ -399,6 +404,33 @@ class PlaylistRepository @Inject constructor(
         val fresh = dispatcharrAuth.silentRebootstrapApiKey(playlist)
             ?: return Result.failure(IllegalStateException("Refresh failed. Check the URL and credentials."))
         return Result.success(fresh.trim() != previousKey)
+    }
+
+    /** [refreshDispatcharrSession] for the playlist's own sign-in while a non-default profile is active. */
+    private suspend fun refreshOwnSignIn(playlistId: String): Result<Boolean> = runCatching {
+        withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = dao.byId(playlistId) ?: throw IllegalStateException("Playlist not found.")
+            val user = row.username?.trim()?.takeIf { it.isNotBlank() }
+            val pass = row.password?.takeIf { it.isNotBlank() }
+            if (user == null || pass == null) throw IllegalStateException("Username and password required.")
+            val base = row.urlString.trimEnd('/')
+            val key = try {
+                val jwt = dispatcharrClient.login(base, user, pass)
+                dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                Log.w(TAG_SAVE, "[PROFILE] own sign-in refresh failed for ${playlistId.take(8)}: ${t.javaClass.simpleName}")
+                throw IllegalStateException("Refresh failed. Check the URL and credentials.")
+            }
+            val rotated = key.trim() != row.apiKey?.trim().orEmpty()
+            if (rotated) {
+                dao.update(row.copy(apiKey = key))
+                com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Credentials, playlistId)
+            }
+            Log.i(TAG_SAVE, "[PROFILE] own sign-in refreshed for ${playlistId.take(8)}: key ${if (rotated) "replaced" else "unchanged"}")
+            rotated
+        }
     }
 
     /** Any saved playlist by id, active or not (Edit Playlist on a non-active row). */
@@ -1239,10 +1271,10 @@ class PlaylistRepository @Inject constructor(
      * A save that moves [existingId] to another scheme, host, or port
      * (A-APP-1): BEFORE it sends anything, every non-default profile's stored
      * sign-in for the playlist is held and a held active profile is left for
-     * the default one. Edit Playlist shows the ACTIVE profile's sign-in, so a
-     * request that carries a held profile's sign-in goes out with the
-     * playlist's own one instead. Returns the request to save and whether the
-     * route moved.
+     * the default one. Edit Playlist shows the playlist's own sign-in (item
+     * 13); a request that still carries a held profile's sign-in goes out
+     * with the playlist's own one instead. Returns the request to save and
+     * whether the route moved.
      */
     private suspend fun holdProfileSignInsForSave(incoming: SaveRequest, existingId: String?): Pair<SaveRequest, Boolean> {
         val id = existingId ?: return incoming to false
@@ -1324,28 +1356,92 @@ class PlaylistRepository @Inject constructor(
         // the last good snapshot when a probe FAILS, which is right when the
         // account is unchanged and wrong here: a failed probe must not leave
         // the previous user's DVR / VOD / catch-up grants in force.
-        runCatching {
-            dao.update(
-                priorRow.copy(
-                    dispatcharrUserLevel = 10,
-                    dispatcharrIsStaff = false,
-                    dispatcharrIsSuperuser = false,
-                    dispatcharrCustomProperties = "",
-                    dispatcharrCapabilitiesFetchedAt = 0L,
-                    dispatcharrCapabilitiesSchema = 0,
-                    dispatcharrCapabilitiesStale = true,
-                    dispatcharrSystemCatchupEnabled = -1,
-                    dispatcharrDvrAccess = "",
-                    dispatcharrCatchupEnabled = true,
-                    dispatcharrVodMoviesEnabled = true,
-                    dispatcharrVodSeriesEnabled = true,
-                    dispatcharrAccountProfileIds = "",
-                ),
-            )
-        }.onFailure { Log.w(TAG_CAPS, "cached-identity reset failed", it) }
+        runCatching { dao.update(priorRow.withoutCachedIdentity()) }
+            .onFailure { Log.w(TAG_CAPS, "cached-identity reset failed", it) }
         // The display-only facts describe the OLD account; drop them with it.
         runCatching { appPreferences.clearDispatcharrAccountFacts(priorRow.id) }
             .onFailure { Log.w(TAG_CAPS, "account facts reset failed", it) }
+    }
+
+    /** The row with its per-user capability snapshot reset to unknown (a new account's is read by the next probe). */
+    private fun PlaylistEntity.withoutCachedIdentity(): PlaylistEntity = copy(
+        dispatcharrUserLevel = 10,
+        dispatcharrIsStaff = false,
+        dispatcharrIsSuperuser = false,
+        dispatcharrCustomProperties = "",
+        dispatcharrCapabilitiesFetchedAt = 0L,
+        dispatcharrCapabilitiesSchema = 0,
+        dispatcharrCapabilitiesStale = true,
+        dispatcharrSystemCatchupEnabled = -1,
+        dispatcharrDvrAccess = "",
+        dispatcharrCatchupEnabled = true,
+        dispatcharrVodMoviesEnabled = true,
+        dispatcharrVodSeriesEnabled = true,
+        dispatcharrAccountProfileIds = "",
+    )
+
+    /**
+     * Item 13 (Apple parity): the playlist's own sign-in typed into Edit
+     * Playlist while a non-default profile is active on it. That save runs as
+     * the active profile (its channels, its session), so the own sign-in is
+     * checked against the server here first, on the playlist's own row: null
+     * when it is unchanged, else the verified sign-in for [writeOwnSignIn]
+     * once the rest of the edit has saved. A login's token is never stored
+     * (the session belongs to the active profile). Throws the login's or the
+     * key check's own errors, so the form shows its usual Save Failed line.
+     */
+    suspend fun verifyOwnSignIn(playlistId: String, request: SaveRequest): OwnSignIn? =
+        withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = dao.byId(playlistId) ?: throw IllegalStateException("Playlist not found.")
+            val own = com.aeriotv.android.core.profiles.ProfileHostHold.SignIn(row.apiKey, row.username, row.password)
+            val typed = com.aeriotv.android.core.profiles.ProfileHostHold.SignIn(request.apiKey, request.username, request.password)
+            if (!com.aeriotv.android.core.profiles.EditPlaylistSignIn.ownChanged(typed, own)) return@withContext null
+            val base = request.url.trimEnd('/')
+            val typedKey = typed.apiKey?.trim()?.takeIf { it.isNotBlank() }
+            val key = if (request.sourceType == SourceType.DispatcharrUserPass && typedKey == null) {
+                val user = typed.username?.trim()?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Username is required")
+                val pass = typed.password?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Password is required")
+                val jwt = dispatcharrClient.login(base, user, pass)
+                dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
+            } else {
+                val k = typedKey ?: throw IllegalArgumentException("API key is required")
+                dispatcharrClient.verifyConnection(base, k)
+                k
+            }
+            val me = runCatching { dispatcharrClient.fetchMe(base, key) }.getOrNull()
+            OwnSignIn(com.aeriotv.android.core.profiles.EditPlaylistSignIn.ownAfter(typed, key, own), base, me)
+        }
+
+    /** A verified own sign-in from [verifyOwnSignIn]: [base] and users/me are where and who it signed in as. */
+    class OwnSignIn(
+        val signIn: com.aeriotv.android.core.profiles.ProfileHostHold.SignIn,
+        val base: String,
+        val me: com.aeriotv.android.core.network.MeResponse?,
+    )
+
+    /**
+     * Item 13: write a verified own sign-in to the playlist's own row only
+     * (never a profile's, never diverted). A changed account resets the
+     * row's capability snapshot (the default profile's) so its next probe
+     * reads the new account's; the active profile's session, token, and
+     * snapshot are untouched. Sync sees a sign-in change here.
+     */
+    suspend fun writeOwnSignIn(playlistId: String, verified: OwnSignIn) {
+        withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = dao.byId(playlistId) ?: return@withContext
+            val s = verified.signIn
+            val accountChanged = !s.username.orEmpty().trim().equals(row.username.orEmpty().trim(), ignoreCase = true) ||
+                s.apiKey?.trim() != row.apiKey?.trim()
+            val base = if (accountChanged) row.withoutCachedIdentity() else row
+            dao.update(base.copy(apiKey = s.apiKey, username = s.username, password = s.password))
+            com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Credentials, playlistId)
+            val key = s.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            val me = verified.me
+            if (key != null && me != null) {
+                runCatching { profileManager.get().noteDefaultMe(playlistId, verified.base, key, me.id, me.username) }
+            }
+            Log.i(TAG_SAVE, "[PROFILE] Edit Playlist saved the playlist's own sign-in for ${playlistId.take(8)}; the active profile's is unchanged")
+        }
     }
 
     /**
