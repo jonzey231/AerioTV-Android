@@ -213,4 +213,18 @@ class GroupTokensTest {
     fun landingWithADefaultTheProviderDroppedIsAll() {
         assertNull(landingGroupToken("Gone", groups))
     }
+
+    @Test
+    fun anAddedPlaylistLandsOnItsDefaultGroupElseAll() {
+        // 2026-11-12: the add paths use the same landing as launch and switches.
+        // The group on screen before the add ("NBA", also on the new playlist)
+        // is never carried over.
+        val newGroups = listOf("NBA", "Sports", "News")
+        assertNull(landingGroupToken("", newGroups))
+        assertEquals("Sports", landingGroupToken("Sports", newGroups))
+        // A pin that does not resolve on the new playlist: All (the caller's fallback).
+        assertNull(landingGroupToken("Gone", newGroups))
+        // Favorites pinned: kept (the guide falls back to All when it is empty).
+        assertEquals(PlaylistViewModel.FAVORITES_GROUP, landingGroupToken(PlaylistViewModel.FAVORITES_GROUP, newGroups))
+    }
 }

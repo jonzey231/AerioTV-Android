@@ -1077,7 +1077,7 @@ class PlaylistViewModel @Inject constructor(
     }
 
     /** Who asked for a landing group; only changes the log line. */
-    private enum class Landing(val label: String) { Launch("launch"), ProfileSwitch("switch"), PlaylistSwitch("playlist") }
+    private enum class Landing(val label: String) { Launch("launch"), ProfileSwitch("switch"), PlaylistSwitch("playlist"), PlaylistAdd("add") }
 
     /**
      * The group the guide LANDS on for [playlistId] in the ACTIVE profile's
@@ -1211,6 +1211,10 @@ class PlaylistViewModel @Inject constructor(
                 repository.loadAndPersist(request, existingId = s.draftPlaylistId)
             }.also { _state.update { it.copy(busyMessage = null) } }.fold(
                 onSuccess = { (entity, channels) ->
+                    // An added playlist lands like every other activation: its
+                    // Default Group in the active profile's scope, else All,
+                    // never the group that was on screen before the add.
+                    val landing = if (entity.isActive) landingGroupFor(entity.id, groupNamesOf(channels), Landing.PlaylistAdd) else null
                     _state.update {
                         it.copy(
                             phase = Phase.ChannelsReady,
@@ -1219,6 +1223,7 @@ class PlaylistViewModel @Inject constructor(
                             // instead of duplicating; never the active playlist.
                             draftPlaylistId = entity.id,
                             channels = channels,
+                            selectedGroup = landing ?: it.selectedGroup,
                             isLoading = false,
                             error = if (channels.isEmpty()) "No channels found." else null,
                             // Test Connection's own probe drives the full form's gate.
@@ -1274,12 +1279,15 @@ class PlaylistViewModel @Inject constructor(
         )
         return repository.loadAndPersist(normalized, existingId = existingId).fold(
             onSuccess = { (entity, channels) ->
+                // Lands like every other activation: its Default Group, else All.
+                val landing = if (entity.isActive) landingGroupFor(entity.id, groupNamesOf(channels), Landing.PlaylistAdd) else null
                 _state.update {
                     it.copy(
                         phase = Phase.ChannelsReady,
                         playlist = entity,
                         draftPlaylistId = entity.id,
                         channels = channels,
+                        selectedGroup = landing ?: it.selectedGroup,
                         isLoading = false,
                         error = if (channels.isEmpty()) "No channels found." else null,
                     )
