@@ -1228,6 +1228,7 @@ class ProfileManager @Inject constructor(
         val me = client.fetchMe(base, key) ?: error("Could not read ${p.username} from the server.")
         if (!me.username.equals(p.username, ignoreCase = true)) error("This API key belongs to ${me.username}, not ${p.username}.")
         store.update(profileId) { it.copy(password = password?.takeIf { s -> s.isNotBlank() } ?: it.password).applyMe(me, key) }
+        ownSignInRepaired(playlistId, profileId)
         Log.i(TAG, "[PROFILE] credential saved for ${p.username}")
     }
 
@@ -1671,6 +1672,7 @@ class ProfileManager @Inject constructor(
                 tMe = System.currentTimeMillis()
                 val updated = target.applyMe(me, key)
                 store.upsert(updated)
+                ownSignInRepaired(playlistId, updated.id)
                 followServerRole(updated.id, updated.userLevel)
                 runCatching { tagVerified(playlistId, updated.id) }
                 ProfileScope.activate(updated.toOverlay())
@@ -1746,6 +1748,7 @@ class ProfileManager @Inject constructor(
                     if (gen != switchGen.get()) return
                     val updated = target.applyMe(me, a.key)
                     store.upsert(updated)
+                    ownSignInRepaired(playlistId, updated.id)
                     followServerRole(updated.id, updated.userLevel)
                     runCatching { tagVerified(playlistId, updated.id) }
                     if (ProfileScope.current() == target.id) ProfileScope.activate(updated.toOverlay())
@@ -2131,6 +2134,7 @@ class ProfileManager @Inject constructor(
         // Another account's sign-in never becomes this profile's.
         if (!me.username.equals(p.username, ignoreCase = true)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }
+        ownSignInRepaired(playlistId, profileId)
         dropHold(profileId, "sign-in")
         // A Child that had no stored sign-in is no longer sealed.
         heldChanged()
@@ -2221,6 +2225,15 @@ class ProfileManager @Inject constructor(
         val k = apiKey?.takeIf { it.isNotBlank() } ?: error("Enter a password or an API key.")
         client.fetchMe(base, k) ?: throw DispatcharrError.InvalidCredentials("The API key for $username was rejected.")
         return k
+    }
+
+    /**
+     * [profileId] just signed in as itself (its key read back from users/me):
+     * a rejection held for its own earlier key is released. Holds are per
+     * identity; repairing the playlist's own sign-in never does this.
+     */
+    private fun ownSignInRepaired(playlistId: String, profileId: String) {
+        com.aeriotv.android.core.network.DispatcharrRequestGate.clearProfile(playlistId, profileId)
     }
 
     private fun DispatcharrProfile.applyMe(me: MeResponse, key: String): DispatcharrProfile {

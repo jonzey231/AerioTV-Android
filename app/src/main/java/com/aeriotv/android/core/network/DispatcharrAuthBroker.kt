@@ -241,7 +241,9 @@ class DispatcharrAuthBroker @Inject constructor(
     }
 
     private fun gateRejectedKey(playlist: PlaylistEntity, key: String, passwordToo: Boolean, noApiKey: Boolean = false) {
-        if (DispatcharrRequestGate.markKeyRejected(playlist.id, key, playlist.name, passwordToo, baseUrl = playlist.urlString, noApiKey = noApiKey)) {
+        // Held for the identity the key is (the playlist's own, or a profile's).
+        val profileId = com.aeriotv.android.core.profiles.ProfileScope.signInIdentity(playlist.id, playlist.username)
+        if (DispatcharrRequestGate.markKeyRejected(playlist.id, key, playlist.name, passwordToo, baseUrl = playlist.urlString, noApiKey = noApiKey, profileId = profileId)) {
             Log.w(
                 TAG,
                 "[AUTH] API key for ${playlist.id.take(8)} rejected by the server; holding every API call " +

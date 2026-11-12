@@ -811,7 +811,11 @@ class PlaylistRepository @Inject constructor(
         // the user acting on a key or credentials: lift any local "this key
         // was rejected" hold so the save really asks the server once.
         existingId?.let { com.aeriotv.android.core.network.DispatcharrRequestGate.clearPlaylist(it) }
+        // Only the playlist's own key: a save that runs as the active profile
+        // (Edit Playlist, item 13) carries that profile's unchanged key, which
+        // stays held until the profile's own sign-in is repaired.
         request.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            ?.takeIf { existingId == null || com.aeriotv.android.core.profiles.ProfileScope.signInIdentity(existingId, request.username) == null }
             ?.let { com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(it) }
         return runCatching {
         val normalisedBase = request.url.trimEnd('/')
