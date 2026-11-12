@@ -89,4 +89,27 @@ class ProfileDialogRulesTest {
         assertEquals(4, ProfileDialogRules.formGapDp(isTv = true))
         assertEquals(8, ProfileDialogRules.formGapDp(isTv = false))
     }
+
+    @Test fun onTvAddProfileSitsBesideCancelInTheButtonRow() {
+        // TV: the submit leaves the scrolling form for the pinned button row.
+        assertTrue(ProfileDialogRules.formSubmitInButtonRow(isTv = true))
+        // Phones and tablets keep it in the form.
+        assertFalse(ProfileDialogRules.formSubmitInButtonRow(isTv = false))
+    }
+
+    @Test fun aButtonRowSubmitIsDimmedUntilItCanRun() {
+        assertEquals(1f, ProfileDialogRules.submitAlpha(ready = true, busy = false))
+        assertEquals(0.45f, ProfileDialogRules.submitAlpha(ready = false, busy = false))
+        assertEquals(0.45f, ProfileDialogRules.submitAlpha(ready = true, busy = true))
+    }
+
+    @Test fun theFormIsReadyWithAUsernameAndPasswordOrAKey() {
+        val r = com.aeriotv.android.feature.onboarding.components.ManualProfileFormRules
+        assertTrue(r.ready(isPassword = true, username = "bob", secret = "pw"))
+        assertFalse(r.ready(isPassword = true, username = " ", secret = "pw"))
+        assertFalse(r.ready(isPassword = true, username = "bob", secret = ""))
+        // API key mode needs only the key.
+        assertTrue(r.ready(isPassword = false, username = "", secret = "key"))
+        assertFalse(r.ready(isPassword = false, username = "", secret = "  "))
+    }
 }

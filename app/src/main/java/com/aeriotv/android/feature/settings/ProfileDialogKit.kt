@@ -78,6 +78,18 @@ object ProfileDialogRules {
     /** The height cap for a dialog: a form dialog on TV gets [TV_FORM_MAX_HEIGHT_FRACTION]. */
     fun maxHeightFraction(isTv: Boolean, form: Boolean): Float = if (isTv && form) TV_FORM_MAX_HEIGHT_FRACTION else MAX_HEIGHT_FRACTION
 
+    /**
+     * Where a form's submit sits: on TV in the dialog's bottom button row
+     * beside Cancel, below the scrolling form, so both stay on screen (Apple
+     * parity, owner 2026-11-12); phones and tablets keep it in the form.
+     */
+    fun formSubmitInButtonRow(isTv: Boolean): Boolean = isTv
+
+    /** A button-row submit that cannot run yet (fields empty, or busy) is dimmed, never disabled (TV focus), like Apple's. */
+    const val INERT_ALPHA = 0.45f
+
+    fun submitAlpha(ready: Boolean, busy: Boolean): Float = if (ready && !busy) 1f else INERT_ALPHA
+
     /** The avatar action's label (and the title of its refusal dialog), matching "Set PIN". */
     const val SET_AVATAR = "Set Avatar"
 

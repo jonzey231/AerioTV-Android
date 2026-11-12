@@ -33,6 +33,33 @@ import com.aeriotv.android.ui.settings.dpadFocusRing
 import kotlinx.coroutines.launch
 
 /**
+ * The form's Add button, run from the dialog's own button row instead (Add
+ * Profile on TV, matching Apple: Cancel and Add Profile sit together below
+ * the scrolling form, so they are always on screen). With one passed in, the
+ * form draws no button of its own; [submit] does what that button did.
+ */
+@androidx.compose.runtime.Stable
+class ManualProfileSubmit {
+    internal val busyState = mutableStateOf(false)
+    internal val readyState = mutableStateOf(false)
+    internal var action: () -> Unit = {}
+
+    /** A sign-in is running. */
+    val busy: Boolean get() = busyState.value
+
+    /** The fields hold what a sign-in needs (see [ManualProfileFormRules.ready]). */
+    val ready: Boolean get() = readyState.value
+
+    fun submit() = action()
+}
+
+object ManualProfileFormRules {
+    /** Username and password both filled in, or a key. */
+    fun ready(isPassword: Boolean, username: String, secret: String): Boolean =
+        secret.isNotBlank() && (!isPassword || username.isNotBlank())
+}
+
+/**
  * Manual Add Profile (the base login is not a Dispatcharr admin, so the
  * users list is not readable). The connect form's toggle comes first:
  * Username & Password shows Username and Password; API Key shows only the
@@ -55,11 +82,14 @@ fun ManualProfileForm(
     firstFieldModifier: Modifier = Modifier,
     /** The gap between the form's parts (Add Profile on TV passes a tighter one). */
     spacing: androidx.compose.ui.unit.Dp = 8.dp,
+    /** The dialog's button row runs the Add instead of a button in the form (Add Profile on TV). */
+    submit: ManualProfileSubmit? = null,
 ) {
     var username by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(DispatcharrAuthMode.UsernamePassword) }
     var secret by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    val ownBusy = remember { mutableStateOf(false) }
+    var busy by (submit?.busyState ?: ownBusy)
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val isPassword = mode == DispatcharrAuthMode.UsernamePassword
@@ -145,21 +175,30 @@ fun ManualProfileForm(
         }
         beforeSubmit()
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-        // Never disabled mid-flow (TV focus); taps are ignored while busy.
-        Button(
-            onClick = {
-                if (busy || secret.isBlank() || (isPassword && username.isBlank())) return@Button
-                busy = true; error = null
-                scope.launch {
-                    error = if (isPassword) onAdd(username.trim(), secret, null) else onAdd("", null, secret.trim())
-                    busy = false
-                    if (error == null) { username = ""; secret = "" }
-                }
-            },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
-        ) {
-            if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-            else Text(submitLabel)
+        val submitNow: () -> Unit = submitNow@{
+            if (busy || !ManualProfileFormRules.ready(isPassword, username, secret)) return@submitNow
+            busy = true; error = null
+            scope.launch {
+                error = if (isPassword) onAdd(username.trim(), secret, null) else onAdd("", null, secret.trim())
+                busy = false
+                if (error == null) { username = ""; secret = "" }
+            }
+        }
+        if (submit != null) {
+            val ready = ManualProfileFormRules.ready(isPassword, username, secret)
+            androidx.compose.runtime.SideEffect {
+                submit.action = submitNow
+                submit.readyState.value = ready
+            }
+        } else {
+            // Never disabled mid-flow (TV focus); taps are ignored while busy.
+            Button(
+                onClick = submitNow,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+            ) {
+                if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                else Text(submitLabel)
+            }
         }
     }
 }

@@ -55,6 +55,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
@@ -1095,8 +1096,13 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     }
     if (manual) {
         // One column; on TV the card may grow to about 90% of the screen and
-        // the parts sit closer, so the whole form fits at 1080p (Apple parity).
-        val gap = ProfileDialogRules.formGapDp(rememberIsTvDevice()).dp
+        // the parts sit closer, and Add Profile sits beside Cancel in the
+        // button row below the scroll, so the whole form fits at 1080p and
+        // both buttons stay on screen (Apple parity).
+        val isTv = rememberIsTvDevice()
+        val gap = ProfileDialogRules.formGapDp(isTv).dp
+        val rowSubmitState = remember { com.aeriotv.android.feature.onboarding.components.ManualProfileSubmit() }
+        val rowSubmit = rowSubmitState.takeIf { ProfileDialogRules.formSubmitInButtonRow(isTv) }
         ProfileAlertDialog(
             scrollContent = false,
             form = true,
@@ -1112,10 +1118,21 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                             vm.addManual(playlistId, u, pw, key, role).fold({ added(it); null }, { it.message ?: "Could not add profile" })
                         },
                         spacing = gap,
+                        submit = rowSubmit,
                     )
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                rowSubmit?.let { s ->
+                    // Dimmed and inert until it can run, never disabled (TV focus).
+                    SettingsDialogTextButton(
+                        label = "Add Profile",
+                        onClick = { s.submit() },
+                        emphasized = true,
+                        modifier = Modifier.alpha(ProfileDialogRules.submitAlpha(s.ready, s.busy)),
+                    )
+                }
+            },
             dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onClose) },
         )
         return
