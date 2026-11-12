@@ -17,9 +17,11 @@ object KeyRejectedCopy {
      * ([isChild], shared spec 2026-11-11) the clauses naming what it cannot
      * do are trimmed: no Edit Playlist clause, and with no sign-in offered
      * ([canSignIn] false) the body ends after "It may have been changed on
-     * the server." No new words.
+     * the server." A non-default profile's own refused key ([profileKey],
+     * APP7-1, 2026-11-12) drops the Edit Playlist clause too: Edit Playlist
+     * writes only the playlist's own sign-in. No new words.
      */
-    fun body(playlistName: String, passwordToo: Boolean, noApiKey: Boolean = false, isChild: Boolean = false, canSignIn: Boolean = true): String {
+    fun body(playlistName: String, passwordToo: Boolean, noApiKey: Boolean = false, isChild: Boolean = false, canSignIn: Boolean = true, profileKey: Boolean = false): String {
         // The re-login signed in, but the account has no API key on the server.
         if (noApiKey) return NO_API_KEY
         val name = playlistName.ifBlank { "this playlist" }
@@ -31,7 +33,7 @@ object KeyRejectedCopy {
         val signIn = "Sign in with your Dispatcharr username and password to reconnect"
         return when {
             isChild && !canSignIn -> lead
-            isChild -> "$lead $signIn."
+            isChild || profileKey -> "$lead $signIn."
             passwordToo -> "$lead $signIn, or enter the current details in Edit Playlist."
             else -> "$lead $signIn, or enter the current key in Edit Playlist."
         }
@@ -56,11 +58,16 @@ object KeyRejectedCopy {
      * launch PIN screen is up; the Set up gate) drops the button that opens
      * the sign-in form. [isChild] (a Child profile is active) drops Edit
      * Playlist, which a Child cannot open (Apple parity, 2026-11-11); TVs
-     * never show it.
+     * never show it. [profileKey] (the refused key is an adult non-default
+     * profile's own, APP7-1) drops Edit Playlist and Update from Phone, which
+     * write only the playlist's own sign-in: its own Sign In and Not Now
+     * stay. A non-default Child keeps its buttons.
      */
-    fun buttons(isTv: Boolean, canSignIn: Boolean, isChild: Boolean = false): List<Button> =
-        if (isTv) listOfNotNull(Button.UpdateFromPhone, Button.SignInWithRemote.takeIf { canSignIn }, Button.NotNow)
-        else listOfNotNull(Button.SignIn.takeIf { canSignIn }, Button.EditPlaylist.takeUnless { isChild }, Button.NotNow)
+    fun buttons(isTv: Boolean, canSignIn: Boolean, isChild: Boolean = false, profileKey: Boolean = false): List<Button> {
+        val ownOnly = profileKey && !isChild
+        return if (isTv) listOfNotNull(Button.UpdateFromPhone.takeUnless { ownOnly }, Button.SignInWithRemote.takeIf { canSignIn }, Button.NotNow)
+        else listOfNotNull(Button.SignIn.takeIf { canSignIn }, Button.EditPlaylist.takeUnless { isChild || ownOnly }, Button.NotNow)
+    }
 
     fun label(b: Button): String = when (b) {
         Button.UpdateFromPhone -> UPDATE_FROM_PHONE

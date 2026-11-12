@@ -77,6 +77,36 @@ class KeyRejectedCopyTest {
         assertEquals(KeyRejectedCopy.NO_API_KEY, KeyRejectedCopy.body("Home", passwordToo = false, noApiKey = true, isChild = true, canSignIn = false))
     }
 
+    @Test fun aProfilesOwnRefusedKeyOffersOnlyItsOwnSignIn() {
+        // APP7-1: an adult non-default profile's own key. Edit Playlist and
+        // Update from Phone write only the playlist's sign-in, so they go.
+        assertEquals(listOf("Sign In", "Not Now"), KeyRejectedCopy.buttons(isTv = false, canSignIn = true, profileKey = true).map(KeyRejectedCopy::label))
+        assertEquals(listOf("Sign In with Remote", "Not Now"), KeyRejectedCopy.buttons(isTv = true, canSignIn = true, profileKey = true).map(KeyRejectedCopy::label))
+        assertEquals(
+            "Dispatcharr no longer accepts the API key for Home. It may have been changed on the server. " +
+                "Sign in with your Dispatcharr username and password to reconnect.",
+            KeyRejectedCopy.body("Home", passwordToo = false, profileKey = true),
+        )
+        assertEquals(
+            "Dispatcharr no longer accepts the sign-in for Home. It may have been changed on the server. " +
+                "Sign in with your Dispatcharr username and password to reconnect.",
+            KeyRejectedCopy.body("Home", passwordToo = true, profileKey = true),
+        )
+        // A non-default Child keeps its trimmed body and buttons.
+        assertEquals(listOf("Not Now"), KeyRejectedCopy.buttons(isTv = false, canSignIn = false, isChild = true, profileKey = true).map(KeyRejectedCopy::label))
+        assertEquals(listOf("Update from Phone", "Not Now"), KeyRejectedCopy.buttons(isTv = true, canSignIn = false, isChild = true, profileKey = true).map(KeyRejectedCopy::label))
+        assertEquals(
+            "Dispatcharr no longer accepts the API key for Home. It may have been changed on the server.",
+            KeyRejectedCopy.body("Home", passwordToo = false, isChild = true, canSignIn = false, profileKey = true),
+        )
+        // The default profile's prompt is unchanged.
+        assertEquals(listOf("Sign In", "Edit Playlist", "Not Now"), KeyRejectedCopy.buttons(isTv = false, canSignIn = true).map(KeyRejectedCopy::label))
+        assertEquals(listOf("Update from Phone", "Sign In with Remote", "Not Now"), KeyRejectedCopy.buttons(isTv = true, canSignIn = true).map(KeyRejectedCopy::label))
+        assertTrue(KeyRejectedCopy.body("Home", passwordToo = false).endsWith("or enter the current key in Edit Playlist."))
+        // The no-key line is the same.
+        assertEquals(KeyRejectedCopy.NO_API_KEY, KeyRejectedCopy.body("Home", passwordToo = false, noApiKey = true, profileKey = true))
+    }
+
     @Test fun promptCopy() {
         assertEquals("API key no longer valid", KeyRejectedCopy.TITLE)
         assertEquals(KeyRejectedCopy.TITLE, API_KEY_REJECTED_TITLE)
