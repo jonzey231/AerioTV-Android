@@ -51,7 +51,16 @@ object DispatcharrRequestGate {
      * was refused as well); [noApiKey] = the re-login signed in, but the
      * account has no API key on the server.
      */
-    data class Prompt(val playlistId: String, val playlistName: String, val passwordToo: Boolean, val noApiKey: Boolean = false)
+    data class Prompt(
+        val playlistId: String,
+        val playlistName: String,
+        val passwordToo: Boolean,
+        val noApiKey: Boolean = false,
+        /** The active non-default profile whose own key was refused (its Sign In signs that profile in), or null for the playlist's own. */
+        val profileId: String? = null,
+    ) {
+        val holder: String get() = holder(playlistId, profileId)
+    }
 
     private val _prompt = kotlinx.coroutines.flow.MutableStateFlow<Prompt?>(null)
     /** The pending Edit Playlist prompt; the UI calls [consumePrompt] when it is answered. */
@@ -99,7 +108,7 @@ object DispatcharrRequestGate {
         if (fresh) {
             // Drive may already carry this playlist's good key (DriveSyncManager).
             runCatching { onKeyHeld?.invoke(playlistId) }
-            _prompt.value = Prompt(playlistId, playlistName, passwordToo, noApiKey)
+            _prompt.value = Prompt(playlistId, playlistName, passwordToo, noApiKey, profileId?.takeIf { it.isNotEmpty() })
             if (baseUrl.isNotBlank()) {
                 rechecks.putIfAbsent(hash, Recheck(hash, key.trim(), baseUrl, serverKey(baseUrl), playlistId, passwordToo, clock()))
             }
@@ -197,8 +206,8 @@ object DispatcharrRequestGate {
         r.inFlight = false
         if (accepted) {
             rechecks.remove(r.hash, r)
-            val ids = rejected.remove(r.hash).orEmpty().map(::playlistOf)
-            if (_prompt.value?.playlistId in ids || _prompt.value?.playlistId == r.playlistId) _prompt.value = null
+            val holders = rejected.remove(r.hash).orEmpty()
+            if (_prompt.value?.holder in holders) _prompt.value = null
         }
     }
 
@@ -225,11 +234,16 @@ object DispatcharrRequestGate {
      */
     fun clearPlaylist(playlistId: String) {
         dropHolder(playlistId)
-        if (_prompt.value?.playlistId == playlistId) _prompt.value = null
+        // A profile's prompt stays: its key is still held.
+        if (_prompt.value?.holder == playlistId) _prompt.value = null
     }
 
-    /** [profileId]'s own sign-in on [playlistId] was repaired: forget its rejection. */
-    fun clearProfile(playlistId: String, profileId: String) = dropHolder(holder(playlistId, profileId))
+    /** [profileId]'s own sign-in on [playlistId] was repaired: forget its rejection and its prompt. */
+    fun clearProfile(playlistId: String, profileId: String) {
+        val h = holder(playlistId, profileId)
+        dropHolder(h)
+        if (_prompt.value?.holder == h) _prompt.value = null
+    }
 
     private fun dropHolder(h: String) {
         rejected.values.forEach { it.remove(h) }
@@ -240,8 +254,8 @@ object DispatcharrRequestGate {
     /** [key] just authenticated: it is good again everywhere. */
     fun clearKey(key: String) {
         rechecks.remove(keyHash(key))
-        val ids = rejected.remove(keyHash(key))?.map(::playlistOf) ?: return
-        if (_prompt.value?.playlistId in ids) _prompt.value = null
+        val holders = rejected.remove(keyHash(key)) ?: return
+        if (_prompt.value?.holder in holders) _prompt.value = null
     }
 
     /** The prompt was shown and answered (or dismissed). */

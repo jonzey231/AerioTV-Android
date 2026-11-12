@@ -42,7 +42,28 @@ class PerIdentityHoldTest {
         // An Edit Playlist save or a Drive pull clears the playlist the same way.
         DispatcharrRequestGate.clearPlaylist("P1")
         assertTrue(DispatcharrRequestGate.isKeyRejected("kid-key"))
+        // The profile's prompt (the last one raised) stays: its key is still held.
+        assertEquals("kid", DispatcharrRequestGate.prompt.value?.profileId)
+    }
+
+    @Test fun thePromptNamesTheProfileAndFollowsItsHold() {
+        DispatcharrRequestGate.markKeyRejected("P1", "kid-key", "Home", profileId = "kid")
+        assertEquals("kid", DispatcharrRequestGate.prompt.value?.profileId)
+        assertEquals("Home", DispatcharrRequestGate.prompt.value?.playlistName)
+        // The profile signs itself in: its hold and its prompt go.
+        DispatcharrRequestGate.clearProfile("P1", "kid")
         assertNull(DispatcharrRequestGate.prompt.value)
+        // The playlist's own prompt carries no profile, and its repair clears it.
+        DispatcharrRequestGate.markKeyRejected("P1", "own", "Home")
+        assertNull(DispatcharrRequestGate.prompt.value?.profileId)
+        DispatcharrRequestGate.clearPlaylist("P1")
+        assertNull(DispatcharrRequestGate.prompt.value)
+    }
+
+    @Test fun aProfilesFormAcceptsOnlyItsOwnUser() {
+        assertTrue(com.aeriotv.android.core.profiles.ProfileHostHold.isOwnUser("Kid", " kid "))
+        assertFalse(com.aeriotv.android.core.profiles.ProfileHostHold.isOwnUser("kid", "parent"))
+        assertFalse(com.aeriotv.android.core.profiles.ProfileHostHold.isOwnUser("", ""))
     }
 
     @Test fun theProfilesOwnRepairReleasesIt() {

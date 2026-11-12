@@ -83,6 +83,8 @@ fun ApiKeyRejectedPromptHost(
     // The sign-in form (every device): the playlist it signs in to.
     val signInVm: KeyRejectedSignInViewModel = hiltViewModel(key = "key-rejected-sign-in")
     var signInFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // The refused key was an active non-default profile's own: its form signs THAT profile in.
+    var signInProfile by rememberSaveable { mutableStateOf<String?>(null) }
     signInFor?.let { pid ->
         KeyRejectedSignInDialog(
             playlistId = pid,
@@ -90,11 +92,15 @@ fun ApiKeyRejectedPromptHost(
             onCancel = {
                 android.util.Log.i("DispatcharrAuthBroker", "[AUTH] sign-in form closed")
                 signInFor = null
+                signInProfile = null
             },
             onSignedIn = { id ->
                 signInFor = null
+                signInProfile = null
                 onSignedIn(id)
             },
+            heldProfileId = signInProfile,
+            profileKeyRejected = signInProfile != null,
         )
     }
     val prompt by DispatcharrRequestGate.prompt.collectAsStateWithLifecycle()
@@ -118,7 +124,8 @@ fun ApiKeyRejectedPromptHost(
                 fixLoginFor = p.playlistId
             }
             KeyRejectedCopy.Button.SignIn, KeyRejectedCopy.Button.SignInWithRemote -> {
-                android.util.Log.i("DispatcharrAuthBroker", "[AUTH] sign-in form opened from the rejected-key prompt")
+                android.util.Log.i("DispatcharrAuthBroker", "[AUTH] sign-in form opened from the rejected-key prompt${if (p.profileId != null) " for the profile whose key was refused" else ""}")
+                signInProfile = p.profileId
                 signInFor = p.playlistId
             }
             KeyRejectedCopy.Button.EditPlaylist -> onEditPlaylist(p.playlistId)

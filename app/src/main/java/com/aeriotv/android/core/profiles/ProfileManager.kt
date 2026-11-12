@@ -2132,7 +2132,7 @@ class ProfileManager @Inject constructor(
         val key = client.fetchCurrentUserApiKey(base, jwt.access, childSealBypass = true)
         val me = client.fetchMe(base, key, childSealBypass = true) ?: throw DispatcharrError.Transport("Could not read the account.")
         // Another account's sign-in never becomes this profile's.
-        if (!me.username.equals(p.username, ignoreCase = true)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
+        if (!ProfileHostHold.isOwnUser(p.username, me.username)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }
         ownSignInRepaired(playlistId, profileId)
         dropHold(profileId, "sign-in")
@@ -2143,6 +2143,40 @@ class ProfileManager @Inject constructor(
         // the manager's scope so closing the form never cancels it.
         ProfileSwitchFocus.arm(ProfileSwitchFocus.Target.Guide)
         scope.launch { finishHeldSwitch(playlistId, profileId) }
+        Unit
+    }
+
+    /**
+     * The rejected-key prompt's Sign In when the refused key is a non-default
+     * profile's own (Apple parity, 2026-11-12): sign in as THAT profile's own
+     * user only (the held-profile form's rule), at the playlist's address,
+     * store its new key and password, and lift only its own hold. The
+     * playlist's own sign-in is never touched. Requests and streams still
+     * built with the refused key go out with the new one. Never logs the
+     * password or the key.
+     */
+    suspend fun signInRejectedProfile(playlistId: String, profileId: String, username: String, password: String): Result<Unit> = runCatching {
+        val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId && !it.isDefault } ?: error("Profile not found")
+        // A held profile signs in through its own form (the address changed).
+        if (hostHolds.isHeld(profileId)) throw ProfileSignInHeld()
+        val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
+        val base = repository.effectiveBaseUrl(row)
+        val jwt = client.login(base, username.trim(), password)
+        val key = client.fetchCurrentUserApiKey(base, jwt.access)
+        val me = client.fetchMe(base, key) ?: throw DispatcharrError.Transport("Could not read the account.")
+        if (!ProfileHostHold.isOwnUser(p.username, me.username)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
+        val oldKey = p.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+        store.update(profileId) { it.copy(password = password).applyMe(me, key) }
+        val updated = store.byId(profileId)
+        updated?.let { followServerRole(it.id, it.userLevel) }
+        ownSignInRepaired(playlistId, profileId)
+        com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(key)
+        if (oldKey != null && oldKey != key.trim()) com.aeriotv.android.core.network.DispatcharrRequestGate.noteKeyReplaced(oldKey, key)
+        DispatcharrLoginGate.reset(DispatcharrLoginGate.slotFor(playlistId, profileId))
+        // Still the active one: it goes on with its new key.
+        if (ProfileScope.current() == profileId) store.byId(profileId)?.let { ProfileScope.activate(it.toOverlay()) }
+        refreshActiveRole(playlistId)
+        Log.i(TAG, "[AUTH] profile ${profileId.take(8)} on ${playlistId.take(8)} signed in from the rejected-key prompt; its own hold lifted")
         Unit
     }
 

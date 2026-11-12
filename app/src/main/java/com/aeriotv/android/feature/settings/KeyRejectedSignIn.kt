@@ -102,6 +102,32 @@ class KeyRejectedSignInViewModel @Inject constructor(
      * only, and finishes the switch. No Set up gate here: the profile was
      * picked, its PIN (if any) passed before the form opened.
      */
+    /**
+     * The rejected-key prompt's Sign In for an active non-default profile
+     * whose own key was refused (Apple parity, 2026-11-12): signs in as that
+     * profile's own user only, stores its new key and password, and lifts
+     * only its own hold. Same Set up gate as the playlist's form.
+     */
+    fun submitProfile(playlistId: String, profileId: String, username: String, password: String) {
+        if (!KeyRejectedCopy.canSubmit(username, password, _state.value is State.Busy)) return
+        if (!canSignIn(playlistId)) {
+            Log.i(TAG, "[AUTH] sign-in form refused: this profile may not sign in here")
+            _state.value = State.Refused
+            return
+        }
+        _state.value = State.Busy
+        viewModelScope.launch {
+            profiles.signInRejectedProfile(playlistId, profileId, username, password).fold(
+                onSuccess = { _state.value = State.Done(playlistId) },
+                onFailure = {
+                    // Never the password or the key: the error's class only.
+                    Log.w(TAG, "[AUTH] profile sign-in from the rejected-key prompt failed: ${it.javaClass.simpleName}")
+                    _state.value = State.Failed(KeyRejectedCopy.errorLine(it))
+                },
+            )
+        }
+    }
+
     fun submitHeld(playlistId: String, profileId: String, username: String, password: String) {
         if (!KeyRejectedCopy.canSubmit(username, password, _state.value is State.Busy)) return
         _state.value = State.Busy
@@ -162,6 +188,8 @@ fun KeyRejectedSignInDialog(
     heldProfileId: String? = null,
     /** Shown above the fields. */
     message: String? = null,
+    /** [heldProfileId] is an active profile whose own key was refused (the rejected-key prompt), not a held one. */
+    profileKeyRejected: Boolean = false,
 ) {
     var username by rememberSaveable(playlistId, heldProfileId) { mutableStateOf("") }
     var password by rememberSaveable(playlistId, heldProfileId) { mutableStateOf("") }
@@ -190,8 +218,11 @@ fun KeyRejectedSignInDialog(
     }
     val busy = state is KeyRejectedSignInViewModel.State.Busy
     val submit = {
-        if (heldProfileId != null) vm.submitHeld(playlistId, heldProfileId, username, password)
-        else vm.submit(playlistId, username, password)
+        when {
+            heldProfileId != null && profileKeyRejected -> vm.submitProfile(playlistId, heldProfileId, username, password)
+            heldProfileId != null -> vm.submitHeld(playlistId, heldProfileId, username, password)
+            else -> vm.submit(playlistId, username, password)
+        }
     }
     SettingsAlertDialog(
         onDismissRequest = { if (!busy) onCancel() },

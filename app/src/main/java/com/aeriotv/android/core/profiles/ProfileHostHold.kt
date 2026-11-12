@@ -111,6 +111,14 @@ object ProfileHostHold {
     data class SignIn(val apiKey: String?, val username: String?, val password: String?)
 
     /**
+     * A profile's sign-in form (held, or its own refused key from the
+     * rejected-key prompt) accepts only that profile's own Dispatcharr user;
+     * another account's sign-in never becomes the profile's.
+     */
+    fun isOwnUser(profileUsername: String, signedInUsername: String): Boolean =
+        profileUsername.trim().isNotEmpty() && profileUsername.trim().equals(signedInUsername.trim(), ignoreCase = true)
+
+    /**
      * A non-default profile with no stored sign-in (no API key and no
      * password; 2026-11-11, security). It never runs on the playlist's own
      * sign-in: it is treated exactly like a held profile.
