@@ -127,6 +127,16 @@ object DispatcharrLoginGate {
         }
     }
 
+    /**
+     * The re-login slot for [playlistId] signing in as [profileId] (null or
+     * empty = the playlist's own sign-in). One slot per identity
+     * (2026-11-12, security): a non-default profile's re-login never shares
+     * the playlist's (or another profile's) fresh key, which would replay its
+     * requests as that user. Same key as the profile switch's own login.
+     */
+    fun slotFor(playlistId: String, profileId: String?): String =
+        if (profileId.isNullOrEmpty()) playlistId else "$playlistId:$profileId"
+
     /** The last re-login for [playlistId] signed in but the account has no API key. */
     fun accountHasNoKey(playlistId: String): Boolean = slots[playlistId]?.noApiKey == true
 

@@ -86,7 +86,7 @@ class DispatcharrAuthBroker @Inject constructor(
             Log.i(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: re-signed in; the stream retries with the new key")
             return com.aeriotv.android.core.playback.StreamAuth.Outcome.Retry(fresh)
         }
-        val noKey = DispatcharrLoginGate.accountHasNoKey(row.id)
+        val noKey = DispatcharrLoginGate.accountHasNoKey(loginSlot(row))
         gateRejectedKey(row, key, passwordToo = hasPassword, noApiKey = noKey)
         Log.w(
             TAG,
@@ -109,7 +109,10 @@ class DispatcharrAuthBroker @Inject constructor(
 
     private suspend fun loadRow(playlistId: String): PlaylistEntity? {
         startInvalidator()
-        val token = com.aeriotv.android.core.profiles.ProfileScope.token.value
+        // Per identity this read carries (a default-only caller reads the
+        // playlist's own row even while a profile is installed): one
+        // identity's cached key never serves another (2026-11-12).
+        val token = com.aeriotv.android.core.profiles.ProfileScope.readScope(playlistId)
         rowCache[playlistId]?.takeIf { it.token == token }?.let { return it.row }
         val row = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { dao.byId(playlistId) }
             ?: return null
@@ -213,7 +216,7 @@ class DispatcharrAuthBroker @Inject constructor(
                 // the dead key, which counts toward Dispatcharr's failed-key
                 // lockout for the whole network. The held key's re-check is
                 // then one re-login now and then, never a key request.
-                when (reloginHold(keyRejected, DispatcharrLoginGate.isRejected(playlistId), DispatcharrLoginGate.accountHasNoKey(playlistId))) {
+                when (reloginHold(keyRejected, DispatcharrLoginGate.isRejected(loginSlot(playlist)), DispatcharrLoginGate.accountHasNoKey(loginSlot(playlist)))) {
                     ReloginHold.NoApiKey -> {
                         gateRejectedKey(playlist, initialKey, passwordToo = true, noApiKey = true)
                         throw DispatcharrError.KeyRejected()
@@ -279,12 +282,18 @@ class DispatcharrAuthBroker @Inject constructor(
             Log.i(TAG, "silentRebootstrap SKIP: playlist ${playlist.id.take(8)} has no creds (API Key mode)")
             return null
         }
-        // One attempt per playlist per 60 s, shared by concurrent callers;
-        // 429 and rejected logins park (DispatcharrLoginGate).
-        return DispatcharrLoginGate.silentRelogin(playlist.id) {
+        // One attempt per identity per 60 s, shared by concurrent callers
+        // signing in as the same user; 429 and rejected logins park
+        // (DispatcharrLoginGate). A non-default profile re-logs in only with
+        // its own stored password, never the playlist's.
+        return DispatcharrLoginGate.silentRelogin(loginSlot(playlist)) {
             rebootstrapOnce(playlist, username, password)
         }
     }
+
+    /** The re-login slot for [row]: the identity its sign-in belongs to (DispatcharrLoginGate.slotFor). */
+    fun loginSlot(row: PlaylistEntity): String =
+        DispatcharrLoginGate.slotFor(row.id, com.aeriotv.android.core.profiles.ProfileScope.signInIdentity(row.id, row.username))
 
     private suspend fun rebootstrapOnce(
         playlist: PlaylistEntity,
@@ -294,6 +303,13 @@ class DispatcharrAuthBroker @Inject constructor(
         return try {
             // Re-read the row: a caller that waited may hold a stale copy.
             val row = dao.byId(playlist.id) ?: playlist
+            // A profile switch since the caller read its row: the row now
+            // carries another identity, and that identity's key must never be
+            // replaced with this account's (2026-11-12, security).
+            if (!row.username.orEmpty().trim().equals(username.trim(), ignoreCase = true)) {
+                Log.i(TAG, "silentRebootstrap SKIP for ${playlist.id.take(8)}: the active profile changed since the call started")
+                return null
+            }
             val pair = client.login(row.urlString, username, password)
             tokenStore.store(row.id, pair.access, pair.refresh)
             val newKey = client.fetchCurrentUserApiKey(row.urlString, pair.access)
@@ -302,8 +318,11 @@ class DispatcharrAuthBroker @Inject constructor(
             // sign-in change to sync.
             if (reloginChangesKey(row.apiKey, newKey)) {
                 dao.update(row.copy(apiKey = newKey))
-                // Sync: the re-issued key is this playlist's newest sign-in change here.
-                com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Credentials, row.id)
+                // Sync: the re-issued key is this playlist's newest sign-in
+                // change here (a profile's own key is not the playlist's).
+                if (com.aeriotv.android.core.profiles.ProfileScope.signInIdentity(row.id, row.username) == null) {
+                    com.aeriotv.android.core.sync.SyncStamps.touched(com.aeriotv.android.core.sync.SyncStamps.Cat.Credentials, row.id)
+                }
                 // Requests already built with the old key go out with the new one.
                 row.apiKey?.let { DispatcharrRequestGate.noteKeyReplaced(it, newKey) }
                 invalidateRow(row.id)

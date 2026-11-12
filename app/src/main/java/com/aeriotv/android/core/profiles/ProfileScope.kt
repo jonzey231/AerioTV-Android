@@ -103,6 +103,26 @@ object ProfileScope {
     fun activeOverlay(): Overlay? = overlay
 
     /**
+     * Whose sign-in a row of [playlistId] read in this context carries: the
+     * installed profile's id when its overlay applies here, else "" (the
+     * playlist's own). Rows cached per identity with it never serve another
+     * one (2026-11-12, security).
+     */
+    fun readScope(playlistId: String): String = overlayFor(playlistId)?.profileId.orEmpty()
+
+    /**
+     * The profile [rowUsername] (a row of [playlistId] read in this context)
+     * signs in as: the installed profile's id when its overlay applies here
+     * and is that user, else null (the playlist's own sign-in). A silent
+     * re-login is kept per identity with it, so one account's fresh key is
+     * never shared with another (2026-11-12, security).
+     */
+    fun signInIdentity(playlistId: String, rowUsername: String?): String? {
+        val o = overlayFor(playlistId) ?: return null
+        return o.profileId.takeIf { o.username.orEmpty().trim().equals(rowUsername.orEmpty().trim(), ignoreCase = true) }
+    }
+
+    /**
      * The API key requests for [playlistId] may carry outside the row reads
      * (image requests): the installed profile's (none while it is sealed or
      * has none), else [rowKey], the playlist's own. Never the playlist's own

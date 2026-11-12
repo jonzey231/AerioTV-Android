@@ -108,13 +108,16 @@ class DispatcharrKeyRecheck @Inject constructor(
         var accepted = false
         try {
             val outcome: String
-            if (r.passwordToo) {
-                val row = dao.byId(r.playlistId)
-                val fresh = row?.let { broker.silentRebootstrapApiKey(it) }
+            // The re-login is the held key's own identity only: with another
+            // profile active now, its success would say nothing about this
+            // key, so the key itself is probed instead (2026-11-12, security).
+            val row = if (r.passwordToo) dao.byId(r.playlistId) else null
+            if (row != null && row.apiKey?.trim() == r.key.trim()) {
+                val fresh = broker.silentRebootstrapApiKey(row)
                 accepted = fresh != null
                 outcome = when {
                     accepted -> "accepted (re-login issued a key)"
-                    DispatcharrLoginGate.isRejected(r.playlistId) -> "rejected (login refused)"
+                    DispatcharrLoginGate.isRejected(broker.loginSlot(row)) -> "rejected (login refused)"
                     else -> "unknown"
                 }
             } else {

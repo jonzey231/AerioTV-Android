@@ -157,7 +157,7 @@ class DispatcharrWarmupCoordinator @Inject constructor(
         // the login phase behind a "has password in Keychain" check).
         val username = playlist.username?.takeIf { it.isNotBlank() } ?: return
         val password = playlist.password?.takeIf { it.isNotBlank() } ?: return
-        if (DispatcharrLoginGate.isRejected(playlist.id)) {
+        if (DispatcharrLoginGate.isRejected(authBroker.loginSlot(playlist))) {
             Log.i(TAG, "[AUTH] warmup login skipped for ${playlist.id.take(8)}: parked after a rejected login")
             return
         }
