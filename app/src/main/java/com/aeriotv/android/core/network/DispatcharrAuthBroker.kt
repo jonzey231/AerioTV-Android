@@ -83,29 +83,22 @@ class DispatcharrAuthBroker @Inject constructor(
             .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             .getOrNull()
             ?.trim()
-        if (fresh != null) {
-            // The re-login handed back the key just refused, or a key the
-            // server refuses too: hold it now. Retrying it only feeds the
-            // failed-key lockout for the whole network (2026-11-12).
-            val refused = when {
-                DispatcharrRequestGate.isKeyRejected(fresh) -> true
-                fresh == key -> true
-                else -> client.probeApiKey(row.urlString, fresh) is DispatcharrClient.KeyProbe.Rejected
-            }
-            if (!refused) {
-                Log.i(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: re-signed in; the stream retries with the new key")
-                return com.aeriotv.android.core.playback.StreamAuth.Outcome.Retry(fresh)
-            }
-            gateRejectedKey(row, fresh, passwordToo = false)
-            Log.w(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: the re-sign-in's key is refused too; held, stream stopped")
-            return com.aeriotv.android.core.playback.StreamAuth.Outcome.Held
+        // The re-login's own key came back and is the one just refused: nobody
+        // gets it again for the window, and it is held below (2026-11-12).
+        if (fresh != null && fresh == key) DispatcharrLoginGate.noteKeyRefused(loginSlot(row))
+        if (fresh != null && fresh != key && !DispatcharrRequestGate.isKeyRejected(fresh)) {
+            Log.i(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: re-signed in; the stream retries with the new key")
+            return com.aeriotv.android.core.playback.StreamAuth.Outcome.Retry(fresh)
         }
         val noKey = DispatcharrLoginGate.accountHasNoKey(loginSlot(row))
-        gateRejectedKey(row, key, passwordToo = hasPassword, noApiKey = noKey)
+        // The password signed in when only the key it issued was refused: the prompt names the key.
+        val keyRefused = DispatcharrLoginGate.foundRefusedKey(loginSlot(row))
+        gateRejectedKey(row, key, passwordToo = hasPassword && !keyRefused, noApiKey = noKey)
         Log.w(
             TAG,
             "[AUTH] stream 401 for ${row.id.take(8)}: key rejected" +
-                (if (noKey) ", re-sign-in found no API key" else if (hasPassword) ", re-sign-in refused" else "") + "; held, stream stopped",
+                (if (noKey) ", re-sign-in found no API key" else if (keyRefused) ", the key a re-sign-in issued was refused too" else if (hasPassword) ", re-sign-in refused" else "") +
+                "; held, stream stopped",
         )
         return com.aeriotv.android.core.playback.StreamAuth.Outcome.Held
     }
@@ -178,6 +171,8 @@ class DispatcharrAuthBroker @Inject constructor(
                     relogin = { silentRebootstrapApiKey(playlist) },
                     loginRejected = { DispatcharrLoginGate.isRejected(loginSlot(playlist)) },
                     accountHasNoKey = { DispatcharrLoginGate.accountHasNoKey(loginSlot(playlist)) },
+                    keyRefused = { DispatcharrLoginGate.foundRefusedKey(loginSlot(playlist)) },
+                    noteKeyRefused = { DispatcharrLoginGate.noteKeyRefused(loginSlot(playlist)) },
                     hold = { key, passwordToo, noApiKey -> gateRejectedKey(playlist, key, passwordToo, noApiKey) },
                     invalidate = { invalidateRow(playlistId) },
                     log = { warn, line -> if (warn) Log.w(TAG, line) else Log.i(TAG, line) },
@@ -193,9 +188,6 @@ class DispatcharrAuthBroker @Inject constructor(
         val current = stored ?: DispatcharrRequestGate.replacementFor(usedKey)
         return currentKeyAfterSwap(usedKey, current, DispatcharrRequestGate::isKeyRejected)
     }
-
-    /** A re-login (the held key's re-check) handed back [key] and the server refuses it: hold it too. */
-    fun holdRefusedKey(playlist: PlaylistEntity, key: String) = gateRejectedKey(playlist, key, passwordToo = false)
 
     private fun gateRejectedKey(playlist: PlaylistEntity, key: String, passwordToo: Boolean, noApiKey: Boolean = false) {
         // Held for the identity the key is (the playlist's own, or a profile's).
@@ -270,8 +262,16 @@ class DispatcharrAuthBroker @Inject constructor(
                 return null
             }
             val pair = client.login(row.urlString, username, password)
+            val minted = client.fetchCurrentUserApiKey(row.urlString, pair.access)
+            // EXACTLY one request checks the key before anything stores or
+            // sends it (/api/core/version/ in the playlist's header shape, past
+            // the held-key gate). Refused: the re-login ends as key refused
+            // (DispatcharrLoginGate parks the identity, every waiter gets no
+            // key, the caller holds the old key). No answer is not a refusal.
+            val proof = client.probeApiKeyOnce(row.urlString, minted)
+            val newKey = reloginOutcome(minted, proof)
+            if (proof is DispatcharrClient.KeyProbe.Accepted) DispatcharrRequestGate.clearKey(newKey)
             tokenStore.store(row.id, pair.access, pair.refresh)
-            val newKey = client.fetchCurrentUserApiKey(row.urlString, pair.access)
             // The startup login runs this too (one login per launch): an
             // unchanged key writes nothing, so a launch never looks like a
             // sign-in change to sync.
@@ -302,6 +302,9 @@ class DispatcharrAuthBroker @Inject constructor(
         } catch (e: DispatcharrError.NoApiKey) {
             Log.w(TAG, "silentRebootstrap for ${playlist.id.take(8)}: signed in, but the account has no API key")
             throw e // the gate records it; the caller holds the key
+        } catch (e: ReloginKeyRefused) {
+            Log.w(TAG, "silentRebootstrap for ${playlist.id.take(8)}: signed in, but the server refused the key it issued; not stored")
+            throw e // the gate parks the identity; the caller holds the old key
         } catch (t: Throwable) {
             Log.w(TAG, "silentRebootstrap FAIL for ${playlist.id.take(8)}: ${t.message}")
             null
@@ -321,6 +324,8 @@ internal enum class ReloginHold {
     PasswordRefused,
     /** The re-login signed in, but the account has no API key: every key is dead. */
     NoApiKey,
+    /** The re-login signed in, but the server refused the key it issued (2026-11-12). */
+    KeyRefused,
 }
 
 /**
@@ -329,10 +334,26 @@ internal enum class ReloginHold {
  * it has no key at all); a refused password holds it when the probe also
  * rejected the key; anything else (a network failure) does not.
  */
-internal fun reloginHold(keyRejected: Boolean, loginRejected: Boolean, accountHasNoKey: Boolean): ReloginHold = when {
+internal fun reloginHold(keyRejected: Boolean, loginRejected: Boolean, accountHasNoKey: Boolean, keyRefused: Boolean = false): ReloginHold = when {
     accountHasNoKey -> ReloginHold.NoApiKey
     keyRejected && loginRejected -> ReloginHold.PasswordRefused
+    // Signed in, but the key it issued was refused too: re-signing in mints the same refused key.
+    keyRejected && keyRefused -> ReloginHold.KeyRefused
     else -> ReloginHold.None
+}
+
+/**
+ * A re-login signed in and read [minted] from the account; [proof] is the ONE
+ * request that checked it. Refused ends the re-login ([ReloginKeyRefused]):
+ * the key is not stored, nobody gets it, and the old key is held, so a key
+ * the server still refuses never goes out again (2026-11-12: it was never
+ * held, and about 15 refused requests went out in a second, tripping
+ * Dispatcharr's 10-per-minute IP lockout). No answer (network, 5xx) is not a
+ * refusal: the key is used. Apple twin: DispatcharrRelogin.outcome.
+ */
+internal fun reloginOutcome(minted: String, proof: DispatcharrClient.KeyProbe): String {
+    if (proof == DispatcharrClient.KeyProbe.Rejected) throw ReloginKeyRefused()
+    return minted
 }
 
 /** A re-login's key replaces the stored one only when it differs (blank stored = differs). */
@@ -349,10 +370,14 @@ internal class KeyRecoveryOps<T>(
     val probe: suspend (String) -> DispatcharrClient.KeyProbe,
     /** Persist a header shape the probe found; non-null only when it changed. */
     val persistModeIfChanged: suspend (String) -> String?,
-    /** The silent re-login (one per identity per minute, shared: DispatcharrLoginGate). */
+    /** The silent re-login (one per identity per minute, shared; its key checked once: DispatcharrLoginGate). */
     val relogin: suspend () -> String?,
     val loginRejected: () -> Boolean,
     val accountHasNoKey: () -> Boolean,
+    /** The identity's last re-login signed in, but the server refused the key it issued. */
+    val keyRefused: () -> Boolean,
+    /** A handed-out key came back refused: park the identity, nobody gets it again for the window. */
+    val noteKeyRefused: () -> Unit,
     /** Hold [key] for this playlist and identity ([DispatcharrRequestGate.markKeyRejected]). */
     val hold: (key: String, passwordToo: Boolean, noApiKey: Boolean) -> Unit,
     val invalidate: () -> Unit,
@@ -360,20 +385,14 @@ internal class KeyRecoveryOps<T>(
 )
 
 /**
- * What an API-key call does after a 401 ([DispatcharrAuthBroker.withApiKeyRetry]).
- *
- * With a stored password the re-login is the recovery, and it runs before any
- * key probe. The key it hands back is probed once before it is used: a key
- * the server refuses (the same key, or a new one) is held at once and never
- * replayed (2026-11-12, security: a re-login that handed back the refused key
- * replayed it from every caller, about 15 refused requests a second, which
- * trips Dispatcharr's 10-per-minute failed-key lockout for the whole
- * network). So a refused key costs at most two refused requests (the call
- * and one probe) and one re-login, which every caller within the minute
- * shares; after the hold nothing is sent with it.
- *
- * Without a password (API key only): one probe tells a header-shape or
- * endpoint 401 from a refused key; a refused key is held.
+ * What an API-key call does after a 401 ([DispatcharrAuthBroker.withApiKeyRetry]):
+ * a replaced key is retried; otherwise one probe tells a header-shape or
+ * endpoint 401 from a refused key, then the silent re-login. The re-login
+ * checks the key it reads with one request before anything stores or sends
+ * it, so a key the server refuses never comes back from it; a shared key that
+ * comes back as the very key just refused is marked the same way. Either way
+ * the old key is held (2026-11-12, Apple 44c544c): a burst of 401s costs one
+ * probe of the old key and one check of the new one, and nothing after that.
  */
 internal suspend fun <T> recoverFromUnauthorized(
     tag: String,
@@ -395,60 +414,14 @@ internal suspend fun <T> recoverFromUnauthorized(
         ops.log(false, "401 for $tag used a replaced key; retrying with the current one (no probe)")
         return ops.block(current)
     }
-    if (hasPassword) {
-        ops.log(false, "401 on apiKey call for $tag; attempting silent rebootstrap")
-        val fresh = ops.relogin()?.trim()?.takeIf { it.isNotEmpty() }
-        if (fresh != null) {
-            // Never replay a key the server refuses: probe the re-login's key
-            // first (one request), and hold it when refused.
-            val probe = if (DispatcharrRequestGate.isKeyRejected(fresh)) DispatcharrClient.KeyProbe.Rejected else ops.probe(fresh)
-            when (probe) {
-                DispatcharrClient.KeyProbe.Rejected -> {
-                    ops.hold(fresh, false, false)
-                    ops.log(
-                        true,
-                        "[AUTH] re-login for $tag signed in, but its key " +
-                            (if (fresh == initialKey.trim()) "is the one just refused" else "is refused too") +
-                            "; held, no replay",
-                    )
-                    throw DispatcharrError.KeyRejected()
-                }
-                is DispatcharrClient.KeyProbe.Accepted -> {
-                    ops.persistModeIfChanged(probe.mode)?.let { ops.log(false, "401 for $tag was a header-shape rejection; retrying with mode=$it") }
-                    return ops.block(fresh)
-                }
-                DispatcharrClient.KeyProbe.Unknown -> return ops.block(fresh)
-            }
-        }
-        // The re-login failed. A password playlist whose re-login was itself
-        // refused (DispatcharrLoginGate parks it), or signed in to an account
-        // with no API key (removed on the server; 2026-11-11, Apple parity):
-        // the same hold, or every caller would keep sending the dead key.
-        // The held key's re-check is then one re-login now and then.
-        val probe = ops.probe(initialKey)
-        if (probe is DispatcharrClient.KeyProbe.Accepted && ops.persistModeIfChanged(probe.mode) != null) {
-            ops.log(false, "401 for $tag was a header-shape rejection; retrying with the new mode")
-            return ops.block(initialKey)
-        }
-        when (reloginHold(probe is DispatcharrClient.KeyProbe.Rejected, ops.loginRejected(), ops.accountHasNoKey())) {
-            ReloginHold.NoApiKey -> {
-                ops.hold(initialKey, true, true)
-                throw DispatcharrError.KeyRejected()
-            }
-            ReloginHold.PasswordRefused -> {
-                ops.hold(initialKey, true, false)
-                throw DispatcharrError.KeyRejected()
-            }
-            ReloginHold.None -> throw e
-        }
-    }
     // Task #49 (iOS verifyConnection v1.6.20 parity): before assuming the KEY
     // was rotated, check whether the 401 is a header-SHAPE rejection -- some
     // deployments (reverse proxies, hardened builds) reject
     // `Authorization: ApiKey` or require it, with a perfectly valid key. The
     // probe also tells a rejected KEY apart from an endpoint-specific 401/403
     // for a key that still works, and it stops at Dispatcharr's "Invalid API
-    // key" answer. Concurrent 401s for the same key share one probe.
+    // key" answer. Concurrent 401s for the same key share one probe
+    // (DispatcharrClient.probeApiKey is single-flight per key).
     val probe = ops.probe(initialKey)
     if (probe is DispatcharrClient.KeyProbe.Accepted) {
         val detected = ops.persistModeIfChanged(probe.mode)
@@ -457,15 +430,48 @@ internal suspend fun <T> recoverFromUnauthorized(
             return ops.block(initialKey)
         }
     }
-    if (probe is DispatcharrClient.KeyProbe.Rejected) {
+    val keyRejected = probe is DispatcharrClient.KeyProbe.Rejected
+    ops.log(false, "401 on apiKey call for $tag (key probe: ${probe::class.simpleName}); attempting silent rebootstrap")
+    var freshKey = ops.relogin()?.trim()?.takeIf { it.isNotEmpty() }
+    if (freshKey != null && keyRejected && freshKey == initialKey.trim()) {
+        // The re-login's own key came back (shared within the minute) and is
+        // the one just refused: nobody gets it again for the window; held below.
+        ops.noteKeyRefused()
+        freshKey = null
+    }
+    if (freshKey == null && !hasPassword) {
         // API-Key-mode playlists have no credentials to re-mint from, so a
         // rejected key is terminal until the user replaces it. Retrying it
         // fed the server's failed-key throttle (10 per minute per IP) every
         // 12 s until every API-key request from the network got 429
         // (2026-11-09). Hold it locally until Edit Playlist changes something.
-        ops.log(true, "API key for $tag rejected and no password to re-sign in with; the user must enter a new key in Edit Playlist")
-        ops.hold(initialKey, false, false)
+        ops.log(
+            true,
+            "silent rebootstrap returned null for $tag: API-Key-mode playlist with a rejected key has nothing " +
+                "to re-mint from. The user must enter a new key in Edit Playlist. Surfacing the 401.",
+        )
+        if (keyRejected) {
+            ops.hold(initialKey, false, false)
+            throw DispatcharrError.KeyRejected()
+        }
+        throw e
+    }
+    if (freshKey == null) {
+        // A password playlist whose re-login was itself refused
+        // (DispatcharrLoginGate parks it), signed in to an account with no
+        // API key (removed on the server; 2026-11-11), or signed in but was
+        // issued a key the server refuses too (2026-11-12): the same hold, or
+        // every caller would keep sending the dead key, which counts toward
+        // Dispatcharr's failed-key lockout for the whole network. The held
+        // key's re-check is then one re-login now and then.
+        when (reloginHold(keyRejected, ops.loginRejected(), ops.accountHasNoKey(), ops.keyRefused())) {
+            ReloginHold.NoApiKey -> ops.hold(initialKey, true, true)
+            ReloginHold.PasswordRefused -> ops.hold(initialKey, true, false)
+            // The password signed in; the key it issued was refused: the prompt names the key.
+            ReloginHold.KeyRefused -> ops.hold(initialKey, false, false)
+            ReloginHold.None -> throw e
+        }
         throw DispatcharrError.KeyRejected()
     }
-    throw e
+    return ops.block(freshKey)
 }

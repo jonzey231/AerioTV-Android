@@ -28,6 +28,11 @@ import java.util.concurrent.ConcurrentHashMap
  *     launch makes at most one login, and a re-login while it runs, or
  *     within [ATTEMPT_WINDOW_MS] after it, shares its key instead of
  *     signing in again.
+ *  7. A re-login that signs in but whose key the server refuses
+ *     ([ReloginKeyRefused], one check of the key) parks that identity for
+ *     [ATTEMPT_WINDOW_MS]: no new attempt, and no waiter or later caller
+ *     gets that key (2026-11-12, Apple 44c544c). A shared key the server
+ *     refuses later is marked the same way ([noteKeyRefused]).
  */
 object DispatcharrLoginGate {
     private const val TAG = "DispatcharrAuthBroker"
@@ -42,6 +47,8 @@ object DispatcharrLoginGate {
         @Volatile var rejectionSurfaced = false
         /** The last re-login signed in, but users/me carried no API key. */
         @Volatile var noApiKey = false
+        /** Until when the key the last re-login issued counts as refused: no attempt, no key. */
+        @Volatile var keyRefusedUntil = 0L
     }
 
     private val slots = ConcurrentHashMap<String, Slot>()
@@ -99,6 +106,13 @@ object DispatcharrLoginGate {
                     "next attempt in ${(slot.rejectedUntil - t + 999) / 1000}s")
                 return@withLock null
             }
+            if (t < slot.keyRefusedUntil) {
+                // Its last re-login signed in, but the server refused the key it
+                // issued: re-signing in mints the same key. Nobody gets it.
+                logI("[AUTH] re-login for ${playlistId.take(8)} parked after the server refused the key it issued; " +
+                    "next attempt in ${(slot.keyRefusedUntil - t + 999) / 1000}s")
+                return@withLock null
+            }
             if (slot.lastAttemptAt != 0L && t - slot.lastAttemptAt < ATTEMPT_WINDOW_MS) {
                 // A caller that waited on the in-flight attempt, or one inside
                 // the window: share the result, never a second POST.
@@ -123,9 +137,32 @@ object DispatcharrLoginGate {
                 slot.rejectionSurfaced = true
                 surfaceRejected(playlistId)
                 null
+            } catch (e: ReloginKeyRefused) {
+                // Signed in, but the one check of the key it issued was refused:
+                // not stored, nobody gets it, the caller holds the old key.
+                slot.lastKey = null
+                slot.keyRefusedUntil = now() + ATTEMPT_WINDOW_MS
+                logW("[AUTH] re-login for ${playlistId.take(8)} signed in, but the server refused the key it issued; " +
+                    "the key is held and no re-login runs for ${ATTEMPT_WINDOW_MS / 1000}s")
+                null
             }
         }
     }
+
+    /**
+     * A key [playlistId]'s re-login issued came back refused after it was
+     * handed out (a caller got it as the shared result and the server refused
+     * it): park like a refused check; nobody gets that key again for the window.
+     */
+    fun noteKeyRefused(playlistId: String) {
+        val slot = slots.getOrPut(playlistId) { Slot() }
+        slot.lastKey = null
+        slot.keyRefusedUntil = now() + ATTEMPT_WINDOW_MS
+        logW("[AUTH] re-login for ${playlistId.take(8)} signed in, but the server refused the key it issued; the key is held")
+    }
+
+    /** The last re-login for [playlistId] signed in, but the server refused the key it issued (within the window). */
+    fun foundRefusedKey(playlistId: String): Boolean = (slots[playlistId]?.keyRefusedUntil ?: 0L) > now()
 
     /**
      * The re-login slot for [playlistId] signing in as [profileId] (null or
@@ -177,3 +214,10 @@ object DispatcharrLoginGate {
     /** Parse a Retry-After header (seconds form; HTTP-date falls back to default). */
     fun parseRetryAfter(value: String?): Long? = value?.trim()?.toLongOrNull()?.takeIf { it > 0 }
 }
+
+/**
+ * A silent re-login signed in, but the one request that checked the key it
+ * read from the account was refused ([reloginOutcome]). [DispatcharrLoginGate]
+ * ends the re-login with no key and parks the identity.
+ */
+internal class ReloginKeyRefused : Exception("The server refused the key the re-login issued")

@@ -2309,7 +2309,14 @@ class ProfileManager @Inject constructor(
             val key = DispatcharrLoginGate.silentRelogin("$playlistId:$profileId") {
                 try {
                     val pair = client.login(base, username, password)
-                    client.fetchCurrentUserApiKey(base, pair.access)
+                    val minted = client.fetchCurrentUserApiKey(base, pair.access)
+                    // One request checks the key before it is stored or sent
+                    // (2026-11-12, Apple 44c544c): a refused one ends the
+                    // re-login with no key and parks this profile's slot.
+                    val proof = client.probeApiKeyOnce(base, minted)
+                    com.aeriotv.android.core.network.reloginOutcome(minted, proof).also {
+                        if (proof is com.aeriotv.android.core.network.DispatcharrClient.KeyProbe.Accepted) com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(it)
+                    }
                 } catch (e: DispatcharrError.InvalidCredentials) {
                     throw e
                 } catch (e: DispatcharrError) {
