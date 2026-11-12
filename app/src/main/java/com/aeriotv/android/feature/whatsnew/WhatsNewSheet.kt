@@ -30,6 +30,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -111,6 +116,7 @@ private fun ColumnScope.WhatsNewBody(
                 // fill = false so a short release still wraps and the panel
                 // stays compact; a long one takes the remaining height.
                 .weight(1f, fill = false)
+                .topFade(notesScroll.canScrollBackward)
                 .verticalScroll(notesScroll),
         ) {
             items.forEachIndexed { index, item ->
@@ -154,8 +160,10 @@ private fun ColumnScope.WhatsNewBody(
         // it, and the trailing breathing room is contentPadding inside the
         // same scroller instead of a sibling Spacer that would again make the
         // wrapping column taller.
+        val notesList = androidx.compose.foundation.lazy.rememberLazyListState()
         LazyColumn(
-            modifier = Modifier.fillMaxHeight(0.85f),
+            state = notesList,
+            modifier = Modifier.fillMaxHeight(0.85f).topFade(notesList.canScrollBackward),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             items(items) { item ->
@@ -175,6 +183,31 @@ private fun ColumnScope.WhatsNewBody(
         }
     }
 }
+
+/**
+ * What's New fade (2026-11-12, Apple parity): while the notes are scrolled,
+ * the top of the list fades to transparent over about one line, so a note
+ * slides out under the title instead of being cut through the middle.
+ */
+internal object WhatsNewFade {
+    /** About one line of a note's title. */
+    const val HEIGHT_DP = 24
+
+    /** Where the fade ends, as a fraction of the list's height (0 when the list has no height). */
+    fun stop(fadePx: Float, heightPx: Float): Float = if (heightPx <= 0f) 0f else (fadePx / heightPx).coerceIn(0f, 1f)
+}
+
+/** A transparent-to-opaque mask over the top [WhatsNewFade.HEIGHT_DP] while [scrolled]. */
+private fun Modifier.topFade(scrolled: Boolean): Modifier = if (!scrolled) this else this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val stop = WhatsNewFade.stop(WhatsNewFade.HEIGHT_DP.dp.toPx(), size.height)
+        drawRect(
+            brush = Brush.verticalGradient(0f to Color.Transparent, stop to Color.Black),
+            blendMode = BlendMode.DstIn,
+        )
+    }
 
 /**
  * One release note. On TV it is focusable and carries the house focus
