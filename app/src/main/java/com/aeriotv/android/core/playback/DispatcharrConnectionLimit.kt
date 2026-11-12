@@ -39,6 +39,10 @@ object DispatcharrConnectionLimit {
          *  is held ([StreamAuth]). Same card; Retry opens nothing with the
          *  held key, so it only plays again once the key is replaced. */
         KEY_REJECTED,
+        /** Not a limit: the playlist's server address changed and the active
+         *  Child is held there (item 8); no stream opens until a same-server
+         *  check passes. Same card; Retry opens nothing until then. */
+        ROUTE_HELD,
     }
 
     data class Notice(
@@ -75,6 +79,16 @@ object DispatcharrConnectionLimit {
         title = com.aeriotv.android.core.network.KEY_REJECTED_TITLE,
         message = com.aeriotv.android.core.network.KEY_REJECTED_MESSAGE,
     )
+
+    /** A stream refused for a held Child (item 15): the existing line the lists show, no title. */
+    val ROUTE_HELD = Notice(
+        kind = Kind.ROUTE_HELD,
+        title = "",
+        message = com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE,
+    )
+
+    /** The stop card for a held stream open: [ROUTE_HELD] for a held Child's address, else [KEY_REJECTED]. */
+    fun heldNotice(e: StreamKeyRejectedException): Notice = if (e is StreamRouteHeldException) ROUTE_HELD else KEY_REJECTED
 
     private const val USER_LIMIT_PREFIX = "Stream limit exceeded"
     private const val PROVIDER_LIMIT_PREFIX =

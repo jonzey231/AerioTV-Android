@@ -24,6 +24,18 @@ import io.ktor.util.AttributeKey
  * The login and token refresh endpoints are left to [DispatcharrLoginGate]
  * (their own throttle scope, their own Retry-After handling).
  */
+/**
+ * Items 8 and 15: a held Child's request to its playlist's moved address is
+ * never sent; its lists fail with the existing line "Could not reach your
+ * Dispatcharr server", the same line its streams stop with
+ * (StreamRouteHeldException). Null = send it. [bypass] is the same-server
+ * check and the held sign-in form ([BypassChildSeal]).
+ */
+internal fun heldRouteRefusal(url: String, bypass: Boolean): DispatcharrError.Transport? =
+    if (!bypass && com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(url)) {
+        DispatcharrError.Transport(com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE)
+    } else null
+
 internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
     on(Send) { request ->
         // Launch: the Drive credentials pull goes first (bounded wait).
@@ -35,9 +47,9 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
         // A Child held after its playlist's server address changed stays
         // active and sends nothing there until the hold lifts (item 8). Only
         // the same-server check and the held sign-in form get through.
-        if (!request.attributes.contains(BypassChildSeal) && com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(built.toString())) {
+        heldRouteRefusal(built.toString(), request.attributes.contains(BypassChildSeal))?.let { refusal ->
             Log.i(TAG, "[PROFILE-HOST] skipped ${request.method.value} $path: the active Child is held after a server change")
-            throw DispatcharrError.Transport(com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE)
+            throw refusal
         }
         // Built with a key a re-sign-in has since replaced: send the current
         // one (never logged), not a counted failure on a dead key.

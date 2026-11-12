@@ -106,6 +106,17 @@ object StreamGate {
         return if (close > open) body.substring(open + 1, close).trim().takeIf { it.isNotEmpty() } else null
     }
 
+    /**
+     * Item 8 and 15: a held Child's streams to the moved address never go out
+     * (the Dispatcharr API calls are refused the same way at the request
+     * gate). Throws [StreamRouteHeldException] before any network.
+     */
+    fun refuseHeldRoute(url: String) {
+        if (!com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(url)) return
+        log("[PROFILE-HOST] stream open refused: the active profile is held at this address")
+        throw StreamRouteHeldException()
+    }
+
     /** Seconds left on [url]'s server pause, 0 when streams may open. */
     fun pausedSeconds(url: String): Long = DispatcharrRequestGate.pausedSeconds(DispatcharrRequestGate.serverKey(url))
 
@@ -148,6 +159,7 @@ object StreamGate {
     val interceptor = Interceptor { chain ->
         com.aeriotv.android.core.network.DispatcharrLaunchGate.awaitBlocking()
         val url = chain.request().url.toString()
+        refuseHeldRoute(url)
         // Per open: the key this request was built with, as it stands now
         // (replaced by a re-sign-in, or held). A held key stops the open here,
         // before any request goes out: no keyless retry. StreamAuth.
@@ -242,6 +254,7 @@ object StreamGate {
         override fun open(dataSpec: DataSpec): Long {
             com.aeriotv.android.core.network.DispatcharrLaunchGate.awaitBlocking()
             val url = dataSpec.uri.toString()
+            refuseHeldRoute(url)
             val spec = when (val rewrite = StreamAuth.rewriteFor(builtKey)) {
                 StreamAuth.Rewrite.Keep -> dataSpec
                 StreamAuth.Rewrite.Held -> throw StreamKeyRejectedException()

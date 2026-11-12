@@ -5408,10 +5408,16 @@ class AerioExoPlayerHolder @Inject constructor(
      * duplicate second sighting (load error, then terminal player error).
      */
     private fun handleStreamKeyRejected(error: Throwable): Boolean {
-        StreamAuth.find(error) ?: return false
-        if (_connectionLimit.value?.kind == DispatcharrConnectionLimit.Kind.KEY_REJECTED) return true
-        Log.w(TAG, "[AUTH] stream key rejected ch=$currentChannelId; stopping, no retry or failover")
-        tracer.recover("stream key rejected")
+        val held = StreamAuth.find(error) ?: return false
+        // A held Child's address (item 15) shows "Could not reach your Dispatcharr server".
+        val notice = DispatcharrConnectionLimit.heldNotice(held)
+        if (_connectionLimit.value?.kind == notice.kind) return true
+        if (held is StreamRouteHeldException) {
+            Log.w(TAG, "[PROFILE-HOST] stream refused ch=$currentChannelId: the active profile is held at this address; stopping, no retry or failover")
+        } else {
+            Log.w(TAG, "[AUTH] stream key rejected ch=$currentChannelId; stopping, no retry or failover")
+        }
+        tracer.recover(if (held is StreamRouteHeldException) "stream address held" else "stream key rejected")
         stoppingRetryJob?.cancel()
         stoppingRetryJob = null
         rateLimitJob?.cancel()
@@ -5424,7 +5430,7 @@ class AerioExoPlayerHolder @Inject constructor(
         connectionLimitWasCatchup = catchup
         liveFailover.resetWalk()
         liveFailover.publishServerStatus(null)
-        _connectionLimit.value = DispatcharrConnectionLimit.KEY_REJECTED
+        _connectionLimit.value = notice
         stop()
         return true
     }

@@ -33,10 +33,11 @@ internal object VodStreamRefusal {
         // The stream's key was refused and held (StreamAuth): the usual card,
         // and no automatic retry (each would be another counted failed-key
         // open). The "Sign-in not accepted" prompt shows.
-        if (com.aeriotv.android.core.playback.StreamAuth.find(error) != null) {
+        com.aeriotv.android.core.playback.StreamAuth.find(error)?.let { held ->
             reason = null
             limited = true
-            return null
+            // A held Child's address (item 15): the line the lists show.
+            return if (held is com.aeriotv.android.core.playback.StreamRouteHeldException) com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE else null
         }
         StreamGate.find(error)?.let { rl ->
             limited = false

@@ -12,8 +12,19 @@ import kotlinx.coroutines.withTimeoutOrNull
  * and the key could not be recovered: it is held ("Sign-in not accepted"
  * shows), the stream stops, and no stream opens with that key again.
  */
-class StreamKeyRejectedException(cause: Throwable? = null) :
-    IOException(com.aeriotv.android.core.network.KEY_REJECTED_MESSAGE, cause)
+open class StreamKeyRejectedException protected constructor(message: String, cause: Throwable?) : IOException(message, cause) {
+    constructor(cause: Throwable? = null) : this(com.aeriotv.android.core.network.KEY_REJECTED_MESSAGE, cause)
+}
+
+/**
+ * Item 15 of the profile follow-ups (parity, 2026-11-11): a stream open to
+ * an address a held Child is sealed from (item 8: the playlist's server
+ * address changed and no same-server check has passed). Refused here, before
+ * anything goes out, and stopped like a held key (no retry, no failover
+ * walk), but shown as the existing line "Could not reach your Dispatcharr
+ * server", the same as the lists. No prompt shows.
+ */
+class StreamRouteHeldException : StreamKeyRejectedException(com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE, null)
 
 /**
  * HTTP 401 on Dispatcharr stream opens (Logan 2026-11-10). A Google TV on an
