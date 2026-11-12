@@ -209,6 +209,7 @@ class DispatcharrClient @Inject constructor() {
      * are configured, so we drop down to OkHttp directly for this one call.
      */
     private val noRedirectOkHttp: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(HeldRouteGate.interceptor)
         .followRedirects(false)
         .followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS)

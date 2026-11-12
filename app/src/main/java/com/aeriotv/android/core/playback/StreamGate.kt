@@ -112,7 +112,7 @@ object StreamGate {
      * gate). Throws [StreamRouteHeldException] before any network.
      */
     fun refuseHeldRoute(url: String) {
-        if (!com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(url)) return
+        if (!com.aeriotv.android.core.network.HeldRouteGate.refuses(url)) return
         log("[PROFILE-HOST] stream open refused: the active profile is held at this address")
         throw StreamRouteHeldException()
     }

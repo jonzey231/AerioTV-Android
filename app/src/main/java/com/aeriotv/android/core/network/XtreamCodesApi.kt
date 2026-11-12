@@ -84,6 +84,8 @@ class XtreamCodesApi @Inject constructor() {
             socketTimeoutMillis = 30_000    // iOS timeoutIntervalForRequest = 30 (idle)
         }
         engine {
+            // A held profile's addresses get nothing from the XC bridge either.
+            addInterceptor(HeldRouteGate.interceptor)
             config {
                 // Concurrency gate. Dispatcharr's XC bridge needs per-category
                 // enumeration (hundreds of small JSON requests for a full VOD +

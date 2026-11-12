@@ -93,6 +93,12 @@ class LanReachability @Inject constructor(
     /** Force a fresh probe of [lanUrl] (playlist edits, network changes). */
     suspend fun refresh(lanUrl: String): Boolean {
         val key = lanUrl.trimEnd('/')
+        // A held profile's addresses get no probe either: keep the last
+        // verdict (WAN when none) and probe again once the hold lifts.
+        if (HeldRouteGate.refuses(key)) {
+            Log.i(TAG, "LAN probe skipped for $key: the active profile is held at this address")
+            return verdicts[key] ?: false
+        }
         // One probe at a time per process: concurrent first-routing calls for
         // the same URL serialise here so it is one extra cheap HEAD at worst.
         probeMutex.withLock {

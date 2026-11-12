@@ -106,6 +106,8 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // Header injection is scoped via ActivePlaylistCredentials so a
         // third-party tvg-logo CDN doesn't see the key.
         val imageHttp = OkHttpClient.Builder()
+            // A held profile's addresses get no logo requests (the placeholder shows).
+            .addInterceptor(com.aeriotv.android.core.network.HeldRouteGate.interceptor)
             .addInterceptor(DispatcharrImageAuthInterceptor(activeCredentials))
             .build()
         return ImageLoader.Builder(context)

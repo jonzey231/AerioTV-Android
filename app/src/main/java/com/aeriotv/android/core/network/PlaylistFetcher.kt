@@ -33,7 +33,8 @@ class PlaylistFetcher @Inject constructor() {
     private val client = HttpClient(OkHttp) {
         installSanitizedLogging()
         engine {
-            // OkHttp engine config can be expanded later for proxies, interceptors.
+            // A held profile's addresses get no guide or playlist downloads.
+            addInterceptor(HeldRouteGate.interceptor)
         }
         install(HttpTimeout) {
             // Mirror the iOS URLSession model (StreamingAPIs.swift): a generous
@@ -120,6 +121,7 @@ class PlaylistFetcher @Inject constructor() {
      *  and decompresses on the CALLING thread instead, so a caller on the
      *  background-priority EPG dispatcher does all of this work niced. */
     private val streamingClient = okhttp3.OkHttpClient.Builder()
+        .addInterceptor(HeldRouteGate.interceptor)
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         // No call-level total timeout, same reasoning as the ktor config
