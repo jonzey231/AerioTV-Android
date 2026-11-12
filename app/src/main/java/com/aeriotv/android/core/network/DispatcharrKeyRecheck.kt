@@ -113,10 +113,17 @@ class DispatcharrKeyRecheck @Inject constructor(
             // key, so the key itself is probed instead (2026-11-12, security).
             val row = if (r.passwordToo) dao.byId(r.playlistId) else null
             if (row != null && row.apiKey?.trim() == r.key.trim()) {
-                val fresh = broker.silentRebootstrapApiKey(row)
-                accepted = fresh != null
+                val fresh = broker.silentRebootstrapApiKey(row)?.trim()?.takeIf { it.isNotEmpty() }
+                // Signing in proves the password, not the key it hands back:
+                // that key is checked once (it may be the refused one), and a
+                // refused new key is held too, so lifting the hold never sets
+                // every caller off with a dead key (2026-11-12).
+                val keyProbe = fresh?.let { client.probeApiKeyOnce(r.baseUrl, it) }
+                accepted = keyProbe is DispatcharrClient.KeyProbe.Accepted
+                if (fresh != null && fresh != r.key.trim() && keyProbe == DispatcharrClient.KeyProbe.Rejected) broker.holdRefusedKey(row, fresh)
                 outcome = when {
-                    accepted -> "accepted (re-login issued a key)"
+                    accepted -> "accepted (re-login issued a key the server accepts)"
+                    fresh != null && keyProbe == DispatcharrClient.KeyProbe.Rejected -> "rejected (signed in, but its key is refused)"
                     DispatcharrLoginGate.isRejected(broker.loginSlot(row)) -> "rejected (login refused)"
                     else -> "unknown"
                 }
