@@ -91,7 +91,8 @@ class UserQrViewModel @Inject constructor(
     private val dispatcharrClient: com.aeriotv.android.core.network.DispatcharrClient,
     private val repository: com.aeriotv.android.core.data.repository.PlaylistRepository,
 ) : ViewModel() {
-    data class Target(val playlistId: String, val profileId: String, val username: String)
+    /** [displayName]: the profile's name as the profile list shows it (the PIN pad names it). */
+    data class Target(val playlistId: String, val profileId: String, val username: String, val displayName: String)
 
     /** The active playlist's active profile, when it has an API key saved here. */
     suspend fun activeTarget(): Target? {
@@ -103,7 +104,7 @@ class UserQrViewModel @Inject constructor(
     suspend fun target(playlistId: String, profileId: String): Target? {
         manager.userQrText(playlistId, profileId) ?: return null
         val p = manager.profiles(playlistId).first().firstOrNull { it.id == profileId } ?: return null
-        return Target(playlistId, profileId, p.username)
+        return Target(playlistId, profileId, p.username, p.displayName)
     }
 
     suspend fun text(t: Target): String? = manager.userQrText(t.playlistId, t.profileId)
@@ -188,7 +189,7 @@ private fun UserQrFlow(t: UserQrViewModel.Target, vm: UserQrViewModel, onClose: 
     var unlocked by remember(t) { mutableStateOf(!vm.needsPin(t)) }
     if (!unlocked) {
         PinEntryDialog(
-            title = "Enter the PIN to show this code",
+            title = com.aeriotv.android.core.profiles.PinCopy.userQr(t.displayName),
             type = vm.pinType(t) ?: PinType.Numbers,
             onDismiss = onClose,
             onEntered = { seq ->

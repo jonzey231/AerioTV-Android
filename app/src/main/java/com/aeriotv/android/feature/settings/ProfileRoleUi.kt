@@ -69,7 +69,7 @@ import kotlinx.coroutines.launch
 /**
  * Profiles phase 2b (2026-10-17): the Child profile's Manage Profiles row
  * and page, the TV launch picker, and the "Ask who is watching at launch"
- * toggle. Copy: "Manage Profiles", "Enter a PIN from an Admin or Standard profile", "Who is watching?".
+ * toggle. Copy: "Manage Profiles", "Enter an Admin or Standard profile PIN, or the Device Admin PIN", "Who is watching?".
  */
 
 /** Bottom of a Child's Settings root list. */
@@ -78,7 +78,7 @@ fun ManageProfilesRow(onClick: () -> Unit) {
     SettingsCard {
         SettingsNavRow(
             title = "Manage Profiles",
-            subtitle = "Switch profiles, Admin PIN",
+            subtitle = com.aeriotv.android.core.profiles.PinCopy.MANAGE_PROFILES_ROW,
             icon = Icons.Outlined.ManageAccounts,
             onClick = onClick,
         )
@@ -150,7 +150,7 @@ fun ManageProfilesPage(onBack: () -> Unit) {
                         ) {
                             Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(44.dp))
                             Text(
-                                "Enter a PIN from an Admin or Standard profile to switch profiles.",
+                                com.aeriotv.android.core.profiles.PinCopy.MANAGE_PROFILES_GATE,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onBackground,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -216,7 +216,7 @@ fun ManageProfilesPage(onBack: () -> Unit) {
     }
     refusal?.let { r -> ProfileRefusalDialog(r) { refusal = null } }
     if (asking) {
-        AdminPinDialog(pid, vm, title = "Enter a PIN from an Admin or Standard profile", onDismiss = { asking = false }) {
+        AdminPinDialog(pid, vm, title = com.aeriotv.android.core.profiles.PinCopy.ADMIN_PAD, onDismiss = { asking = false }) {
             asking = false
             unlocked = true
         }
@@ -644,7 +644,7 @@ internal class PickerAdder(
     @Composable
     fun Dialogs() {
         if (askPin) {
-            AdminPinDialog(playlistId, vm, title = "Enter a PIN from an Admin or Standard profile", onDismiss = { askPin = false; knownIds = null }) {
+            AdminPinDialog(playlistId, vm, title = com.aeriotv.android.core.profiles.PinCopy.ADMIN_PAD, onDismiss = { askPin = false; knownIds = null }) {
                 askPin = false
                 open()
             }

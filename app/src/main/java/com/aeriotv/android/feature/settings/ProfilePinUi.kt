@@ -63,6 +63,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.profiles.DispatcharrProfile
+import com.aeriotv.android.core.profiles.PinCopy
 import com.aeriotv.android.core.profiles.PinDirection
 import com.aeriotv.android.core.profiles.PinRules
 import com.aeriotv.android.core.profiles.PinType
@@ -427,11 +428,12 @@ fun SetPinFlow(
     var type by remember { mutableStateOf<PinType?>(null) }
     var first by remember { mutableStateOf<List<String>?>(null) }
     var mismatch by remember { mutableStateOf<String?>(null) }
-    val title = if (vm.hasPin(profile.id) && onChosen == null) "Change PIN" else "Set PIN"
+    val name = profile.displayName
+    val title = if (vm.hasPin(profile.id) && onChosen == null) PinCopy.changePin(name) else PinCopy.setPin(name)
 
     when {
         nc && current == null -> PinEntryDialog(
-            title = "Enter PIN",
+            title = PinCopy.currentPin(name),
             type = vm.pinType(profile.id) ?: PinType.Numbers,
             pinLength = vm.pinLength(profile.id),
             onDismiss = { onClose(null) },
@@ -443,7 +445,7 @@ fun SetPinFlow(
         )
         type == null -> ProfileAlertDialog(
             onDismissRequest = { onClose(null) },
-            title = { Text("PIN type") },
+            title = { Text(PinCopy.pinType(name)) },
             text = {
                 Column {
                     PinType.entries.forEach { t ->
@@ -455,7 +457,7 @@ fun SetPinFlow(
             dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = { onClose(null) }) },
         )
         first == null -> PinEntryDialog(
-            title = "$title: Enter PIN",
+            title = title,
             type = type!!,
             onDismiss = { onClose(null) },
             initialError = mismatch,
@@ -464,7 +466,7 @@ fun SetPinFlow(
             onEntered = { seq -> first = seq; mismatch = null; null },
         )
         else -> PinEntryDialog(
-            title = "Confirm PIN",
+            title = PinCopy.confirmPin(name),
             type = type!!,
             pinLength = first!!.size,
             focusClear = true,
@@ -515,7 +517,7 @@ fun RemovePinFlow(
     }
     if (needsCurrent != true) return
     PinEntryDialog(
-        title = "Remove PIN",
+        title = PinCopy.removePin(profile.displayName),
         type = vm.pinType(profile.id) ?: PinType.Numbers,
         pinLength = vm.pinLength(profile.id),
         onDismiss = { onClose(null) },

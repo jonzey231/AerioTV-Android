@@ -196,7 +196,7 @@ object RoleRules {
     /** The Device Admin PIN stays while a Child exists and no other full-access PIN does. */
     fun canRemoveDevicePin(childExists: Boolean, otherPins: Int): Boolean = !childExists || otherPins > 0
 
-    const val KEEP_PIN_REASON = "While a Child profile exists, Admin and Standard profiles keep a PIN."
+    const val KEEP_PIN_REASON = PinCopy.KEEP_PIN_REASON
 
     /**
      * Reset of another profile's (forgotten) PIN by an Admin or Standard
@@ -215,7 +215,7 @@ object RoleRules {
         !isFullAccess(actor) -> ResetGate.Denied("Only an Admin or Standard profile can reset a PIN.")
         actorHasPin -> ResetGate.EnterOwnPin
         !childExists -> ResetGate.ConfirmOnly
-        else -> ResetGate.Denied("Set a PIN on this profile first.")
+        else -> ResetGate.Denied(PinCopy.RESET_NEEDS_OWN_PIN)
     }
 
     /**

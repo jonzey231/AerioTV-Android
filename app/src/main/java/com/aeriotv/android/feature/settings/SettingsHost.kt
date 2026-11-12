@@ -318,7 +318,7 @@ private fun SettingsSidebar(
                 Spacer(Modifier.height(10.dp))
                 SettingsNavRow(
                     title = "Manage Profiles",
-                    subtitle = "Switch profiles, Admin PIN",
+                    subtitle = com.aeriotv.android.core.profiles.PinCopy.MANAGE_PROFILES_ROW,
                     icon = androidx.compose.material.icons.Icons.Outlined.ManageAccounts,
                     onClick = { onSelect(SettingsRoute.ManageProfiles) },
                     selected = selection is SettingsRoute.ManageProfiles,
@@ -649,7 +649,7 @@ private fun SettingsTvRail(
                     )
                 }
             }
-            if (railChild) add(Triple(SettingsRoute.ManageProfiles as SettingsRoute, "Manage Profiles", "Switch profiles, Admin PIN"))
+            if (railChild) add(Triple(SettingsRoute.ManageProfiles as SettingsRoute, "Manage Profiles", com.aeriotv.android.core.profiles.PinCopy.MANAGE_PROFILES_ROW))
         }
     }
     val selectedIndex = rows.indexOfFirst { it.first == selection }.coerceAtLeast(0)

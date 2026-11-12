@@ -918,7 +918,7 @@ fun ProfilesSection(playlistId: String) {
         )
     }
     removeAdminPinFor?.let { p ->
-        AdminPinDialog(playlistId, vm, title = "Enter a PIN from an Admin or Standard profile to remove ${p.displayName}", onDismiss = { removeAdminPinFor = null }) {
+        AdminPinDialog(playlistId, vm, title = com.aeriotv.android.core.profiles.PinCopy.removeChild(p.displayName), onDismiss = { removeAdminPinFor = null }) {
             removeAdminPinFor = null
             scope.launch { removeAndRefocus(p) }
         }
@@ -941,7 +941,7 @@ internal suspend fun restoreFocus(fr: androidx.compose.ui.focus.FocusRequester, 
     }
 }
 
-/** "Enter a PIN from an Admin or Standard profile": any full-access profile's PIN passes. */
+/** "Enter an Admin or Standard profile PIN, or the Device Admin PIN": any full-access profile's PIN, or the Device Admin PIN, passes. */
 @Composable
 fun AdminPinDialog(playlistId: String, vm: ProfilesViewModel, title: String, onDismiss: () -> Unit, onOk: () -> Unit) {
     PinEntryDialog(
@@ -1004,7 +1004,7 @@ private fun RoleFlow(playlistId: String, p: DispatcharrProfile, vm: ProfilesView
             // Cancelling any PIN cancels the role change.
             if (ok) apply(to) else onClose(null)
         }
-        needEntry -> AdminPinDialog(playlistId, vm, title = "Enter a PIN from an Admin or Standard profile", onDismiss = { onClose(null) }) { apply(to) }
+        needEntry -> AdminPinDialog(playlistId, vm, title = com.aeriotv.android.core.profiles.PinCopy.ADMIN_PAD, onDismiss = { onClose(null) }) { apply(to) }
     }
 }
 
@@ -1041,7 +1041,7 @@ private fun ResetPinFlow(playlistId: String, p: DispatcharrProfile, vm: Profiles
         com.aeriotv.android.core.profiles.RoleRules.ResetGate.EnterOwnPin -> {
             val admin = vm.activeProfile(playlistId) ?: return
             PinEntryDialog(
-                title = "Enter your PIN to reset the PIN for ${p.displayName}",
+                title = com.aeriotv.android.core.profiles.PinCopy.resetActor(p.displayName),
                 type = vm.pinType(admin.id) ?: com.aeriotv.android.core.profiles.PinType.Numbers,
                 pinLength = vm.pinLength(admin.id),
                 onDismiss = { onClose(null) },
@@ -1287,7 +1287,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
 internal fun roleDescription(r: com.aeriotv.android.core.profiles.ProfileRole): String = when (r) {
     com.aeriotv.android.core.profiles.ProfileRole.Admin -> "Full access in AerioTV. Has admin rights on the Dispatcharr server."
     com.aeriotv.android.core.profiles.ProfileRole.User -> "Full access in AerioTV. A standard user on the Dispatcharr server."
-    com.aeriotv.android.core.profiles.ProfileRole.Child -> "Sees only its own content and basic settings. Switching from a Child profile to a non-Child profile requires PIN entry."
+    com.aeriotv.android.core.profiles.ProfileRole.Child -> com.aeriotv.android.core.profiles.PinCopy.CHILD_ROLE
 }
 
 /**

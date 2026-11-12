@@ -159,7 +159,7 @@ internal fun ProfileRoleStepContent(
                 textAlign = TextAlign.Center,
             )
             Text(
-                "A Child profile needs a Device Admin PIN, set next. It works on this device only and is never synced.",
+                com.aeriotv.android.core.profiles.PinCopy.ONBOARDING_ROLE,
                 style = MaterialTheme.typography.bodyMedium.subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

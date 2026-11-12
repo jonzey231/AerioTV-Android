@@ -408,7 +408,7 @@ internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, becom
                 outsideTapCancels = false,
                 onDismissRequest = { onDone(false) },
                 title = { Text("PIN Required") },
-                text = { Text("A Child profile needs a PIN from an Admin or Standard profile to leave it. Set a PIN on an Admin or Standard profile first.") },
+                text = { Text(com.aeriotv.android.core.profiles.PinCopy.NO_PIN_LEAVES_CHILD) },
                 confirmButton = { SettingsDialogTextButton(label = "OK", onClick = { onDone(false) }) },
             )
         }
@@ -474,7 +474,7 @@ internal fun DeviceAdminPinSetFlow(playlistId: String, vm: ProfilesViewModel, on
         )
         type == null -> ProfileAlertDialog(
             onDismissRequest = { onClose(null) },
-            title = { Text("PIN type") },
+            title = { Text(com.aeriotv.android.core.profiles.PinCopy.DEVICE_ADMIN_PIN_TYPE) },
             text = {
                 Column {
                     PinType.entries.forEach { t -> ChoiceRow(label = t.label, checked = type == t, radio = true, onClick = { type = t }) }
@@ -493,7 +493,7 @@ internal fun DeviceAdminPinSetFlow(playlistId: String, vm: ProfilesViewModel, on
             onEntered = { seq -> first = seq; mismatch = null; null },
         )
         else -> PinEntryDialog(
-            title = "Confirm PIN",
+            title = com.aeriotv.android.core.profiles.PinCopy.CONFIRM_DEVICE_ADMIN_PIN,
             type = type!!,
             pinLength = first!!.size,
             focusClear = true,
@@ -554,7 +554,7 @@ internal fun DeviceAdminPinRow(playlistId: String, vm: ProfilesViewModel) {
         com.aeriotv.android.ui.settings.SettingsActionRow(
             label = if (has) "Change Device Admin PIN" else "Set Device Admin PIN",
             leadingIcon = androidx.compose.material.icons.Icons.Filled.Lock,
-            subtitle = "Works on this device only, alongside Admin profile PINs. Never synced.",
+            subtitle = com.aeriotv.android.core.profiles.PinCopy.DEVICE_ADMIN_PIN_ROW,
             onClick = { status = null; mode = "set" },
         )
         if (has) {

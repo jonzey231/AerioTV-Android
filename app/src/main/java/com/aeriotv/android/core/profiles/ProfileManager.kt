@@ -249,7 +249,9 @@ class ProfileManager @Inject constructor(
      */
     suspend fun pickAtLaunch(profileId: String): Result<Unit> {
         val pk = _launchPicker.value ?: return Result.success(Unit)
-        if (pinStore.hasPin(profileId) && !switchTickets.contains(profileId)) return Result.failure(IllegalStateException("Enter PIN"))
+        if (pinStore.hasPin(profileId) && !switchTickets.contains(profileId)) {
+            return Result.failure(IllegalStateException(PinCopy.switchNeedsPin(store.byId(profileId)?.displayName.orEmpty())))
+        }
         if (profileId == activeProfileIdNow(pk.playlistId) && !unusable(profileId)) {
             switchTickets.remove(profileId)
             _launchPicker.value = null
@@ -385,14 +387,14 @@ class ProfileManager @Inject constructor(
         } else {
             check(onboarding || RoleRules.isFullAccess(activeRole(playlistId))) { "Only an Admin or Standard profile can set the Device Admin PIN." }
         }
-        check(pinStore.set(id, type, entries)) { "Enter 4 to 6" }
+        check(pinStore.set(id, type, entries)) { PinCopy.PIN_LENGTH }
         Log.i(TAG, "[PROFILE] device admin pin set on ${playlistId.take(8)}")
     }
 
     /** Null = removable; otherwise why the device PIN must stay. */
     fun deviceAdminPinRemovalBlock(playlistId: String): String? =
         if (RoleRules.canRemoveDevicePin(anyChild(playlistId), adminPinHolders(playlistId).size)) null
-        else "This is the last PIN that can leave a Child profile, so it stays while any profile is a Child."
+        else PinCopy.DEVICE_ADMIN_PIN_STAYS
 
     fun removeDeviceAdminPin(playlistId: String, current: List<String>): Result<Unit> = runCatching {
         val id = deviceAdminPinId(playlistId)
@@ -424,7 +426,7 @@ class ProfileManager @Inject constructor(
     private val adminTickets = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
-     * "Enter a PIN from an Admin or Standard profile": any full-access
+     * "Enter an Admin or Standard profile PIN, or the Device Admin PIN": any full-access
      * profile's PIN (or the Device Admin PIN) on [playlistId] passes. Each
      * keeps its own wrong-PIN backoff. Ok grants one ticket and a switch
      * ticket for the matching profile.
@@ -497,7 +499,7 @@ class ProfileManager @Inject constructor(
         when (val g = roleChangeGate(playlistId, profileId, to)) {
             is RoleRules.RoleChange.Denied -> error(g.reason)
             RoleRules.RoleChange.NeedsPinsCreated -> error(RoleRules.KEEP_PIN_REASON)
-            RoleRules.RoleChange.NeedsPinEntry -> check(consumeAdminTicket(playlistId)) { "Enter a PIN from an Admin or Standard profile" }
+            RoleRules.RoleChange.NeedsPinEntry -> check(consumeAdminTicket(playlistId)) { PinCopy.ADMIN_PAD }
             RoleRules.RoleChange.Allowed -> Unit
         }
         val from = target.effectiveRole()
@@ -599,7 +601,7 @@ class ProfileManager @Inject constructor(
             RoleRules.ResetGate.ConfirmOnly -> Unit
         }
         if (replacement != null) {
-            check(pinStore.set(profileId, replacement.first, replacement.second)) { "Enter 4 to 6" }
+            check(pinStore.set(profileId, replacement.first, replacement.second)) { PinCopy.PIN_LENGTH }
             mutated(profileId, "pin reset")
             Log.i(TAG, "[PROFILE] pin reset to a temporary pin for ${store.byId(profileId)?.username}")
         } else {
@@ -622,7 +624,7 @@ class ProfileManager @Inject constructor(
             check(verifyPin(profileId, current.orEmpty()) == PinCheck.Ok) { "Wrong PIN" }
             switchTickets.remove(profileId)
         }
-        check(pinStore.set(profileId, type, entries)) { "Enter 4 to 6" }
+        check(pinStore.set(profileId, type, entries)) { PinCopy.PIN_LENGTH }
         pendingPinAdds.remove(profileId)
         mutated(profileId, "pin set")
         Log.i(TAG, "[PROFILE] pin ${if (had) "changed" else "set"} for ${store.byId(profileId)?.username}")
@@ -1426,7 +1428,7 @@ class ProfileManager @Inject constructor(
         check(!p.isDefault) { "The default profile cannot be removed." }
         check(RoleRules.isFullAccess(activeRole(p.playlistId))) { "Only an Admin or Standard profile can remove profiles." }
         if (RoleRules.removeNeedsPin(p.effectiveRole())) {
-            check(consumeAdminTicket(p.playlistId)) { "Enter a PIN from an Admin or Standard profile" }
+            check(consumeAdminTicket(p.playlistId)) { PinCopy.ADMIN_PAD }
         }
         deleteLocal(p, fromSync = false)
     }
@@ -1570,7 +1572,7 @@ class ProfileManager @Inject constructor(
         appMade: Boolean = false,
     ): Result<Unit> = runCatching {
         if (!bypassPin && pinStore.hasPin(profileId)) {
-            check(switchTickets.remove(profileId)) { "Enter PIN" }
+            check(switchTickets.remove(profileId)) { PinCopy.switchNeedsPin(store.byId(profileId)?.displayName.orEmpty()) }
         }
         if (appMade) {
             val target = store.byId(profileId) ?: error("Profile not found")

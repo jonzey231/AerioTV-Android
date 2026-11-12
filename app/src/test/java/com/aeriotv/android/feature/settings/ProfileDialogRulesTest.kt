@@ -37,7 +37,7 @@ class ProfileDialogRulesTest {
         assertEquals("Full access in AerioTV. Has admin rights on the Dispatcharr server.", roleDescription(ProfileRole.Admin))
         assertEquals("Full access in AerioTV. A standard user on the Dispatcharr server.", roleDescription(ProfileRole.User))
         assertEquals(
-            "Sees only its own content and basic settings. Switching from a Child profile to a non-Child profile requires PIN entry.",
+            "Sees only its own content and basic settings. Leaving it needs an Admin or Standard profile PIN, or the Device Admin PIN.",
             roleDescription(ProfileRole.Child),
         )
     }
