@@ -344,15 +344,15 @@ class ProfileManager @Inject constructor(
         }
     }
 
-    /** Profiles added from the synced roster in this process (a roster add, or a manual add that finished as one). */
-    private val rosterAddIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /** Profiles added from the synced roster in this process (a roster add, a manual add that finished as one, or a pause add that took its row). */
+    private val rosterAdds = RosterAdds()
 
     /**
      * Undoing [profileId]'s add leaves no tombstone: it came from the roster,
      * or it was added during a roster pause and could not tell (a tombstone
      * then could delete that user's row everywhere once the pause ends).
      */
-    private fun undoesRosterAdd(profileId: String): Boolean = profileId in rosterAddIds || hostHolds.isPausedAdd(profileId)
+    private fun undoesRosterAdd(profileId: String): Boolean = rosterAdds.undoIsLocalOnly(profileId, hostHolds.isPausedAdd(profileId))
 
     // ---- Device Admin PIN (device-local, never synced) ----
     // A PIN tied to no profile: set in onboarding when the first profile is a
@@ -980,7 +980,7 @@ class ProfileManager @Inject constructor(
             // FIRST store write, so the row never exists (or syncs) half built.
             .let { if (seed != null) ProfileRoster.applyRow(it, seed) else it }
         store.upsert(profile)
-        if (seed != null) rosterAddIds += id
+        if (seed != null) rosterAdds.addedFromRoster(id)
         // Signed in just now at the playlist's current address: no older hold
         // applies to this id, and its tag is the server it signed in at.
         dropHold(id, "added")
@@ -1106,7 +1106,12 @@ class ProfileManager @Inject constructor(
                 Log.i(TAG, "[DSYNC] profiles: keep local row for ${local.username} (local $mine >= server ${r.updatedAt})")
                 return@forEach
             }
-            if (pausedAdd) Log.i(TAG, "[PROFILE-HOST] ${local.username} added during the roster pause takes its roster row")
+            if (pausedAdd) {
+                // It is a roster add from now on: undoing it (still possible
+                // in the onboarding step or the PIN step) leaves no tombstone.
+                rosterAdds.pauseAddMerged(id, tookRow = true)
+                Log.i(TAG, "[PROFILE-HOST] ${local.username} added during the roster pause takes its roster row")
+            }
             if (r.displayName.isNotBlank() && r.displayName != local.displayName) {
                 store.update(id) { it.copy(displayName = r.displayName) }
             }
@@ -1142,7 +1147,10 @@ class ProfileManager @Inject constructor(
         }
         // Every profile added during the pause has now met the roster: one with
         // a row took it above; one without stays a plain add.
-        store.forPlaylist(playlistId).filter { hostHolds.isPausedAdd(it.id) }.forEach { hostHolds.clearPausedAdd(it.id) }
+        // Settled only here, inside the merge of a pull that decoded the roster:
+        // sync never calls this for a failed, absent, or malformed read.
+        val marked = store.forPlaylist(playlistId).filter { hostHolds.isPausedAdd(it.id) }.map { it.id }
+        RosterPause.settledPauseAdds(marked, rows).forEach { hostHolds.clearPausedAdd(it) }
         refreshActiveRole()
         return added
     }
@@ -1512,7 +1520,7 @@ class ProfileManager @Inject constructor(
         else if (held && !fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "local-remove", 0L) }
         else if (!fromSync) runCatching { onProfilesMutated?.invoke(p.playlistId, p.username, "undo-add", 0L) }
         dropHold(profileId, "removed")
-        rosterAddIds -= profileId
+        rosterAdds.forget(profileId)
         hostHolds.tag(profileId, null)
         hostHolds.clearPausedAdd(profileId)
         store.remove(profileId)

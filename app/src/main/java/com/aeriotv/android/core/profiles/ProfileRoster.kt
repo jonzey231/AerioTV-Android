@@ -3,6 +3,27 @@ package com.aeriotv.android.core.profiles
 import com.aeriotv.android.core.sync.dsync.ProfileRow
 
 /**
+ * Profiles added from the synced roster in this process, whose undo (the
+ * onboarding Remove, or Cancel on "PIN Required") is local only with no
+ * tombstone (item 5). A profile added during a roster pause joins once the
+ * first pull after the pause gives it its roster row; one that finds no row
+ * stays a plain add. Pure.
+ */
+class RosterAdds {
+    private val ids = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun addedFromRoster(profileId: String) { ids += profileId }
+
+    /** A profile added during the pause met the roster: with its row ([tookRow]) it is a roster add from now on. */
+    fun pauseAddMerged(profileId: String, tookRow: Boolean) { if (tookRow) ids += profileId }
+
+    fun forget(profileId: String) { ids -= profileId }
+
+    /** Undoing [profileId]'s add leaves no tombstone: a roster add, or a pause add that has not met the roster yet ([stillPausedAdd]). */
+    fun undoIsLocalOnly(profileId: String, stillPausedAdd: Boolean): Boolean = profileId in ids || stillPausedAdd
+}
+
+/**
  * The synced `profiles` list is a catalog of available profiles, not a
  * mandate (owner decision 2026-10-27): a pull merges metadata into profiles
  * this device already has and never creates one. Rows for users with no

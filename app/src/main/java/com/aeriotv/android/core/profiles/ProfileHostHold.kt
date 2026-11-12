@@ -161,6 +161,16 @@ object RosterPause {
         addedDuringPause || DsyncGate.profileRowWins(localAt, row)
 
     /**
+     * The "added during the pause" marks a pull settles: every marked profile
+     * once the pull read and decoded the roster ([decodedRows] non-null), and
+     * none otherwise. A failed GET, an absent or malformed value, or a pull
+     * that never reached the merge keeps every mark, so no undo writes a
+     * tombstone for a profile whose roster was never seen.
+     */
+    fun settledPauseAdds(marked: Collection<String>, decodedRows: List<ProfileRow>?): Set<String> =
+        if (decodedRows == null) emptySet() else marked.toSet()
+
+    /**
      * Whether removing a profile writes a tombstone: only when the caller asks
      * for one and the profile is not held. A held profile's row was never on
      * the new server's roster, and a tombstone sent there after the pause
