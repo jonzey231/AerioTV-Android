@@ -32,6 +32,13 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
         val path = built.encodedPath
         val isTokenEndpoint = path.contains("/api/accounts/token/")
         val server = DispatcharrRequestGate.serverKey(built.toString())
+        // A Child held after its playlist's server address changed stays
+        // active and sends nothing there until the hold lifts (item 8). Only
+        // the same-server check and the held sign-in form get through.
+        if (!request.attributes.contains(BypassChildSeal) && com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(built.toString())) {
+            Log.i(TAG, "[PROFILE-HOST] skipped ${request.method.value} $path: the active Child is held after a server change")
+            throw DispatcharrError.Transport(com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE)
+        }
         // Built with a key a re-sign-in has since replaced: send the current
         // one (never logged), not a counted failure on a dead key.
         requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
@@ -79,6 +86,9 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
 
 /** Set on an explicit key check (verifyConnection, Edit Playlist, the setup sender) so a rejected key can be tried again on purpose. */
 internal val BypassKeyGate = AttributeKey<Boolean>("DispatcharrBypassKeyGate")
+
+/** Set on the same-server check and the held sign-in form: they may reach a held Child's playlist (item 8). */
+internal val BypassChildSeal = AttributeKey<Boolean>("DispatcharrBypassChildSeal")
 
 /**
  * New values for the auth headers that carry [old]: X-API-Key, and an

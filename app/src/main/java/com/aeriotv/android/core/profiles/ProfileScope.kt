@@ -72,20 +72,39 @@ object ProfileScope {
     @Volatile var held: Set<String> = emptySet()
         set(value) {
             field = value
-            if (overlay?.profileId?.let { it in value } == true) activate(null)
+            if (overlay?.profileId?.let { it in value && it !in sealed } == true) activate(null)
         }
 
-    /** The overlay for [playlistId], or null (default profile, sync, or a held profile). */
+    /**
+     * Held profiles that stay active: a Child (item 8). Leaving a Child needs
+     * a PIN, so a server change never switches it to the default profile.
+     * Its overlay stays installed with no sign-in: nothing it holds is sent,
+     * and the playlist's own sign-in is never used in its place. Set before
+     * [held] so the setter keeps it.
+     */
+    @Volatile var sealed: Set<String> = emptySet()
+
+    /** The routes ("scheme://host:port") of a sealed Child's playlist: Dispatcharr requests there are refused until the hold lifts. */
+    @Volatile var sealedRoutes: Set<String> = emptySet()
+
+    /** True when a Dispatcharr request to [url] belongs to a held Child's playlist and must not be sent. */
+    fun isSealedRoute(url: String): Boolean = sealedRoutes.isNotEmpty() && ProfileHostHold.routeKey(url) in sealedRoutes
+
+    private fun sealedHeld(o: Overlay): Boolean = o.profileId in held && o.profileId in sealed
+
+    /** The overlay for [playlistId], or null (default profile, sync, or a held profile). A held Child's comes with no sign-in. */
     fun overlayFor(playlistId: String): Overlay? {
         if (forcedDefault.get() == true) return null
-        return overlay?.takeIf { it.playlistId == playlistId && it.profileId !in held }
+        val o = overlay?.takeIf { it.playlistId == playlistId } ?: return null
+        if (o.profileId !in held) return o
+        return if (o.profileId in sealed) o.copy(apiKey = null, password = null) else null
     }
 
     fun activeOverlay(): Overlay? = overlay
 
-    /** Install (or clear, with null) the active non-default profile. A held profile is never installed. */
+    /** Install (or clear, with null) the active non-default profile. A held profile is never installed, except a held Child ([sealed]). */
     fun activate(newOverlay: Overlay?) {
-        val next = newOverlay?.takeUnless { it.profileId in held }
+        val next = newOverlay?.takeUnless { it.profileId in held && it.profileId !in sealed }
         overlay = next
         _token.value = next?.profileId.orEmpty()
     }
@@ -107,7 +126,9 @@ object ProfileScope {
 
     fun updateOverlay(transform: (Overlay) -> Overlay) {
         val o = overlay ?: return
-        val next = transform(o)
+        // A held Child reads with no sign-in: a write of that row must not
+        // replace the stored key and password it still has.
+        val next = transform(o).let { if (sealedHeld(o)) it.copy(apiKey = o.apiKey, password = o.password) else it }
         if (next == o) return
         overlay = next
         onOverlayChanged?.invoke(next)

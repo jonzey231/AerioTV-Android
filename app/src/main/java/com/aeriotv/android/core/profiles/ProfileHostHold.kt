@@ -91,6 +91,14 @@ object ProfileHostHold {
     /** Routes the playlist uses now that no check has proven yet: what the check must still call. */
     fun unproven(current: Set<String>, trusted: Set<String>): Set<String> = current - trusted
 
+    /**
+     * A held profile that is active stays active only when it is a Child
+     * (item 8): leaving a Child needs a PIN, so a server change never moves
+     * it to the default profile, at the change or after a relaunch. Any other
+     * held active profile is left for the default one.
+     */
+    fun staysActiveWhenHeld(role: ProfileRole): Boolean = role == ProfileRole.Child
+
     /** The profiles a route change holds: every non-default profile with a stored key or password. */
     fun toHold(profiles: List<DispatcharrProfile>): Set<String> =
         profiles.filter { !it.isDefault && (!it.apiKey.isNullOrBlank() || !it.password.isNullOrBlank()) }
@@ -183,6 +191,8 @@ data class HostHoldRecord(
     /** The default profile's identity recorded before the change; 0 and "" = none was recorded. */
     val expectedUserId: Int = 0,
     val expectedUsername: String = "",
+    /** The routes the playlist uses now, as of the last change (a held Child's requests there are refused, item 8). */
+    val current: Set<String> = emptySet(),
 ) {
     fun expected(): ProfileHostHold.Identity? =
         ProfileHostHold.Identity(expectedUserId, expectedUsername).takeIf { it.known }
@@ -314,12 +324,13 @@ class HostHoldBook(private val backing: Backing) {
         profileIds: Set<String>,
         priorRoutes: Set<String>,
         expected: ProfileHostHold.Identity? = recorded(playlistId),
+        currentRoutes: Set<String> = emptySet(),
     ): HostHoldRecord? {
         val existing = state.holds[playlistId]
         val ids = existing?.profileIds.orEmpty() + profileIds
         if (ids.isEmpty()) return null
-        val rec = existing?.copy(profileIds = ids)
-            ?: HostHoldRecord(ids, priorRoutes, expected?.userId ?: 0, expected?.username.orEmpty())
+        val rec = existing?.copy(profileIds = ids, current = currentRoutes.ifEmpty { existing.current })
+            ?: HostHoldRecord(ids, priorRoutes, expected?.userId ?: 0, expected?.username.orEmpty(), currentRoutes)
         commit(state.copy(holds = state.holds + (playlistId to rec)))
         return rec
     }

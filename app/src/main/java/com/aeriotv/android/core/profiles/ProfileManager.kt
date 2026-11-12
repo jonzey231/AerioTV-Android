@@ -170,9 +170,16 @@ class ProfileManager @Inject constructor(
         val pid = store.lastActivePlaylistId ?: return
         var active = store.activeProfileId(pid)?.let(store::byId)
         if (active != null && !active.isDefault && hostHolds.isHeld(active.id)) {
-            store.setActiveProfileId(pid, null)
-            Log.i(TAG, "[PROFILE-HOST] restored the default profile on ${pid.take(8)}: the active profile's sign-in is held")
-            active = null
+            if (ProfileHostHold.staysActiveWhenHeld(active.effectiveRole())) {
+                // A held Child stays active (no reset to the default, so no
+                // launch picker either), sending nothing until the hold lifts.
+                seal(active.id, hostHolds.hold(pid)?.current.orEmpty())
+                Log.i(TAG, "[PROFILE-HOST] restored the held Child on ${pid.take(8)}; it stays until the hold lifts or a PIN switch")
+            } else {
+                store.setActiveProfileId(pid, null)
+                Log.i(TAG, "[PROFILE-HOST] restored the default profile on ${pid.take(8)}: the active profile's sign-in is held")
+                active = null
+            }
         }
         refreshActiveRole(pid)
         if (active != null && !active.isDefault && active.playlistId == pid) {
@@ -238,7 +245,7 @@ class ProfileManager @Inject constructor(
     suspend fun pickAtLaunch(profileId: String): Result<Unit> {
         val pk = _launchPicker.value ?: return Result.success(Unit)
         if (pinStore.hasPin(profileId) && !switchTickets.contains(profileId)) return Result.failure(IllegalStateException("Enter PIN"))
-        if (profileId == activeProfileIdNow(pk.playlistId)) {
+        if (profileId == activeProfileIdNow(pk.playlistId) && !hostHolds.isHeld(profileId)) {
             switchTickets.remove(profileId)
             _launchPicker.value = null
             releaseLaunchHoldIfClear()
@@ -694,6 +701,9 @@ class ProfileManager @Inject constructor(
                 }
             }
                 .onFailure { Log.w(TAG, "[PROFILE] migration pass failed", it) }
+            // Held playlists (a held Child may be active): the same-server check
+            // runs in the background with the default profile's sign-in.
+            hostHolds.pausedPlaylists().forEach { scheduleSameServerCheck(it) }
             // Per-profile settings (2026-10-27): seed existing profiles once from the global values.
             runCatching { appPreferences.seedExistingProfilesOnce(store.profiles.value.filterNot { it.isDefault }.map { it.id }) }
                 .onFailure { Log.w(TAG, "[PROFILE] settings seed pass failed", it) }
@@ -710,9 +720,14 @@ class ProfileManager @Inject constructor(
         playlistDao.rawById(pid)?.let { ensureDefaultProfile(it) }
         var active = store.activeProfileId(pid)?.let(store::byId)
         if (active != null && !active.isDefault && hostHolds.isHeld(active.id)) {
-            // Its sign-in is held after a server address change: the default profile it is.
-            store.setActiveProfileId(pid, null)
-            active = null
+            if (ProfileHostHold.staysActiveWhenHeld(active.effectiveRole())) {
+                // A held Child stays, sending nothing to its playlist's addresses.
+                playlistDao.rawById(pid)?.let { seal(active!!.id, ProfileHostHold.routes(it.urlString, it.lanUrlString)) }
+            } else {
+                // Its sign-in is held after a server address change: the default profile it is.
+                store.setActiveProfileId(pid, null)
+                active = null
+            }
         }
         val current = ProfileScope.activeOverlay()
         if (active != null && !active.isDefault) {
@@ -1765,7 +1780,17 @@ class ProfileManager @Inject constructor(
      * away, so the roster merges and the edits that waited go out now.
      */
     private fun heldChanged() {
-        ProfileScope.held = hostHolds.heldProfileIds()
+        val heldNow = hostHolds.heldProfileIds()
+        val released = ProfileScope.sealed - heldNow
+        if (released.isNotEmpty()) {
+            ProfileScope.sealed = ProfileScope.sealed - released
+            if (ProfileScope.sealed.isEmpty()) ProfileScope.sealedRoutes = emptySet()
+            released.mapNotNull { store.byId(it)?.playlistId }.toSet().forEach { pid ->
+                Log.i(TAG, "[PROFILE-HOST] the held Child on ${pid.take(8)} is lifted; loading again")
+                scope.launch { reloads.send(Reload(pid, switchGen.get(), fromSwitch = false)) }
+            }
+        }
+        ProfileScope.held = heldNow
         val now = hostHolds.pausedPlaylists()
         val before = _rosterPaused.value
         if (now == before) return
@@ -1802,7 +1827,7 @@ class ProfileManager @Inject constructor(
         runCatching { onRouteChange?.invoke(playlistId, false) }
         val ids = ProfileHostHold.toHold(store.forPlaylist(playlistId))
         if (ids.isEmpty() && hostHolds.hold(playlistId) == null) return false
-        return placeHold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan), hostHolds.recorded(playlistId))
+        return placeHold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan), hostHolds.recorded(playlistId), ProfileHostHold.routes(newBase, newLan))
     }
 
     /**
@@ -1826,19 +1851,42 @@ class ProfileManager @Inject constructor(
         if (!ProfileHostHold.routeChanged(fromBase, toBase, fromLan, toLan)) return false
         val ids = ProfileHostHold.toHold(moved.mapNotNull(store::byId)).filterNot(hostHolds::isHeld).toSet()
         if (ids.isEmpty()) return false
-        return placeHold(toPlaylist, ids, ProfileHostHold.routes(fromBase, fromLan), hostHolds.recorded(fromPlaylist))
+        return placeHold(toPlaylist, ids, ProfileHostHold.routes(fromBase, fromLan), hostHolds.recorded(fromPlaylist), ProfileHostHold.routes(toBase, toLan))
     }
 
-    /** Hold [ids] on [playlistId] before anything is sent, and leave a held active profile for the default one. */
-    private fun placeHold(playlistId: String, ids: Set<String>, priorRoutes: Set<String>, expected: ProfileHostHold.Identity?): Boolean {
+    /** Keep the held Child [profileId] installed with no sign-in, and refuse Dispatcharr requests to [routes]. */
+    private fun seal(profileId: String, routes: Set<String>) {
+        ProfileScope.sealed = ProfileScope.sealed + profileId
+        if (routes.isNotEmpty()) ProfileScope.sealedRoutes = routes
+    }
+
+    /** Hold [ids] on [playlistId] before anything is sent, and leave a held active profile for the default one (a Child stays). */
+    private fun placeHold(
+        playlistId: String,
+        ids: Set<String>,
+        priorRoutes: Set<String>,
+        expected: ProfileHostHold.Identity?,
+        currentRoutes: Set<String>,
+    ): Boolean {
         val activeId = store.activeProfileId(playlistId)
         val live = ProfileScope.activeOverlay()?.let { it.profileId in ids } == true
+        // A Child active here stays active (item 8): sealed before it is held,
+        // so its overlay stays installed with no sign-in and nothing is sent.
+        val child = activeId?.takeIf { it in ids }?.let(store::byId)
+            ?.takeIf { ProfileHostHold.staysActiveWhenHeld(it.effectiveRole()) }
+        if (child != null) seal(child.id, currentRoutes)
         // Memory first: from here no row is overlaid with a held sign-in.
         ProfileScope.held = ProfileScope.held + ids
-        val rec = hostHolds.hold(playlistId, ids, priorRoutes, expected) ?: return false
+        val rec = hostHolds.hold(playlistId, ids, priorRoutes, expected, currentRoutes) ?: return false
         heldChanged()
         Log.i(TAG, "[PROFILE-HOST] hold playlist=${playlistId.take(8)} profiles=${rec.profileIds.size}")
-        if (activeId != null && hostHolds.isHeld(activeId)) {
+        if (child != null) {
+            if (live) {
+                closePlayer.trySend(Unit)
+                tokenStore.clear(playlistId)
+            }
+            Log.i(TAG, "[PROFILE-HOST] the active Child on ${playlistId.take(8)} stays, held; leaving it needs a PIN")
+        } else if (activeId != null && hostHolds.isHeld(activeId)) {
             store.setActiveProfileId(playlistId, null)
             if (live) {
                 ProfileScope.activate(null)
@@ -2020,9 +2068,9 @@ class ProfileManager @Inject constructor(
         val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId && !it.isDefault } ?: error("Profile not found")
         val row = playlistDao.rawById(playlistId) ?: error("Playlist not found")
         val base = repository.effectiveBaseUrl(row)
-        val jwt = client.login(base, username.trim(), password)
-        val key = client.fetchCurrentUserApiKey(base, jwt.access)
-        val me = client.fetchMe(base, key) ?: throw DispatcharrError.Transport("Could not read the account.")
+        val jwt = client.login(base, username.trim(), password, childSealBypass = true)
+        val key = client.fetchCurrentUserApiKey(base, jwt.access, childSealBypass = true)
+        val me = client.fetchMe(base, key, childSealBypass = true) ?: throw DispatcharrError.Transport("Could not read the account.")
         // Another account's sign-in never becomes this profile's.
         if (!me.username.equals(p.username, ignoreCase = true)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }

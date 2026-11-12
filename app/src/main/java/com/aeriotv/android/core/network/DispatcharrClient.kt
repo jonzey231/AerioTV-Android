@@ -228,7 +228,13 @@ class DispatcharrClient @Inject constructor() {
      * host that 200s with HTML), and [DispatcharrError.Transport] on every other
      * network or HTTP failure.
      */
-    suspend fun login(baseUrl: String, username: String, password: String): JwtPair {
+    suspend fun login(
+        baseUrl: String,
+        username: String,
+        password: String,
+        /** The held sign-in form: may reach a held Child's playlist (item 8). */
+        childSealBypass: Boolean = false,
+    ): JwtPair {
         // A 429 earlier in the throttle window: do not spend another attempt
         // (each one re-arms nothing but still counts against the user's IP).
         DispatcharrLoginGate.serverParkedSeconds(baseUrl).takeIf { it > 0 }?.let { left ->
@@ -242,6 +248,7 @@ class DispatcharrClient @Inject constructor() {
                 accept(ContentType.Application.Json)
                 header("User-Agent", userAgentForUrl(baseUrl))
                 setBody(LoginRequest(username = username, password = password))
+                if (childSealBypass) attributes.put(BypassChildSeal, true)
             }
         } catch (t: Throwable) {
             throw DispatcharrError.Transport(
@@ -345,12 +352,13 @@ class DispatcharrClient @Inject constructor() {
      * stable X-API-Key path. Mirrors iOS DispatcharrAPI.fetchCurrentUser
      * (DispatcharrDirectConnect.swift line 421-435).
      */
-    suspend fun fetchCurrentUserApiKey(baseUrl: String, accessToken: String): String {
+    suspend fun fetchCurrentUserApiKey(baseUrl: String, accessToken: String, childSealBypass: Boolean = false): String {
         val response: HttpResponse = try {
             client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") {
                 accept(ContentType.Application.Json)
                 header("Authorization", "Bearer $accessToken")
                 header("User-Agent", userAgentForUrl(baseUrl))
+                if (childSealBypass) attributes.put(BypassChildSeal, true)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -490,7 +498,7 @@ class DispatcharrClient @Inject constructor() {
      * Unlike [fetchMe] it tells a refused key from no answer.
      */
     suspend fun checkMe(baseUrl: String, apiKey: String): MeCheck = try {
-        val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") { applyAuth(apiKey) }
+        val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") { applyAuth(apiKey); attributes.put(BypassChildSeal, true) }
         when (response.status.value) {
             in 200..299 -> runCatching { MeCheck.Ok(response.body<MeResponse>()) }.getOrElse { MeCheck.Unreachable }
             401, 403 -> MeCheck.Rejected
@@ -506,8 +514,11 @@ class DispatcharrClient @Inject constructor() {
 
     /** Profiles: the full /api/accounts/users/me/ record for the user [apiKey]
      *  authenticates as, or null on any failure. */
-    suspend fun fetchMe(baseUrl: String, apiKey: String): MeResponse? = runCatching {
-        val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") { applyAuth(apiKey) }
+    suspend fun fetchMe(baseUrl: String, apiKey: String, childSealBypass: Boolean = false): MeResponse? = runCatching {
+        val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") {
+            applyAuth(apiKey)
+            if (childSealBypass) attributes.put(BypassChildSeal, true)
+        }
         if (!response.status.isSuccess()) return@runCatching null
         response.body<MeResponse>()
     }.getOrNull()
