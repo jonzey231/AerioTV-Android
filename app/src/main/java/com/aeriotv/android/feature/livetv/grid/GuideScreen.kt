@@ -1597,6 +1597,13 @@ fun GuideScreen(
         if (rows.isEmpty && favoritesOnly && favoritesOrNull == null) {
             // Favorites not loaded yet: draw nothing rather than flash the
             // empty-group notice for a frame (Streamer 2026-09-03).
+        } else if (rows.isEmpty && com.aeriotv.android.feature.playlist.HeldListCopy.showsLaunchError(state.launchError, state.channels.isNotEmpty())) {
+            // A held key with nothing loaded: the error state, not "No Channels in This Group".
+            com.aeriotv.android.feature.livetv.LaunchErrorNotice(
+                message = state.launchError.orEmpty(),
+                onTryAgain = { viewModel.refreshPlaylist() },
+                modifier = Modifier.fillMaxSize(),
+            )
         } else if (rows.isEmpty) {
             EmptyGroupNotice(
                 isSearching = state.searchQuery.isNotBlank(),

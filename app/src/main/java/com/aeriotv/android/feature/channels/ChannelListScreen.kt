@@ -786,7 +786,15 @@ fun ChannelListScreen(
                 // pill row stays on screen here, so this is comfort rather
                 // than rescue; the guide is where it is load-bearing.
                 val hitsShown = programHits?.hits?.isNotEmpty() == true
-                if (filtered.isEmpty() && !(programSearchActive && (hitsShown || programHits == null))) {
+                if (filtered.isEmpty() && com.aeriotv.android.feature.playlist.HeldListCopy.showsLaunchError(state.launchError, state.channels.isNotEmpty())) {
+                    // A held key with nothing loaded: the error state, not "No Channels in This Group".
+                    item(key = "list.launchError") {
+                        com.aeriotv.android.feature.livetv.LaunchErrorNotice(
+                            message = state.launchError.orEmpty(),
+                            onTryAgain = { viewModel.refreshPlaylist() },
+                        )
+                    }
+                } else if (filtered.isEmpty() && !(programSearchActive && (hitsShown || programHits == null))) {
                     item(key = "list.emptyGroup") {
                         EmptyGroupNotice(
                             isSearching = state.searchQuery.isNotBlank(),

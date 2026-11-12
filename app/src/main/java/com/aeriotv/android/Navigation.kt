@@ -619,6 +619,16 @@ fun AerioTVNavHost(
                     }
                 }
 
+                // A held key with nothing cached: the main screen with its error
+                // state, where the rejected-key prompt shows once the launch
+                // gate passes. Never the add-playlist screen (Apple parity).
+                val keyHeldLaunch = state.launchError != null
+                LaunchedEffect(keyHeldLaunch) {
+                    if (keyHeldLaunch) navController.navigate(Routes.MAIN) {
+                        popUpTo(Routes.PLAYLIST_GRAPH) { inclusive = false }
+                    }
+                }
+
                 SettingUpScreen(
                     onSkip = {
                         navController.navigate(Routes.MAIN) {

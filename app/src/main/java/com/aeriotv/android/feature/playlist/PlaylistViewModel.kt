@@ -158,6 +158,13 @@ class PlaylistViewModel @Inject constructor(
         val isLoading: Boolean = false,
         /** Launch with no cached channels while the active Child is held ([HeldListCopy]): the line Setting Up shows as it stays. */
         val bootstrapLine: String? = null,
+        /**
+         * Launch with no cached channels while the sign-in's key is held
+         * ([HeldListCopy.LaunchFailed.MainWithError]): the reason the main
+         * screen's error state shows. Set, the launch goes to the main screen,
+         * never the add-playlist screen; cleared when channels land.
+         */
+        val launchError: String? = null,
         /** Add Playlist while a 429 counts down: "The server is busy. Trying again in N seconds." */
         val busyMessage: String? = null,
         val error: String? = null,
@@ -940,6 +947,7 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             phase = Phase.ChannelsReady,
+                            launchError = null,
                             channels = if (kept) it.channels else channels,
                             isLoading = false,
                             error = null,
@@ -965,24 +973,45 @@ class PlaylistViewModel @Inject constructor(
                         // unreachable right now.
                         Log.w(TAG, "channel refresh failed; cached rail still visible", t)
                         _state.update { it.copy(isLoading = false) }
-                    } else if (!HeldListCopy.launchGoesToAdd(heldHere(saved))) {
-                        // A held Child (its playlist moved, no same-server check
-                        // yet) stays here with the line, never the add-playlist screen.
-                        Log.w(TAG, "[PROFILE-HOST] channel refresh refused: the active profile is held at this address; staying")
-                        _state.update { it.copy(isLoading = false, error = HeldListCopy.LINE, bootstrapLine = HeldListCopy.LINE) }
-                    } else {
-                        _state.update {
-                            it.copy(
-                                phase = Phase.NeedsUrl,
-                                isLoading = false,
-                                error = "Failed to refresh saved source: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
-                            )
+                    } else when (HeldListCopy.launchFailed(heldHere(saved), keyHeldAtLaunch(saved.id, t))) {
+                        HeldListCopy.LaunchFailed.StayWithLine -> {
+                            // A held Child (its playlist moved, no same-server check
+                            // yet) stays here with the line, never the add-playlist screen.
+                            Log.w(TAG, "[PROFILE-HOST] channel refresh refused: the active profile is held at this address; staying")
+                            _state.update { it.copy(isLoading = false, error = HeldListCopy.LINE, bootstrapLine = HeldListCopy.LINE) }
+                        }
+                        HeldListCopy.LaunchFailed.MainWithError -> {
+                            // The key is held: the main screen with its error state;
+                            // the rejected-key prompt shows there once the launch
+                            // gate passes, and its Sign In, Fix Login, or Edit
+                            // Playlist reloads the channels (Apple parity).
+                            val reason = LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")
+                            Log.w(TAG, "[AUTH] channel refresh refused: the key is held, no cached channels; main screen with the error state")
+                            _state.update { it.copy(isLoading = false, error = reason, launchError = reason) }
+                        }
+                        HeldListCopy.LaunchFailed.AddPlaylist -> {
+                            _state.update {
+                                it.copy(
+                                    phase = Phase.NeedsUrl,
+                                    isLoading = false,
+                                    error = "Failed to refresh saved source: ${LogSanitizer.redact(t.message ?: t::class.simpleName ?: "unknown error")}",
+                                )
+                            }
                         }
                     }
                 },
             )
         }
     }
+
+    /**
+     * The gate holds [playlistId]'s key (its own sign-in or a profile's), or
+     * [t] is the gate's held-key refusal. Only a held key: its calls stay on
+     * the device, so the main screen's background work sends nothing with it.
+     */
+    private fun keyHeldAtLaunch(playlistId: String, t: Throwable): Boolean =
+        com.aeriotv.android.core.network.DispatcharrRequestGate.isPlaylistRejected(playlistId) ||
+            generateSequence(t) { it.cause }.take(8).any { it is com.aeriotv.android.core.network.DispatcharrError.KeyRejected }
 
     fun onSourceTypeChange(value: SourceType) {
         _state.update { it.copy(sourceType = value, error = null) }
@@ -1218,6 +1247,7 @@ class PlaylistViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             phase = Phase.ChannelsReady,
+                            launchError = null,
                             playlist = entity,
                             // Remember THIS draft's row so a re-test edits it
                             // instead of duplicating; never the active playlist.
@@ -1284,6 +1314,7 @@ class PlaylistViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         phase = Phase.ChannelsReady,
+                        launchError = null,
                         playlist = entity,
                         draftPlaylistId = entity.id,
                         channels = channels,
@@ -2410,6 +2441,8 @@ class PlaylistViewModel @Inject constructor(
                         it.copy(
                             phase = next,
                             bootstrapLine = if (next != it.phase) null else it.bootstrapLine,
+                            // The refresh got through: the key-held error state is over.
+                            launchError = null,
                             channels = channels,
                             isLoading = false,
                             playlist = updated ?: it.playlist,
@@ -3209,6 +3242,7 @@ class PlaylistViewModel @Inject constructor(
                 val applyCached: (UiState) -> UiState = {
                     it.copy(
                         phase = Phase.ChannelsReady,
+                        launchError = null,
                         playlist = row,
                         channels = cached,
                         selectedGroup = launchGroup,
@@ -3248,6 +3282,7 @@ class PlaylistViewModel @Inject constructor(
                     val applyFetched: (UiState) -> UiState = {
                         it.copy(
                             phase = Phase.ChannelsReady,
+                            launchError = null,
                             playlist = entity,
                             channels = channels,
                             selectedGroup = launchGroup,
@@ -3315,7 +3350,7 @@ class PlaylistViewModel @Inject constructor(
         val finish: (UiState) -> UiState = {
             val next = HeldListCopy.phaseAfterChannelsLanded(it.phase, hasChannels = true)
             if (next != it.phase) Log.i(TAG, "[STARTUP] launch finished by $reason (${channels.size} channels)")
-            it.copy(phase = next, bootstrapLine = if (next != it.phase) null else it.bootstrapLine)
+            it.copy(phase = next, bootstrapLine = if (next != it.phase) null else it.bootstrapLine, launchError = null)
         }
         if (kept) {
             _state.update { finish(it.copy(playlist = entity, isLoading = false, error = null)) }
@@ -3428,6 +3463,7 @@ class PlaylistViewModel @Inject constructor(
         val applySwitch: (UiState) -> UiState = {
             it.copy(
                 phase = Phase.ChannelsReady,
+                launchError = null,
                 playlist = entity,
                 channels = cached,
                 selectedGroup = launchGroup,

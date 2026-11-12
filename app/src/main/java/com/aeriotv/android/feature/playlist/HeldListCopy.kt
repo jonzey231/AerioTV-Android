@@ -12,11 +12,35 @@ object HeldListCopy {
     /** A manual refresh that failed: the bare line for a held Child, else "Refresh failed: <reason>". */
     fun refreshFailed(held: Boolean, reason: String): String = if (held) LINE else "Refresh failed: $reason"
 
+    /** Where a launch goes when its refresh failed with no cached channels. */
+    enum class LaunchFailed {
+        /** A held Child: stays on Setting Up with [LINE]. */
+        StayWithLine,
+
+        /**
+         * The sign-in's key is held: the main screen with its error state
+         * (Connection Error, the reason, Try Again), and the rejected-key
+         * prompt once the launch gate passes (Apple parity, owner 2026-11-12).
+         * Never the add-playlist screen while a playlist exists.
+         */
+        MainWithError,
+
+        /** Anything else: on to add a playlist, as before. */
+        AddPlaylist,
+    }
+
+    /** [routeHeld]: the active Child is held at this address; [keyHeld]: the gate holds this playlist's key (its own or a profile's). */
+    fun launchFailed(routeHeld: Boolean, keyHeld: Boolean): LaunchFailed = when {
+        routeHeld -> LaunchFailed.StayWithLine
+        keyHeld -> LaunchFailed.MainWithError
+        else -> LaunchFailed.AddPlaylist
+    }
+
     /**
-     * The launch refresh failed with no cached channels: a held Child stays
-     * where it is and shows [LINE]; anyone else goes on to add a playlist.
+     * The key-held launch's error state shows in place of the channel list
+     * while nothing is loaded; channels that land replace it.
      */
-    fun launchGoesToAdd(held: Boolean): Boolean = !held
+    fun showsLaunchError(launchError: String?, hasChannels: Boolean): Boolean = launchError != null && !hasChannels
 
     /**
      * Channels landed from a later refresh (the hold lifted, a recovery):

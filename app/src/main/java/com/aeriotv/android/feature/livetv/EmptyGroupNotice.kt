@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material.icons.outlined.TvOff
 import androidx.compose.material3.Icon
@@ -100,11 +101,64 @@ fun EmptyGroupNotice(
     }
 }
 
+/**
+ * The channel list's error state while nothing is loaded and the sign-in's
+ * key is held (a launch with no cached channels): Apple's ChannelListView
+ * errorView, word for word ("Connection Error", the reason, "Try Again").
+ * The rejected-key prompt over it offers the recovery; Try Again reloads.
+ * Like [EmptyGroupNotice] it keeps a focusable button in the grid on TV and
+ * does not take focus on its own.
+ */
+@Composable
+fun LaunchErrorNotice(
+    message: String,
+    onTryAgain: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isTv = rememberIsTvDevice()
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp, vertical = if (isTv) 56.dp else 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Warning,
+            contentDescription = null,
+            tint = com.aeriotv.android.ui.theme.StatusWarning,
+            modifier = Modifier.size(if (isTv) 56.dp else 44.dp),
+        )
+        Text(
+            text = "Connection Error",
+            style = if (isTv) MaterialTheme.typography.headlineSmall
+            else MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 14.dp),
+        )
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium.subtext(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        ShowAllChannelsButton(
+            onClick = onTryAgain,
+            label = "Try Again",
+            modifier = Modifier.padding(top = 20.dp),
+        )
+    }
+}
+
 /** Focus visual matches GroupSidebarRow: scale + tinted fill + accent border. */
 @Composable
 private fun ShowAllChannelsButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    label: String = "Show All Channels",
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -136,7 +190,7 @@ private fun ShowAllChannelsButton(
             ),
     ) {
         Text(
-            text = "Show All Channels",
+            text = label,
             style = if (isTv) MaterialTheme.typography.titleMedium
             else MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.SemiBold,
