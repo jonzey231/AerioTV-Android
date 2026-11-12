@@ -513,7 +513,55 @@ class PlaylistRepository @Inject constructor(
     suspend fun applyHandedSignIn(
         playlistId: String,
         sent: com.aeriotv.android.core.setup.SetupProtocol.Credential?,
-    ): Result<PlaylistEntity> = runCatching { writeSignIn(playlistId, sent, "fix login") }
+    ): Result<PlaylistEntity> = runCatching {
+        // Item 11: verify the sent sign-in at the playlist's address and
+        // reconnect only the playlist's current account; nothing is written
+        // for another (the caller shows Fix Login's existing failure line).
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val row = dao.byId(playlistId) ?: throw NoSuchElementException("playlist not here")
+            requireSameAccount(playlistId, row, verifySentSignIn(row, sent))
+        }
+        writeSignIn(playlistId, sent, "fix login")
+    }
+
+    /** users/me for a sign-in sent by Fix Login, at [row]'s address: with the sent key, else a login with the sent password. */
+    private suspend fun verifySentSignIn(
+        row: PlaylistEntity,
+        sent: com.aeriotv.android.core.setup.SetupProtocol.Credential?,
+    ): com.aeriotv.android.core.network.MeResponse {
+        val base = row.urlString.trimEnd('/')
+        sent?.apiKey?.trim()?.takeIf { it.isNotEmpty() }?.let { key ->
+            return dispatcharrClient.fetchMe(base, key)
+                ?: throw com.aeriotv.android.core.network.DispatcharrError.InvalidCredentials("The sent sign-in was not accepted.")
+        }
+        val user = sent?.username?.trim()?.takeIf { it.isNotEmpty() }
+        val pass = sent?.password?.takeIf { it.isNotEmpty() }
+        if (user == null || pass == null) throw IllegalArgumentException("no sign-in sent")
+        val jwt = dispatcharrClient.login(base, user, pass)
+        val key = dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
+        return dispatcharrClient.fetchMe(base, key)
+            ?: throw com.aeriotv.android.core.network.DispatcharrError.InvalidCredentials("The sent sign-in was not accepted.")
+    }
+
+    /**
+     * Item 11: a sign-in reconnects only [playlistId]'s current account. The
+     * known user is the row's username, else the account facts, else the
+     * default profile's, plus the recorded default user id; with none, a
+     * Child is refused. A mismatch throws InvalidCredentials, which the
+     * sign-in form shows as its existing "did not accept" line.
+     */
+    private suspend fun requireSameAccount(playlistId: String, row: PlaylistEntity, me: com.aeriotv.android.core.network.MeResponse) {
+        val profiles = profileManager.get()
+        val known = com.aeriotv.android.core.setup.FixLogin.knownUser(
+            row.username,
+            runCatching { appPreferences.dispatcharrAccountFactsOnce(playlistId).username }.getOrNull(),
+            profiles.defaultProfileUsername(playlistId),
+        )
+        if (!com.aeriotv.android.core.setup.FixLogin.sameAccount(known, profiles.defaultUserId(playlistId), me.username, me.id, profiles.childInvolved(playlistId))) {
+            Log.w("DispatcharrAuthBroker", "[AUTH] sign-in for ${playlistId.take(8)} refused: not the playlist's current account")
+            throw com.aeriotv.android.core.network.DispatcharrError.InvalidCredentials("Dispatcharr did not accept that username or password.")
+        }
+    }
 
     /**
      * The rejected-key prompt's sign-in form: log in to [playlistId]'s server
@@ -534,6 +582,11 @@ class PlaylistRepository @Inject constructor(
             val user = username.trim()
             val jwt = dispatcharrClient.login(base, user, password)
             val key = dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
+            // Item 11: only the playlist's current account reconnects. On a
+            // mismatch nothing is written and the token is dropped unused.
+            val me = dispatcharrClient.fetchMe(base, key)
+                ?: throw com.aeriotv.android.core.network.DispatcharrError.Transport("Could not read the account.")
+            requireSameAccount(playlistId, row, me)
             val updated = writeSignIn(
                 playlistId,
                 com.aeriotv.android.core.setup.SetupProtocol.Credential(apiKey = key, username = user, password = password),

@@ -1270,6 +1270,22 @@ class ProfileManager @Inject constructor(
     fun canSetUpTv(playlistId: String): Boolean =
         RoleRules.isFullAccess(activeRole(playlistId)) || activeProfile(playlistId)?.isDefault != false
 
+    // ---- The account a playlist signs in as (item 11: same-account sign-ins) ----
+
+    /** The default profile's Dispatcharr username on [playlistId], or null. */
+    fun defaultProfileUsername(playlistId: String): String? =
+        store.forPlaylist(playlistId).firstOrNull { it.isDefault }?.username?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** The default profile's Dispatcharr user id: the identity recorded for the playlist, else the profile's own (0 = none). */
+    fun defaultUserId(playlistId: String): Int =
+        hostHolds.recorded(playlistId)?.userId?.takeIf { it > 0 }
+            ?: store.forPlaylist(playlistId).firstOrNull { it.isDefault }?.userId?.takeIf { it > 0 } ?: 0
+
+    /** The active or the default profile on [playlistId] is a Child. */
+    fun childInvolved(playlistId: String): Boolean =
+        activeRole(playlistId) == ProfileRole.Child ||
+            store.forPlaylist(playlistId).firstOrNull { it.isDefault }?.effectiveRole() == ProfileRole.Child
+
     /** The playlist row with the DEFAULT profile's credential (never a switched profile's). */
     suspend fun defaultPlaylistRow(playlistId: String): PlaylistEntity? = playlistDao.rawById(playlistId)
 

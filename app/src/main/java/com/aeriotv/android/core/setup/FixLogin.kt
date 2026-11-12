@@ -131,6 +131,28 @@ object FixLogin {
     )
 
     /**
+     * Item 11 (security, 2026-11-11): the sign-in form and Fix Login reconnect
+     * only the playlist's CURRENT account, whatever the account. Before
+     * anything is written, users/me for the new sign-in must name the known
+     * user: [knownUsername] (the row's, else the account facts, else the
+     * default profile's), compared without case, and [knownUserId] when one
+     * is recorded (0 = none). With no known user, a Child ([childInvolved],
+     * active or default) is refused and anyone else is allowed. Changing a
+     * playlist's account stays in Edit Playlist, which a Child cannot open.
+     */
+    fun sameAccount(knownUsername: String?, knownUserId: Int, signedInUsername: String, signedInUserId: Int, childInvolved: Boolean): Boolean {
+        val known = knownUsername?.trim()?.takeIf { it.isNotEmpty() }
+        if (known == null && knownUserId <= 0) return !childInvolved
+        if (known != null && !known.equals(signedInUsername.trim(), ignoreCase = true)) return false
+        if (knownUserId > 0 && knownUserId != signedInUserId) return false
+        return true
+    }
+
+    /** The known user for [sameAccount]: the first non-blank of [candidates], trimmed. */
+    fun knownUser(vararg candidates: String?): String? =
+        candidates.firstNotNullOfOrNull { it?.trim()?.takeIf { t -> t.isNotEmpty() } }
+
+    /**
      * Only the sign-in: the API key, and the username and password when the
      * payload carries them. A field the payload leaves out (or sends blank)
      * keeps the stored value. Null when the payload carries no sign-in at all.
