@@ -106,7 +106,8 @@ fun ApiKeyRejectedPromptHost(
     val activeRole by com.aeriotv.android.core.profiles.ProfileRoles.active.collectAsStateWithLifecycle()
     val p = prompt ?: return
     val canSignIn = remember(p, launchGate, launchPicker, profileToken) { signInVm.canSignIn(p.playlistId) }
-    val buttons = KeyRejectedCopy.buttons(isTv, canSignIn, isChild = activeRole == com.aeriotv.android.core.profiles.ProfileRole.Child)
+    val isChild = activeRole == com.aeriotv.android.core.profiles.ProfileRole.Child
+    val buttons = KeyRejectedCopy.buttons(isTv, canSignIn, isChild = isChild)
     val focus = remember(p) { FocusRequester() }
     LaunchedEffect(p) { runCatching { focus.requestFocus() } }
     val act: (KeyRejectedCopy.Button) -> Unit = { b ->
@@ -127,7 +128,7 @@ fun ApiKeyRejectedPromptHost(
     SettingsAlertDialog(
         onDismissRequest = { DispatcharrRequestGate.consumePrompt() },
         title = { Text(KeyRejectedCopy.TITLE) },
-        text = { Text(KeyRejectedCopy.body(p.playlistName, p.passwordToo, p.noApiKey)) },
+        text = { Text(KeyRejectedCopy.body(p.playlistName, p.passwordToo, p.noApiKey, isChild = isChild, canSignIn = canSignIn)) },
         confirmButton = {
             // Emitted straight into the dialog's button row (no inner Row),
             // in order, so it wraps instead of clipping when they do not fit.

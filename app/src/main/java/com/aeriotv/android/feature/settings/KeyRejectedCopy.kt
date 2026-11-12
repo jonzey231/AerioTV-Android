@@ -13,18 +13,27 @@ object KeyRejectedCopy {
 
     /**
      * Prompt body, every device. [passwordToo] = the playlist's stored
-     * password was refused as well (its silent re-login failed).
+     * password was refused as well (its silent re-login failed). For a Child
+     * ([isChild], shared spec 2026-11-11) the clauses naming what it cannot
+     * do are trimmed: no Edit Playlist clause, and with no sign-in offered
+     * ([canSignIn] false) the body ends after "It may have been changed on
+     * the server." No new words.
      */
-    fun body(playlistName: String, passwordToo: Boolean, noApiKey: Boolean = false): String {
+    fun body(playlistName: String, passwordToo: Boolean, noApiKey: Boolean = false, isChild: Boolean = false, canSignIn: Boolean = true): String {
         // The re-login signed in, but the account has no API key on the server.
         if (noApiKey) return NO_API_KEY
         val name = playlistName.ifBlank { "this playlist" }
-        return if (passwordToo) {
-            "Dispatcharr no longer accepts the sign-in for $name. It may have been changed on the server. " +
-                "Sign in with your Dispatcharr username and password to reconnect, or enter the current details in Edit Playlist."
+        val lead = if (passwordToo) {
+            "Dispatcharr no longer accepts the sign-in for $name. It may have been changed on the server."
         } else {
-            "Dispatcharr no longer accepts the API key for $name. It may have been changed on the server. " +
-                "Sign in with your Dispatcharr username and password to reconnect, or enter the current key in Edit Playlist."
+            "Dispatcharr no longer accepts the API key for $name. It may have been changed on the server."
+        }
+        val signIn = "Sign in with your Dispatcharr username and password to reconnect"
+        return when {
+            isChild && !canSignIn -> lead
+            isChild -> "$lead $signIn."
+            passwordToo -> "$lead $signIn, or enter the current details in Edit Playlist."
+            else -> "$lead $signIn, or enter the current key in Edit Playlist."
         }
     }
 

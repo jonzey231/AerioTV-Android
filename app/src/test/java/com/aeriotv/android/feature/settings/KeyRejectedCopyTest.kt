@@ -50,6 +50,33 @@ class KeyRejectedCopyTest {
         assertTrue(KeyRejectedCopy.buttons(isTv = false, canSignIn = false, isChild = false).contains(Button.EditPlaylist))
     }
 
+    @Test fun aChildsBodyNamesOnlyWhatItCanDo() {
+        // A default Child is offered Sign In: the Edit Playlist clause is dropped.
+        assertEquals(
+            "Dispatcharr no longer accepts the API key for Home. It may have been changed on the server. " +
+                "Sign in with your Dispatcharr username and password to reconnect.",
+            KeyRejectedCopy.body("Home", passwordToo = false, isChild = true, canSignIn = true),
+        )
+        assertEquals(
+            "Dispatcharr no longer accepts the sign-in for Home. It may have been changed on the server. " +
+                "Sign in with your Dispatcharr username and password to reconnect.",
+            KeyRejectedCopy.body("Home", passwordToo = true, isChild = true, canSignIn = true),
+        )
+        // A non-default Child is offered no sign-in: the body ends after the server sentence.
+        assertEquals(
+            "Dispatcharr no longer accepts the API key for Home. It may have been changed on the server.",
+            KeyRejectedCopy.body("Home", passwordToo = false, isChild = true, canSignIn = false),
+        )
+        assertEquals(
+            "Dispatcharr no longer accepts the sign-in for Home. It may have been changed on the server.",
+            KeyRejectedCopy.body("Home", passwordToo = true, isChild = true, canSignIn = false),
+        )
+        // Everyone else keeps the full body, whatever the buttons.
+        assertEquals(KeyRejectedCopy.body("Home", passwordToo = false), KeyRejectedCopy.body("Home", passwordToo = false, isChild = false, canSignIn = false))
+        // The no-key line is the same for a Child.
+        assertEquals(KeyRejectedCopy.NO_API_KEY, KeyRejectedCopy.body("Home", passwordToo = false, noApiKey = true, isChild = true, canSignIn = false))
+    }
+
     @Test fun promptCopy() {
         assertEquals("API key no longer valid", KeyRejectedCopy.TITLE)
         assertEquals(KeyRejectedCopy.TITLE, API_KEY_REJECTED_TITLE)
