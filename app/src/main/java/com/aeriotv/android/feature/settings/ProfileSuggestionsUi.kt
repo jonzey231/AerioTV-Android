@@ -308,7 +308,7 @@ internal fun RosterCredentialDialog(
     var error by remember(username) { mutableStateOf<String?>(null) }
     var scannedUser by remember(username) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+    ProfileAlertDialog(
         onDismissRequest = onCancel,
         title = { Text(title) },
         text = {
@@ -393,7 +393,9 @@ internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, becom
         if (vm.adminHasPin(playlistId)) {
             androidx.compose.runtime.LaunchedEffect(round) { onDone(true) }
         } else {
-            com.aeriotv.android.ui.settings.SettingsAlertDialog(
+            ProfileAlertDialog(
+                // OK only: a tap outside does nothing (no Cancel to stand for).
+                outsideTapCancels = false,
                 onDismissRequest = { onDone(false) },
                 title = { Text("PIN Required") },
                 text = { Text("A Child profile needs a PIN from an Admin or Standard profile to leave it. Set a PIN on an Admin or Standard profile first.") },
@@ -405,7 +407,9 @@ internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, becom
     val own = next.id == actor?.id
     // Only an Admin or Standard profile sets another profile's PIN.
     if (!own && !vm.isRoleAdmin(playlistId) && !vm.isPendingPinAdd(next.id)) {
-        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        ProfileAlertDialog(
+            // OK only: a tap outside does nothing (no Cancel to stand for).
+            outsideTapCancels = false,
             onDismissRequest = { onDone(false) },
             title = { Text("PIN Required") },
             text = { Text("${RoleRules.KEEP_PIN_REASON} Set a PIN for ${next.displayName} first.") },
@@ -414,7 +418,7 @@ internal fun ChildNeedsAdminPin(playlistId: String, vm: ProfilesViewModel, becom
         return
     }
     if (explained != next.id) {
-        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        ProfileAlertDialog(
             onDismissRequest = { onDone(false) },
             title = { Text("PIN Required") },
             text = {
@@ -458,7 +462,7 @@ internal fun DeviceAdminPinSetFlow(playlistId: String, vm: ProfilesViewModel, on
             },
             lockSeconds = { vm.pinLockSeconds(id) },
         )
-        type == null -> com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        type == null -> ProfileAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("PIN type") },
             text = {
@@ -502,7 +506,9 @@ internal fun DeviceAdminPinSetFlow(playlistId: String, vm: ProfilesViewModel, on
 internal fun DeviceAdminPinRemoveFlow(playlistId: String, vm: ProfilesViewModel, onClose: (String?) -> Unit) {
     val id = vm.deviceAdminPinId(playlistId)
     vm.deviceAdminPinRemovalBlock(playlistId)?.let { reason ->
-        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        ProfileAlertDialog(
+            // OK only: a tap outside does nothing (no Cancel to stand for).
+            outsideTapCancels = false,
             onDismissRequest = { onClose(null) },
             title = { Text("Remove Device Admin PIN") },
             text = { Text(reason) },
@@ -587,20 +593,14 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolea
         )
     }
     if (open) {
-        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        ProfileAlertDialog(
             onDismissRequest = { open = false },
-            title = { Text("Role", modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center) },
+            title = { Text("Role") },
             text = {
                 Column {
                     // Not a Dispatcharr admin (or unknown): Standard and Child only.
                     ProfileRole.optionsFor(serverAdmin = false).forEach { r ->
-                        ChoiceRow(label = r.label, checked = r == role, radio = true, onClick = { open = false; onChange(r) })
-                        Text(
-                            roleDescription(r),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 6.dp),
-                        )
+                        ChoiceRow(label = r.label, checked = r == role, radio = true, subtitle = roleDescription(r), onClick = { open = false; onChange(r) })
                     }
                 }
             },
@@ -749,7 +749,7 @@ internal fun EnableApiAccessRow(
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
     if (confirmRevoke) {
-        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        ProfileAlertDialog(
             onDismissRequest = { confirmRevoke = false },
             title = { Text("Revoke API access?") },
             text = { Text("${user.username} will be signed out on every device that uses this key.") },

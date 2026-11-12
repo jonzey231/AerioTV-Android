@@ -42,6 +42,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -165,6 +167,14 @@ fun PinEntryDialog(
             Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = if (onDismiss == null) 0.92f else 0.6f))
+                // A tap outside the pad is its Cancel (the same handler); a PIN
+                // entry with no Cancel (the launch gate) ignores it. The pad's
+                // Surface takes its own taps.
+                .then(
+                    if (onDismiss != null) Modifier.pointerInput(onDismiss) {
+                        detectTapGestures(onTap = { onDismiss() })
+                    } else Modifier,
+                )
                 .onPreviewKeyEvent { ev ->
                     val down = ev.type == KeyEventType.KeyDown
                     when (ev.key) {
@@ -433,7 +443,7 @@ fun SetPinFlow(
             },
             lockSeconds = { vm.pinLockSeconds(profile.id) },
         )
-        type == null -> com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        type == null -> ProfileAlertDialog(
             onDismissRequest = { onClose(null) },
             title = { Text("PIN type") },
             text = {
@@ -489,7 +499,9 @@ fun RemovePinFlow(
 ) {
     val scope = rememberCoroutineScope()
     vm.pinRemovalBlock(playlistId, profile.id)?.let { reason ->
-        com.aeriotv.android.ui.settings.SettingsAlertDialog(
+        ProfileAlertDialog(
+            // OK only: a tap outside does nothing (no Cancel to stand for).
+            outsideTapCancels = false,
             onDismissRequest = { onClose(null) },
             title = { Text("Remove PIN") },
             text = { Text(reason) },
@@ -539,8 +551,14 @@ internal fun ChoiceRow(
     modifier: Modifier = Modifier,
     /** One-of-N choice: a radio button instead of a checkbox. */
     radio: Boolean = false,
+    /** A line under the label (a role's description in the Role dialog). */
+    subtitle: String? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // Inside a profile dialog on phones and tablets the row has no inset of
+    // its own, so its text shares the card's one left edge; TV keeps it for
+    // its focus card (owner 2026-11-12, Apple parity).
+    val inset = if (LocalInProfileDialog.current && !com.aeriotv.android.ui.settings.rememberIsTvDevice()) 0.dp else 12.dp
     // D-pad OK fires only on a KeyUp whose KeyDown this row also saw. The
     // release of the long press that opened a row menu arrives as a bare
     // KeyUp (its KeyDown went to the launching row), so it cannot pick the
@@ -569,7 +587,7 @@ internal fun ChoiceRow(
             }
             .settingsRowCard(focused)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = inset, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (checked != null) {
@@ -579,11 +597,16 @@ internal fun ChoiceRow(
             ) else Checkbox(checked = checked, onCheckedChange = null)
             Spacer(Modifier.size(8.dp))
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = when { destructive -> MaterialTheme.colorScheme.error; checked == true -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.onSurface },
-        )
+        androidx.compose.foundation.layout.Column {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = when { destructive -> MaterialTheme.colorScheme.error; checked == true -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.onSurface },
+            )
+            subtitle?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
@@ -608,7 +631,7 @@ fun ChannelProfilesDialog(
             { error = it.message ?: "Could not load channel profiles" },
         )
     }
-    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+    ProfileAlertDialog(
         onDismissRequest = { onClose(null) },
         title = { Text("Channel Profiles") },
         text = {

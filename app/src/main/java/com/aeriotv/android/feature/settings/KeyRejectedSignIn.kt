@@ -252,6 +252,8 @@ fun KeyRejectedSignInDialog(
     }
     SettingsAlertDialog(
         onDismissRequest = { if (!busy) onCancel() },
+        // A tap outside never closes the form (typed credentials would be lost); Cancel and Back do.
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
         title = { Text(KeyRejectedCopy.FORM_TITLE) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

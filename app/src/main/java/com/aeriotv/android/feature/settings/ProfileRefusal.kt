@@ -23,8 +23,10 @@ data class ProfileRefusal(val title: String?, val reason: String) {
 /** The refusal dialog: the existing Settings dialog style, the reason, and OK. */
 @Composable
 fun ProfileRefusalDialog(refusal: ProfileRefusal, onDismiss: () -> Unit) {
-    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+    ProfileAlertDialog(
         onDismissRequest = onDismiss,
+        // OK only: a tap outside does nothing.
+        outsideTapCancels = false,
         title = refusal.title?.let { t -> { Text(t) } },
         text = { Text(refusal.reason) },
         confirmButton = { com.aeriotv.android.ui.settings.SettingsDialogTextButton(label = ProfileRefusal.OK, onClick = onDismiss, emphasized = true) },

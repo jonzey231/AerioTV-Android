@@ -201,7 +201,8 @@ private fun UserQrFlow(t: UserQrViewModel.Target, vm: UserQrViewModel, onClose: 
     val text by produceState<String?>(null, t) { value = vm.text(t) }
     Dialog(
         onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn),
+        // Its own buttons close it; a tap outside never does.
+        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn, dismissOnClickOutside = false),
     ) {
         val src = remember(text) { text?.let { vm.source(t, it) } }
         DisposableEffect(src) {
