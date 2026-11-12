@@ -10,4 +10,8 @@ package com.aeriotv.android.feature.devicesetup
 object SetupChoiceCopy {
     const val PLAYLIST_AND_PROFILES = "Copy this playlist and its profiles"
     const val USER_ONLY = "Import this user only"
+
+    /** The User QR offer's line under "Copy from {name}": one playlist, its profiles, or just the user in the code. */
+    fun userQrOffer(deviceName: String): String =
+        "Copy the playlist and its profiles from $deviceName, or add just the user in this code."
 }

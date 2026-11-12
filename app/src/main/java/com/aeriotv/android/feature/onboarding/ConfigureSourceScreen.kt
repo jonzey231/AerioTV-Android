@@ -231,7 +231,7 @@ fun ConfigureSourceScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        "Copy every playlist and profile from ${found.name}, or add just the user in this code.",
+                        com.aeriotv.android.feature.devicesetup.SetupChoiceCopy.userQrOffer(found.name),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

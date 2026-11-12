@@ -9,4 +9,11 @@ class SetupChoiceCopyTest {
         assertEquals("Copy this playlist and its profiles", SetupChoiceCopy.PLAYLIST_AND_PROFILES)
         assertEquals("Import this user only", SetupChoiceCopy.USER_ONLY)
     }
+
+    @Test fun theUserQrOfferNamesOnePlaylist() {
+        assertEquals(
+            "Copy the playlist and its profiles from Living Room, or add just the user in this code.",
+            SetupChoiceCopy.userQrOffer("Living Room"),
+        )
+    }
 }
