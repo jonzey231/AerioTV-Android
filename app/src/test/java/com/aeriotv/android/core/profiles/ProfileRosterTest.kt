@@ -65,6 +65,16 @@ class ProfileRosterTest {
         assertTrue(ProfileRoster.suggestions(r.rows, listOf("admin")).isEmpty())
     }
 
+    @Test fun suggestionsAboveTheManualFormGetADividerAndHeading() {
+        assertEquals("Or sign in as another Dispatcharr user", ProfileRoster.MANUAL_FORM_HEADING)
+        // Add Profile's manual form with suggestion rows above it.
+        assertTrue(ProfileRoster.showsManualFormHeading(suggestionRows = 1, formFollows = true))
+        // No suggestions: nothing changes.
+        assertTrue(!ProfileRoster.showsManualFormHeading(suggestionRows = 0, formFollows = true))
+        // No form right below (Add Profile's user list, onboarding's Add Profiles): no heading.
+        assertTrue(!ProfileRoster.showsManualFormHeading(suggestionRows = 2, formFollows = false))
+    }
+
     @Test fun devicePinIdIsNeverAProfileId() {
         assertTrue(DevicePin.isDevice(DevicePin.id("abc")))
         assertTrue(!DevicePin.isDevice("3f2c-uuid"))

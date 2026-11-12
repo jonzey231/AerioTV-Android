@@ -31,6 +31,22 @@ class RosterAdds {
  * added only by an explicit choice. Pure logic, unit tested.
  */
 object ProfileRoster {
+    /**
+     * The heading between "From your other devices" and the manual form in
+     * Add Profile (owner 2026-11-12, Apple d711ba3): a suggestion row's role
+     * menu sat right above the form's Role radios, so the role looked chosen
+     * twice.
+     */
+    const val MANUAL_FORM_HEADING = "Or sign in as another Dispatcharr user"
+
+    /**
+     * The divider and that heading show only when suggestion rows are shown
+     * directly above a manual form (Add Profile's manual form); with no
+     * suggestions nothing changes. Add Profile's user list and onboarding's
+     * Add Profiles have no form right below, so no heading.
+     */
+    fun showsManualFormHeading(suggestionRows: Int, formFollows: Boolean): Boolean = suggestionRows > 0 && formFollows
+
     data class Plan(
         /** Rows whose user has a profile on this device: metadata merges. */
         val merge: List<ProfileRow>,

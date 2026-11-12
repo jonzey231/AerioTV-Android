@@ -1110,7 +1110,8 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
             title = { Text("Add Profile") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(gap)) {
-                    RosterSuggestions(playlistId, vm, users = null, onAdded = onClose)
+                    // Suggestions sit right above the form: set apart by a divider and a heading.
+                    RosterSuggestions(playlistId, vm, users = null, onAdded = onClose, formFollows = true)
                     // Standard and Child side by side, still radios.
                     RolePicker(playlistId, vm, role) { role = it }
                     com.aeriotv.android.feature.onboarding.components.ManualProfileForm(

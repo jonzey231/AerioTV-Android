@@ -82,6 +82,11 @@ internal fun RosterSuggestions(
     /** Onboarding focus: the username whose row should take focus when listed. */
     focusUsername: String? = null,
     onFocusConsumed: () -> Unit = {},
+    /**
+     * The manual form follows these rows (Add Profile): a divider and "Or
+     * sign in as another Dispatcharr user" close the block (Apple d711ba3).
+     */
+    formFollows: Boolean = false,
 ) {
     val flow = remember(playlistId) { vm.rosterSuggestions(playlistId) }
     val rows by flow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -249,6 +254,11 @@ internal fun RosterSuggestions(
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        if (com.aeriotv.android.core.profiles.ProfileRoster.showsManualFormHeading(listedRows.size, formFollows)) {
+            androidx.compose.material3.HorizontalDivider(Modifier.padding(top = 4.dp), thickness = 1.dp)
+            // Same style as the "From your other devices" title above.
+            Text(com.aeriotv.android.core.profiles.ProfileRoster.MANUAL_FORM_HEADING, style = MaterialTheme.typography.titleSmall)
+        }
     }
 
     credFor?.let { r ->
