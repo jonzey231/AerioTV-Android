@@ -80,4 +80,13 @@ class ProfileDialogRulesTest {
             isAdmin = true, isDefault = false,
         ).contains(ProfileDialogRules.Action.Role))
     }
+
+    @Test fun aFormDialogOnTvGrowsTo90PercentWithTighterGaps() {
+        assertEquals(0.9f, ProfileDialogRules.maxHeightFraction(isTv = true, form = true))
+        // Phones and tablets, and every other dialog, keep 80%.
+        assertEquals(0.8f, ProfileDialogRules.maxHeightFraction(isTv = false, form = true))
+        assertEquals(0.8f, ProfileDialogRules.maxHeightFraction(isTv = true, form = false))
+        assertEquals(4, ProfileDialogRules.formGapDp(isTv = true))
+        assertEquals(8, ProfileDialogRules.formGapDp(isTv = false))
+    }
 }

@@ -1094,18 +1094,24 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         return
     }
     if (manual) {
+        // One column; on TV the card may grow to about 90% of the screen and
+        // the parts sit closer, so the whole form fits at 1080p (Apple parity).
+        val gap = ProfileDialogRules.formGapDp(rememberIsTvDevice()).dp
         ProfileAlertDialog(
             scrollContent = false,
+            form = true,
             onDismissRequest = onClose,
             title = { Text("Add Profile") },
             text = {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(gap)) {
                     RosterSuggestions(playlistId, vm, users = null, onAdded = onClose)
+                    // Standard and Child side by side, still radios.
                     RolePicker(playlistId, vm, role) { role = it }
                     com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
                         onAdd = { u, pw, key ->
                             vm.addManual(playlistId, u, pw, key, role).fold({ added(it); null }, { it.message ?: "Could not add profile" })
                         },
+                        spacing = gap,
                     )
                 }
             },

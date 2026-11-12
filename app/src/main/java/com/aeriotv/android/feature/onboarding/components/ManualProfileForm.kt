@@ -53,6 +53,8 @@ fun ManualProfileForm(
     submitLabel: String = "Add Profile",
     /** Focus target for the first field (TV hand-off when the form opens). */
     firstFieldModifier: Modifier = Modifier,
+    /** The gap between the form's parts (Add Profile on TV passes a tighter one). */
+    spacing: androidx.compose.ui.unit.Dp = 8.dp,
 ) {
     var username by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(DispatcharrAuthMode.UsernamePassword) }
@@ -63,7 +65,7 @@ fun ManualProfileForm(
     val isPassword = mode == DispatcharrAuthMode.UsernamePassword
     var scannedUser by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(spacing)) {
         val selectMode: (DispatcharrAuthMode) -> Unit = { mode = it; username = ""; secret = ""; error = null; scannedUser = null }
         if (!modeAsLink) SegmentedAuthControl(selected = mode, onSelect = selectMode, enabled = !busy)
         // Dispatcharr user QR (phones and tablets): the key signs in the same

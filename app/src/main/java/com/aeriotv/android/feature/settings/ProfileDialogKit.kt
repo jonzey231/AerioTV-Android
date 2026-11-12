@@ -69,6 +69,15 @@ object ProfileDialogRules {
     /** The share of the screen height a profile dialog card grows to before its content scrolls. */
     const val MAX_HEIGHT_FRACTION = 0.8f
 
+    /** A form dialog (Add Profile) on TV grows further, so the whole form fits at 1080p (owner 2026-11-12, Apple parity). */
+    const val TV_FORM_MAX_HEIGHT_FRACTION = 0.9f
+
+    /** The gap between a form's parts: tighter on TV so the form fits. */
+    fun formGapDp(isTv: Boolean): Int = if (isTv) 4 else 8
+
+    /** The height cap for a dialog: a form dialog on TV gets [TV_FORM_MAX_HEIGHT_FRACTION]. */
+    fun maxHeightFraction(isTv: Boolean, form: Boolean): Float = if (isTv && form) TV_FORM_MAX_HEIGHT_FRACTION else MAX_HEIGHT_FRACTION
+
     /** The avatar action's label (and the title of its refusal dialog), matching "Set PIN". */
     const val SET_AVATAR = "Set Avatar"
 
@@ -149,9 +158,12 @@ object ProfileDialogRules {
 /** True inside a profile dialog's content: its rows drop their own inset on phones and tablets. */
 internal val LocalInProfileDialog = staticCompositionLocalOf { false }
 
-/** The card's height cap (about 80% of the screen). */
+/** The card's height cap (about 80% of the screen; 90% for a form dialog on TV). */
 @Composable
-private fun profileDialogMaxHeight() = (LocalConfiguration.current.screenHeightDp * ProfileDialogRules.MAX_HEIGHT_FRACTION).dp
+private fun profileDialogMaxHeight(form: Boolean = false) = (
+    LocalConfiguration.current.screenHeightDp *
+        ProfileDialogRules.maxHeightFraction(com.aeriotv.android.ui.settings.rememberIsTvDevice(), form)
+    ).dp
 
 /**
  * Draws a thin scroll indicator for a moment once the content is measured,
@@ -204,11 +216,13 @@ fun ProfileAlertDialog(
     text: (@Composable () -> Unit)? = null,
     outsideTapCancels: Boolean = true,
     scrollContent: Boolean = true,
+    /** A form (Add Profile): on TV it may grow to about 90% of the screen. */
+    form: Boolean = false,
 ) {
     com.aeriotv.android.ui.settings.SettingsAlertDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = confirmButton,
-        modifier = modifier.heightIn(max = profileDialogMaxHeight()),
+        modifier = modifier.heightIn(max = profileDialogMaxHeight(form)),
         dismissButton = dismissButton,
         title = title?.let { t ->
             {
