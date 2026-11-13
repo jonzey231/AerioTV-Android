@@ -1077,6 +1077,7 @@ private fun SyncTileToggleRow(
         onClick = { if (enabled) onCheckedChange(!checked) },
         // Apple dims disabled category rows to 50% rather than hiding them.
         modifier = Modifier.alpha(if (enabled) 1f else 0.5f),
+        pressFeedback = enabled,
     ) {
         SyncIconTile(icon, MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(syncTileGap()))
@@ -1111,7 +1112,7 @@ private fun SyncTileActionRow(
     chevron: Boolean = false,
 ) {
     val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-    SettingsRowContainer(onClick = { if (!running) onClick() }) {
+    SettingsRowContainer(onClick = { if (!running) onClick() }, pressFeedback = !running) {
         SyncIconTile(icon, tint)
         Spacer(Modifier.width(syncTileGap()))
         SyncRowText(

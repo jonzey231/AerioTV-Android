@@ -427,6 +427,12 @@ fun SettingsRowContainer(
     enabled: Boolean = true,
     /** Row title for the TV focus trace ([SETTINGS] row focus). */
     traceTitle: String? = null,
+    /**
+     * Touch only: ripple across the whole row on press. Rows that stay
+     * clickable while inert (a disabled action row kept as a D-pad stop, a
+     * running Sync action) pass false so a tap that does nothing shows nothing.
+     */
+    pressFeedback: Boolean = enabled,
     content: RowScopeContent,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -449,7 +455,11 @@ fun SettingsRowContainer(
             .clickable(
                 enabled = enabled,
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null,
+                // TV: the focus card is the affordance. Touch: the same
+                // full-width ripple as the navigation rows, Add Playlist, and
+                // the playlist rows; toggle, picker, and action rows showed
+                // no press at all, so a tap read as landing on nothing.
+                indication = if (isTv || !pressFeedback) null else androidx.compose.material3.ripple(),
                 onClick = onClick,
             )
             .padding(horizontal = settingsRowInsetH(), vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
@@ -656,6 +666,7 @@ fun SettingsActionRow(
         modifier = modifier.semantics { if (!enabled) disabled() },
         enabled = true,
         traceTitle = label,
+        pressFeedback = enabled && !running,
     ) {
         SettingsLeadingGlyph(leadingIcon, tint = accent)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
