@@ -361,10 +361,12 @@ fun AerioTVNavHost(
             val target = deepLinkTarget ?: return@LaunchedEffect
             when (target) {
                 is DeepLinkTarget.Channel -> {
-                    val exists = dlState.channels.any {
-                        it.id == target.channelId && it.url.isNotBlank()
-                    }
-                    if (exists) {
+                    // aeriotv://channel/<id> in any documented form (README,
+                    // Deep links): resolved to the active playlist's channel.
+                    val resolved = ChannelDeepLink.resolve(target.channelId, dlState.channels)
+                        ?.takeIf { it.url.isNotBlank() }
+                    if (resolved != null) {
+                        val channelId = resolved.id
                         // If this TV is already on the LIVE player, re-tune in
                         // place (PlayerScreen observes castChannelRequest); a
                         // catch-up replay shares the player/ route but its prime
@@ -380,13 +382,15 @@ fun AerioTVNavHost(
                             // While controlling a TV the player IS the remote
                             // screen; a notification tap just brings it forward.
                             // requestCastChannel would start LOCAL playback.
-                            if (!controllingTv) dlCastReceiver.requestCastChannel(target.channelId)
+                            if (!controllingTv) dlCastReceiver.requestCastChannel(channelId)
                         } else {
-                            navController.navigate(Routes.player(target.channelId))
+                            navController.navigate(Routes.player(channelId))
                         }
                         onDeepLinkConsumed()
                     } else if (dlState.phase == PlaylistViewModel.Phase.ChannelsReady) {
-                        onDeepLinkConsumed() // channels loaded, id gone => drop
+                        // Channels loaded and nothing matches: drop it quietly.
+                        android.util.Log.i("AerioDeepLink", "[DEEPLINK] channel link matched no channel: ${target.channelId}")
+                        onDeepLinkConsumed()
                     }
                 }
                 is DeepLinkTarget.Vod -> {
