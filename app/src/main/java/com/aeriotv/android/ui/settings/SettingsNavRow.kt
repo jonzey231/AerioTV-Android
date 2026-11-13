@@ -123,7 +123,10 @@ fun SettingsNavRow(
     }
     val gap = if (isTv) TvSettingsMetrics.railIconGap else 12.dp
     val padH = if (railMinHeight != null) TvSettingsMetrics.railRowPaddingH else if (isTv) 10.dp else 16.dp
-    val padV = if (railMinHeight != null) 0.dp else if (isTv) 2.dp else 12.dp
+    // Touch card rows (the Settings root's App and Device rows): Apple's
+    // standard row is 69.7 dp tall on iPhone (6fde56b); 12 dp padding made
+    // these 65.5. Flat rows (the tablet sidebar) keep 12.
+    val padV = if (railMinHeight != null) 0.dp else if (isTv) 2.dp else if (flat) 12.dp else 14.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
