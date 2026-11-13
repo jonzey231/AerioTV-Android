@@ -678,6 +678,9 @@ Row: `[userId:int, username:string, displayName:string(max 40 B), pinType:"none"
   applied there, and a profile whose user has no `tmdbKey` yet is seeded from it.
 - Logs never carry the key: `[DSYNC] tmdbKey: set from the server`, `cleared from the server`, or
   `kept this device's key (newer than the server's clear); sending it`.
+- Devices never keep the key in plain text in their saved server copies (section 6.2); change
+  detection uses a SHA-256 digest. A write sends only the key itself or `""`, never a digest or an
+  encrypted form.
 
 ## 5. Profiles flow
 
