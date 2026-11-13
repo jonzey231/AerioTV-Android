@@ -210,7 +210,10 @@ fun SettingsSectionHeader(
     Text(
         text = text.uppercase(),
         style = settingsEyebrowStyle().copy(letterSpacing = 0.9.sp),
-        color = color ?: MaterialTheme.colorScheme.textThemeTint,
+        // TV: Apple TV's eyebrow is textTertiary (the accent at 45%), not the
+        // full accent; measured on its Player page, (17, 100, 119) on the
+        // page background. Touch keeps the theme tint.
+        color = color ?: if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.textThemeTint,
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
     )
@@ -366,11 +369,13 @@ fun SettingsRowContainer(
     content: RowScopeContent,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val tracePage = if (rememberIsTvDevice()) LocalSettingsTracePage.current else null
+    val isTv = rememberIsTvDevice()
+    val tracePage = if (isTv) LocalSettingsTracePage.current else null
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            // TV: Apple TV's pane row height (TvSettingsMetrics).
+            .heightIn(min = if (isTv) TvSettingsMetrics.paneRowMinHeight else 52.dp)
             .onFocusChanged {
                 if (tracePage != null && it.isFocused != focused) {
                     val t = traceTitle ?: "untitled"
@@ -386,7 +391,7 @@ fun SettingsRowContainer(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = { content() },
     )
@@ -636,12 +641,13 @@ fun SettingsInfoRow(
     modifier: Modifier = Modifier,
     leadingIcon: ImageVector? = null,
 ) {
+    val isTv = rememberIsTvDevice()
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            .heightIn(min = if (isTv) TvSettingsMetrics.paneRowMinHeight else 52.dp)
             .settingsRowCard(focused = false)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leadingIcon != null) SettingsLeadingGlyph(leadingIcon, tint = MaterialTheme.colorScheme.onSurfaceVariant, bareSize = 20.dp)

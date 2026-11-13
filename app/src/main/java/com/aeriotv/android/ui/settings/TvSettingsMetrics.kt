@@ -42,6 +42,19 @@ object TvSettingsMetrics {
     /** Header-to-card gap. tvOS 12. */
     val sectionTitleGap = 6.dp
 
+    // MARK: Pane row height (measured on Apple TV's Player page)
+    //
+    // Apple TV's pane rows: 46 dp with one line (tvOS minHeight 80 + 6 pt
+    // padding above and below = 92 pt), 49 dp with a title and a one-line
+    // subtitle, 62 dp with a two-line subtitle. Android TV's were 52, 54.5
+    // and 68 dp (a 52 dp minimum and 12 dp padding). These reproduce Apple's
+    // heights from Android's own text block (30.5 dp and 44 dp): measured on
+    // the TV emulator, 46, 48.5 and 62 dp.
+    /** The shortest pane row. tvOS 92. */
+    val paneRowMinHeight = 46.dp
+    /** Padding above and below a pane row's content. */
+    val paneRowPaddingV = 9.dp
+
     // MARK: Pane row icon tile (SettingsIconTile, tvOS)
     /** tvOS 48. */
     val iconTileBox = 24.dp

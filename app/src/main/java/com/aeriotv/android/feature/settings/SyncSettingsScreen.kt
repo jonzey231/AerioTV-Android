@@ -788,9 +788,10 @@ private fun AccountRow(signedIn: Boolean, email: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (tv) Modifier.heightIn(min = com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowMinHeight) else Modifier)
             .settingsRowCard(focused = false)
             .settingsTvFocusableRow()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = if (tv) com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowPaddingV else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Apple TV's account row is a SettingsRow: the person glyph in the
