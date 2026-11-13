@@ -126,10 +126,12 @@ fun SettingsIconTile(
     modifier: Modifier = Modifier,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
+    // TV: Apple's tvOS SettingsIconTile (48 / 22 / 10 pt), halved.
+    val isTv = rememberIsTvDevice()
     Box(
         modifier = modifier
-            .size(SettingsCardMetrics.iconTile)
-            .clip(RoundedCornerShape(SettingsCardMetrics.iconTileCorner))
+            .size(if (isTv) TvSettingsMetrics.iconTileBox else SettingsCardMetrics.iconTile)
+            .clip(RoundedCornerShape(if (isTv) TvSettingsMetrics.iconTileCorner else SettingsCardMetrics.iconTileCorner))
             .background(tint.copy(alpha = 0.2f)),
         contentAlignment = Alignment.Center,
     ) {
@@ -137,8 +139,31 @@ fun SettingsIconTile(
             imageVector = icon,
             contentDescription = null,
             tint = tint,
-            modifier = Modifier.size(SettingsCardMetrics.iconGlyph),
+            modifier = Modifier.size(
+                if (isTv) with(LocalDensity.current) { TvSettingsMetrics.iconTileGlyph.toDp() }
+                else SettingsCardMetrics.iconGlyph,
+            ),
         )
+    }
+}
+
+/**
+ * A settings row's leading icon. TV: always Apple's tile (tvOS draws every
+ * pane row icon in a SettingsIconTile, never a bare glyph), 7 dp from the
+ * text. Touch: the bare glyph at [bareSize], 14 dp from the text.
+ */
+@Composable
+fun SettingsLeadingGlyph(
+    icon: ImageVector,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    bareSize: androidx.compose.ui.unit.Dp = 22.dp,
+) {
+    if (rememberIsTvDevice()) {
+        SettingsIconTile(icon = icon, tint = tint)
+        Spacer(Modifier.width(TvSettingsMetrics.iconTileGap))
+    } else {
+        Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(bareSize))
+        Spacer(Modifier.width(14.dp))
     }
 }
 
@@ -188,6 +213,26 @@ fun SettingsSectionHeader(
         color = color ?: MaterialTheme.colorScheme.textThemeTint,
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+    )
+}
+
+/**
+ * Title-case card header, Apple tvOS SettingsSection .compactCard: title3
+ * semibold in the secondary text color, 12pt in from the card's edge, 12pt
+ * above it.
+ */
+@Composable
+fun SettingsSectionTitleHeader(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = settingsSectionTitleStyle(),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.SemiBold,
+        modifier = modifier.padding(
+            start = TvSettingsMetrics.sectionTitleLeading,
+            end = 16.dp,
+            bottom = TvSettingsMetrics.sectionTitleGap,
+        ),
     )
 }
 
@@ -365,26 +410,18 @@ fun SettingsSelectionRow(
     leadingIcon: ImageVector? = null,
 ) {
     SettingsRowContainer(onClick = onClick, modifier = modifier, traceTitle = label) {
-        if (leadingIcon != null) {
-            Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(Modifier.width(14.dp))
-        }
+        if (leadingIcon != null) SettingsLeadingGlyph(leadingIcon)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = label,
                 style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = settingsRowTitleWeight(),
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = settingsFootnoteStyle().subtext(),
+                    style = settingsRowSubtitleStyle().subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -433,14 +470,10 @@ fun SettingsToggleRow(
             SettingsIconTile(icon = leadingIcon)
             Spacer(Modifier.width(12.dp))
         } else if (leadingIcon != null) {
-            Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                tint = if (enabled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
+            SettingsLeadingGlyph(
+                leadingIcon,
+                tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.width(14.dp))
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
@@ -448,12 +481,12 @@ fun SettingsToggleRow(
                 style = settingsRowTitleStyle(),
                 color = if (enabled) MaterialTheme.colorScheme.onBackground
                 else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Medium,
+                fontWeight = settingsRowTitleWeight(),
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = settingsFootnoteStyle().subtext(),
+                    style = settingsRowSubtitleStyle().subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -558,24 +591,18 @@ fun SettingsActionRow(
         enabled = true,
         traceTitle = label,
     ) {
-        Icon(
-            imageVector = leadingIcon,
-            contentDescription = null,
-            tint = accent,
-            modifier = Modifier.size(22.dp),
-        )
-        Spacer(Modifier.width(14.dp))
+        SettingsLeadingGlyph(leadingIcon, tint = accent)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = label,
                 style = settingsRowTitleStyle(),
                 color = accent,
-                fontWeight = FontWeight.Medium,
+                fontWeight = settingsRowTitleWeight(),
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = settingsFootnoteStyle().subtext(),
+                    style = settingsRowSubtitleStyle().subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -617,15 +644,7 @@ fun SettingsInfoRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (leadingIcon != null) {
-            Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(14.dp))
-        }
+        if (leadingIcon != null) SettingsLeadingGlyph(leadingIcon, tint = MaterialTheme.colorScheme.onSurfaceVariant, bareSize = 20.dp)
         Text(
             text = label,
             style = settingsRowTitleStyle().subtext(),
@@ -636,7 +655,7 @@ fun SettingsInfoRow(
             text = value,
             style = settingsRowTitleStyle(),
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Medium,
+            fontWeight = settingsRowTitleWeight(),
         )
     }
 }
@@ -652,10 +671,18 @@ fun SettingsSection(
     modifier: Modifier = Modifier,
     footer: String? = null,
     headerColor: androidx.compose.ui.graphics.Color? = null,
+    // Apple TV's .compactCard sections (the Sync pages) title their cards in
+    // large title case rather than the uppercase eyebrow. TV only; phones
+    // and tablets keep the eyebrow, as iOS does.
+    titleHeader: Boolean = false,
     content: ColumnScopeContent,
 ) {
+    val tvTitle = titleHeader && rememberIsTvDevice()
     Column(modifier = modifier) {
-        if (header.isNotBlank()) SettingsSectionHeader(header, color = headerColor)
+        if (header.isNotBlank()) {
+            if (tvTitle) SettingsSectionTitleHeader(header)
+            else SettingsSectionHeader(header, color = headerColor)
+        }
         SettingsCard { content() }
         if (footer != null) SettingsSectionFooter(footer)
     }

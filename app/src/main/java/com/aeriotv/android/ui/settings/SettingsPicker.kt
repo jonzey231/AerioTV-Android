@@ -279,20 +279,12 @@ private fun SettingsTvOptionsSheetRow(
         modifier = modifier.focusRequester(rowFocus),
         traceTitle = title,
     ) {
-        if (leadingIcon != null) {
-            androidx.compose.material3.Icon(
-                imageVector = leadingIcon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(Modifier.width(14.dp))
-        }
+        if (leadingIcon != null) SettingsLeadingGlyph(leadingIcon)
         Text(
             text = title,
             style = settingsRowTitleStyle(),
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Medium,
+            fontWeight = settingsRowTitleWeight(),
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(12.dp))
@@ -445,7 +437,7 @@ fun SettingsIntStepperRow(
                 text = title,
                 style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = settingsRowTitleWeight(),
             )
             if (subtitle != null) {
                 Text(

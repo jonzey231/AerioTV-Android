@@ -110,7 +110,14 @@ fun SettingsNavRow(
     // halved for the 960x540dp canvas - see that file for why halving is the
     // correct conversion. Touch keeps the phone/tablet values.
     val iconBox = if (isTv) TvSettingsMetrics.railIconWidth else SettingsCardMetrics.iconTile
-    val iconGlyph = if (isTv) TvSettingsMetrics.railIconGlyph else SettingsCardMetrics.iconGlyph
+    // The Settings rail's glyph is sp-sized, so it follows Text Size as
+    // Apple's scaledFont rail icon does.
+    val railGlyph = with(androidx.compose.ui.platform.LocalDensity.current) { TvSettingsMetrics.railIconGlyph.toDp() }
+    val iconGlyph = when {
+        railMinHeight != null -> railGlyph
+        isTv -> TvSettingsMetrics.navIconGlyph
+        else -> SettingsCardMetrics.iconGlyph
+    }
     val gap = if (isTv) TvSettingsMetrics.railIconGap else 12.dp
     val padH = if (railMinHeight != null) TvSettingsMetrics.railRowPaddingH else if (isTv) 10.dp else 16.dp
     val padV = if (railMinHeight != null) 0.dp else if (isTv) 2.dp else 12.dp
@@ -122,12 +129,20 @@ fun SettingsNavRow(
                 if (flat) {
                     // Plain row; fill only for focus (D-pad affordance) or
                     // selection, and a border only on focus.
+                    // The TV Settings rail (railMinHeight) is Apple's
+                    // TVRailRowStyle: no focus scale (a focused row keeps its
+                    // siblings' frame), a 7 dp corner (tvOS 14), the accent
+                    // wash and a full accent ring on focus, and the card fill
+                    // for the selected row.
+                    val rail = railMinHeight != null
+                    val shape = RoundedCornerShape(if (rail) 7.dp else 12.dp)
                     Modifier
-                        .tvFocusScale(focused, focusedScale = 1.02f)
-                        .clip(RoundedCornerShape(12.dp))
+                        .then(if (rail) Modifier else Modifier.tvFocusScale(focused, focusedScale = 1.02f))
+                        .clip(shape)
                         .background(
                             when {
                                 focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                selected && rail -> settingsCardFill()
                                 // Phase 3b: selection is a quiet accent wash,
                                 // not Material's off-palette secondaryContainer.
                                 selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
@@ -138,8 +153,9 @@ fun SettingsNavRow(
                             if (focused) {
                                 Modifier.border(
                                     2.dp,
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
-                                    RoundedCornerShape(12.dp),
+                                    if (rail) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                    shape,
                                 )
                             } else Modifier,
                         )

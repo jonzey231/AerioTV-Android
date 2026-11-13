@@ -73,6 +73,18 @@ import com.aeriotv.android.ui.settings.SettingsNavRow
 import com.aeriotv.android.ui.settings.SettingsSectionHeader
 import com.aeriotv.android.ui.settings.TvSettingsMetrics
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.ToggleOn
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.LocalMovies
+import androidx.compose.material.icons.filled.SmartDisplay
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.ui.layout.positionInWindow
 
 /**
@@ -719,12 +731,13 @@ private fun SettingsTvRail(
             SettingsNavRow(
                 title = title,
                 subtitle = subtitle,
-                icon = settingsRouteIcon(route),
-                // tvOS draws DVR as a red record.circle, not an accent glyph.
-                iconTint = if (route == SettingsRoute.Section(SettingsSection.DvrSettings)) {
-                    TvDvrRecordRed
-                } else {
-                    null
+                icon = tvRailIcon(route),
+                // tvOS tints: DVR's record.circle red, Developer's ladybug the
+                // secondary accent, every other glyph the accent.
+                iconTint = when (route) {
+                    SettingsRoute.Section(SettingsSection.DvrSettings) -> TvDvrRecordRed
+                    SettingsRoute.Section(SettingsSection.Developer) -> MaterialTheme.colorScheme.secondary
+                    else -> null
                 },
                 onClick = { onClickRoute(route) },
                 selected = route == selection,
@@ -758,6 +771,29 @@ private fun SettingsTvRail(
             )
         }
     }
+}
+
+/**
+ * The Apple TV rail's filled SF Symbols, as Material equivalents
+ * (SettingsView.swift allTVRailItems): rectangle.stack.fill, tv.fill,
+ * play.rectangle.fill, film.fill, record.circle, paintbrush.fill, switch.2,
+ * av.remote, icloud.fill, ladybug.fill, info.circle.fill.
+ */
+private fun tvRailIcon(route: SettingsRoute): androidx.compose.ui.graphics.vector.ImageVector = when (route) {
+    SettingsRoute.Playlists -> Icons.Filled.Layers
+    SettingsRoute.Section(SettingsSection.LiveTV) -> Icons.Filled.Tv
+    SettingsRoute.Section(SettingsSection.Player) -> Icons.Filled.SmartDisplay
+    SettingsRoute.Section(SettingsSection.MoviesAndTvShows) -> Icons.Filled.LocalMovies
+    SettingsRoute.Section(SettingsSection.DvrSettings) -> Icons.Outlined.RadioButtonChecked
+    SettingsRoute.Section(SettingsSection.Appearance) -> Icons.Filled.Brush
+    SettingsRoute.Section(SettingsSection.General) -> Icons.Filled.ToggleOn
+    SettingsRoute.Section(SettingsSection.RemoteControl) -> Icons.Filled.SettingsRemote
+    SettingsRoute.Section(SettingsSection.Sync) -> Icons.Filled.Cloud
+    SettingsRoute.Section(SettingsSection.AppUpdates) -> Icons.Filled.SystemUpdate
+    SettingsRoute.Section(SettingsSection.Developer) -> Icons.Filled.BugReport
+    SettingsRoute.Section(SettingsSection.About), SettingsRoute.About -> Icons.Filled.Info
+    SettingsRoute.ManageProfiles -> Icons.Filled.ManageAccounts
+    else -> settingsRouteIcon(route)
 }
 
 /** The system red Apple uses for the tvOS DVR rail glyph (UIColor.systemRed, dark). */

@@ -311,6 +311,7 @@ fun SyncSettingsScreen(
                 // needs an in-app sign-in.
                 SettingsSection(
                     header = "Google Drive",
+                    titleHeader = true,
                     // Apple TV shows no footer under this card.
                     footer = if (tvRows) null else "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read.",
                 ) {
@@ -455,6 +456,7 @@ fun SyncSettingsScreen(
                 item {
                     SettingsSection(
                         header = "Dispatcharr Sync",
+                        titleHeader = true,
                         footer = when {
                             dsyncOn && masterEnabled -> "Dispatcharr Sync takes precedence for shared data on this server. Google Drive keeps a backup."
                             tvRows -> null
@@ -542,7 +544,7 @@ fun SyncSettingsScreen(
             // Sync. Reachable with sync off, as Apple: the Delete actions
             // there work for stale-state cleanup.
             item {
-                SettingsSection(header = "Sync Categories") {
+                SettingsSection(header = "Sync Categories", titleHeader = true) {
                     SyncTileActionRow(
                         icon = Icons.Filled.Tune,
                         title = "Sync Categories",
@@ -782,6 +784,7 @@ private fun DeveloperConfigHint() {
 
 @Composable
 private fun AccountRow(signedIn: Boolean, email: String) {
+    val tv = rememberIsTvDevice()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -790,7 +793,15 @@ private fun AccountRow(signedIn: Boolean, email: String) {
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
+        // Apple TV's account row is a SettingsRow: the person glyph in the
+        // shared tile, then the row's title and subtitle sizes.
+        if (tv) {
+            com.aeriotv.android.ui.settings.SettingsIconTile(
+                icon = if (signedIn) androidx.compose.material.icons.Icons.Filled.AccountCircle
+                else androidx.compose.material.icons.Icons.Outlined.AccountCircle,
+            )
+            Spacer(Modifier.size(com.aeriotv.android.ui.settings.TvSettingsMetrics.iconTileGap))
+        } else Box(
             modifier = Modifier
                 .size(36.dp)
                 .clip(androidx.compose.foundation.shape.CircleShape)
@@ -811,13 +822,13 @@ private fun AccountRow(signedIn: Boolean, email: String) {
                 modifier = Modifier.size(20.dp),
             )
         }
-        Spacer(Modifier.size(12.dp))
+        if (!tv) Spacer(Modifier.size(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = if (signedIn) "Signed in to Drive" else "Not signed in",
-                style = MaterialTheme.typography.bodyLarge,
+                style = if (tv) settingsRowTitleStyle() else MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = if (tv) FontWeight.Normal else FontWeight.Medium,
             )
             Text(
                 text = when {
@@ -825,7 +836,7 @@ private fun AccountRow(signedIn: Boolean, email: String) {
                     signedIn -> "Account connected"
                     else -> "Sign in to start syncing across devices"
                 },
-                style = MaterialTheme.typography.bodySmall.subtext(),
+                style = (if (tv) com.aeriotv.android.ui.settings.settingsRowSubtitleStyle() else MaterialTheme.typography.bodySmall).subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -932,6 +943,11 @@ private fun SignInWithGoogleButton(busy: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun SyncIconTile(icon: ImageVector, color: Color) {
+    // Apple TV draws these with the shared tvOS tile (48 pt, halved).
+    if (rememberIsTvDevice()) {
+        com.aeriotv.android.ui.settings.SettingsIconTile(icon = icon, tint = color)
+        return
+    }
     Box(
         modifier = Modifier
             .size(32.dp)
@@ -958,16 +974,20 @@ private fun SyncRowText(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // Apple TV's SettingsRow: a regular-weight title and a bodySmall
+        // subtitle (tvOS 24 / 22 pt). Touch keeps its medium title and
+        // footnote subtitle.
+        val tv = rememberIsTvDevice()
         Text(
             text = title,
             style = settingsRowTitleStyle(),
             color = titleColor,
-            fontWeight = FontWeight.Medium,
+            fontWeight = if (tv) FontWeight.Normal else FontWeight.Medium,
         )
         if (subtitle != null) {
             Text(
                 text = subtitle,
-                style = settingsFootnoteStyle().subtext(),
+                style = (if (tv) com.aeriotv.android.ui.settings.settingsRowSubtitleStyle() else settingsFootnoteStyle()).subtext(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -997,7 +1017,7 @@ private fun SyncTileToggleRow(
         modifier = Modifier.alpha(if (enabled) 1f else 0.5f),
     ) {
         SyncIconTile(icon, MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(syncTileGap()))
         SyncRowText(
             title = title,
             subtitle = subtitle,
@@ -1031,7 +1051,7 @@ private fun SyncTileActionRow(
     val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     SettingsRowContainer(onClick = { if (!running) onClick() }) {
         SyncIconTile(icon, tint)
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(syncTileGap()))
         SyncRowText(
             title = title,
             subtitle = subtitle,
@@ -1059,6 +1079,11 @@ private fun SyncTileActionRow(
         }
     }
 }
+
+/** Tile-to-text gap: tvOS 14 pt (7 dp) on TV, the phone's 14 dp on touch. */
+@Composable
+private fun syncTileGap() =
+    if (rememberIsTvDevice()) com.aeriotv.android.ui.settings.TvSettingsMetrics.iconTileGap else 14.dp
 
 /** Apple's lastSyncedString: "just now", "5m ago", "3h ago", "2d ago". */
 private fun lastSyncedAgo(millis: Long): String {
@@ -1173,7 +1198,7 @@ fun SyncCategoriesScreen(
                     val items = group.items.filter { (!dsync || !it.driveOnly) && (dsyncOn || !it.dsyncOnly) }
                     if (items.isEmpty()) return@forEach
                     item(key = "sync-group-${group.id}") {
-                        SettingsSection(header = group.title) {
+                        SettingsSection(header = group.title, titleHeader = true) {
                             val settingsItems = items.filterNot { it.isData }
                             if (settingsItems.size > 1) {
                                 val values = settingsItems.map { scopes[it.id] ?: SyncScope.All }.distinct()
@@ -1212,7 +1237,7 @@ fun SyncCategoriesScreen(
                 }
                 if (!dsync) {
                     item {
-                        SettingsSection(header = "Delete from Drive", footer = footer) {
+                        SettingsSection(header = "Delete from Drive", footer = footer, titleHeader = true) {
                             SyncCategory.entries.forEach { category ->
                                 val status = clearStatuses[category]
                                 SyncTileActionRow(

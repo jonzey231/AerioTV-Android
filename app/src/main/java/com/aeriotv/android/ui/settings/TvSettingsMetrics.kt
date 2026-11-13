@@ -33,14 +33,44 @@ object TvSettingsMetrics {
     val eyebrowSize = 11.sp
     /** Row subtitle / footnote. tvOS 20. */
     val footnoteSize = 10.sp
+    /** A pane row's subtitle (SettingsRow bodySmall). tvOS 22. */
+    val rowSubtitleSize = 11.sp
+    /** Title-case card header (SettingsSection .compactCard, title3 semibold). tvOS 48. */
+    val sectionTitleSize = 24.sp
+    /** Its leading inset. tvOS 12. */
+    val sectionTitleLeading = 6.dp
+    /** Header-to-card gap. tvOS 12. */
+    val sectionTitleGap = 6.dp
+
+    // MARK: Pane row icon tile (SettingsIconTile, tvOS)
+    /** tvOS 48. */
+    val iconTileBox = 24.dp
+    /**
+     * The tile glyph's box. tvOS draws a 22 pt semibold SF Symbol: its circle
+     * glyphs measure 22 pt (11 dp) across on Apple TV, and a Material circle
+     * fills 20/24 of its box, so the box is 13.2. In sp so it follows Text
+     * Size, as Apple's scaledFont glyph does (the tile itself stays 24 dp).
+     */
+    val iconTileGlyph = 13.2.sp
+    /** tvOS 10. */
+    val iconTileCorner = 5.dp
+    /** Tile-to-text gap. tvOS 14. */
+    val iconTileGap = 7.dp
 
     // MARK: Rail row (TVSettingsSplitView.railRow)
     /** tvOS 26, .medium. */
     val railTitleSize = 13.sp
     /** tvOS 18. */
     val railSubtitleSize = 9.sp
-    /** Glyph point size. tvOS 24. */
-    val railIconGlyph = 12.dp
+    /**
+     * The rail glyph's box. tvOS draws a 24 pt semibold SF Symbol, whose
+     * circle glyphs (Info, DVR) measure 24 pt (12 dp) across on Apple TV; a
+     * Material circle fills 20/24 of its box, so the box is 14.4. In sp so it
+     * follows Text Size, as Apple's scaledFont icon does.
+     */
+    val railIconGlyph = 14.4.sp
+    /** Glyph size on the other TV navigation rows (Licenses, profiles). */
+    val navIconGlyph = 12.dp
     /** Icon column width. tvOS 34 (a bare glyph, NOT a filled tile). */
     val railIconWidth = 17.dp
     /** Icon-to-text gap. tvOS 14. */
@@ -53,8 +83,9 @@ object TvSettingsMetrics {
     // The rail fits without scrolling, so it never moves: 12 rows (the
     // GitHub build's count with Updates) x 32 + 11 gaps x 2 = 406 dp, from the
     // resting top at y 98.5 to y 504.5, above the 510 dp bottom safe edge.
-    // A larger system font scale can still overflow; then the rail scrolls,
-    // clipped at its resting top so rows never draw into the tab bar's band.
+    // Apple's 11 rows still fit at Text Size 130% (y 509); larger text can
+    // overflow, and then the rail scrolls, clipped at its resting top so rows
+    // never draw into the tab bar's band.
 
     /** Row height (minimum: larger text grows it). tvOS 64. */
     val railRowHeight = 32.dp
@@ -88,10 +119,17 @@ object TvSettingsMetrics {
     // Material defaults lineHeight to ~1.5x the font size where SwiftUI uses
     // ~1.2x, which inflates every stacked title+subtitle row independently of
     // the font size. These restore the SwiftUI ratio.
-    // SwiftUI's lines for the 26/18 pt rail label and subtitle (about 31 and
-    // 21 pt), so a row's text measures as Apple's (55 pt) and 11 rows still
-    // fit at a 130% font scale, as on Apple TV.
-    val railTitleLineHeight = 15.5.sp
+    // The rail label and subtitle take the font's own line height (Roboto's
+    // 1.17 em, as SwiftUI uses SF's), so a row's text measures 27 dp at the
+    // default size, as on Apple TV (55 pt, 27.5 dp), and 11 rows fit at 130%
+    // as they do on Apple TV. Text Size 130% is not a plain 1.3x on Android: the
+    // platform's nonlinear font scaling draws the 13 sp label at 17.2 dp,
+    // not Apple's linear 16.9, and the line box rounds UP to whole pixels.
+    // At 15.5 sp the label's line came to 42 px (36 dp rows, the 11th ending
+    // at y 514.5, past the 510 safe edge); at 15.25 sp it is 41 px (35.5 dp
+    // rows, the 11th ends at y 509). At the default size both round to the
+    // same 31 px, so default text is unchanged.
+    val railTitleLineHeight = 15.25.sp
     val railSubtitleLineHeight = 10.5.sp
 
     // MARK: Overscan
@@ -159,6 +197,26 @@ fun settingsRowValueStyle(): androidx.compose.ui.text.TextStyle =
     androidx.compose.material3.MaterialTheme.typography.bodyMedium.tvSized(
         TvSettingsMetrics.eyebrowSize, 13.sp,
     )
+
+/** A pane row's subtitle. tvOS 22 (SettingsRow bodySmall). */
+@androidx.compose.runtime.Composable
+fun settingsRowSubtitleStyle(): androidx.compose.ui.text.TextStyle =
+    androidx.compose.material3.MaterialTheme.typography.bodySmall.tvSized(
+        TvSettingsMetrics.rowSubtitleSize, 13.5.sp,
+    )
+
+/** Title-case card header (Apple tvOS .compactCard). Phones keep the eyebrow. */
+@androidx.compose.runtime.Composable
+fun settingsSectionTitleStyle(): androidx.compose.ui.text.TextStyle =
+    androidx.compose.material3.MaterialTheme.typography.titleLarge.tvSized(
+        TvSettingsMetrics.sectionTitleSize, 29.sp,
+    )
+
+/** A pane row's title weight: regular on TV (tvOS bodyMedium), medium on touch. */
+@androidx.compose.runtime.Composable
+fun settingsRowTitleWeight(): androidx.compose.ui.text.font.FontWeight =
+    if (rememberIsTvDevice()) androidx.compose.ui.text.font.FontWeight.Normal
+    else androidx.compose.ui.text.font.FontWeight.Medium
 
 /** Row subtitle / footer / footnote. tvOS 20. */
 @androidx.compose.runtime.Composable

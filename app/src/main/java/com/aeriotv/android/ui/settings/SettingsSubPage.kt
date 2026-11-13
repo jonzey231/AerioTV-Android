@@ -245,19 +245,19 @@ fun SettingsSubPageRow(
             // Apple's SettingsSubgroup / SettingsChoicePicker master rows use
             // the tiled SettingsRow icon, not a bare glyph.
             SettingsIconTile(icon = leadingIcon)
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(if (rememberIsTvDevice()) TvSettingsMetrics.iconTileGap else 12.dp))
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,
                 style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = settingsRowTitleWeight(),
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = settingsFootnoteStyle(),
+                    style = settingsRowSubtitleStyle(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
