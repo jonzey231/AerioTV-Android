@@ -658,10 +658,12 @@ fun EditPlaylistScreen(
                         options = listOf(1, 3, 7, 14, 0).map { days ->
                             SettingsPickerOption(
                                 value = days,
+                                // New playlists start on All (PlaylistEntity
+                                // GUIDE_DAYS_ALL), so All carries "(Default)",
+                                // as on Apple (EditServerSheet GuideDayChoices).
                                 label = when (days) {
-                                    0 -> "All"
+                                    0 -> "All (Default)"
                                     1 -> "1 Day"
-                                    7 -> "7 Days (Default)"
                                     else -> "$days Days"
                                 },
                             )
