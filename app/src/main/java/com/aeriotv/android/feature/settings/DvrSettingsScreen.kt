@@ -196,7 +196,7 @@ fun DvrSettingsScreen(
                 top = 12.dp,
                 bottom = LocalTabBarBottomInset.current,
             ),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
         ) {
             // Section order is Apple's: Default Recording Buffers, Recording
             // Destination, Local Storage, Storage Location, Behavior, Danger Zone.
@@ -299,7 +299,7 @@ fun DvrSettingsScreen(
                     header = "Local Storage",
                     footer = null,
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = "Maximum",
@@ -378,7 +378,7 @@ fun DvrSettingsScreen(
                     header = "Storage Location",
                     footer = "Local recordings save to your Downloads folder (in an AerioTV subfolder) by default, so you can find them in any file manager. Choose Folder picks a custom location via the Storage Access Framework, retained across reboots.",
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp)) {
                         Text(
                             text = "Currently saving to:",
                             style = MaterialTheme.typography.bodySmall.subtext(),

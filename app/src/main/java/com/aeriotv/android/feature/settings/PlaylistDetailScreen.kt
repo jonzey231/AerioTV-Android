@@ -297,7 +297,7 @@ fun PlaylistDetailScreen(
                                     Modifier
                                 },
                             )
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp),
                     ) {
                         DetailRow("Type", playlist.detailTypeLabel())
                         // Checkmark marks whichever URL is currently in effect
@@ -379,7 +379,7 @@ fun PlaylistDetailScreen(
                                     Modifier
                                 },
                             )
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp),
                     ) {
                         val caps = playlist.capabilities()
                         // A denial reads as absence, never as an error: muted,
@@ -671,7 +671,7 @@ fun PlaylistDetailScreen(
                             text = "Last refreshed: ${LastRefreshedFormat.format(ts)}",
                             style = MaterialTheme.typography.bodySmall.subtext(),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 6.dp),
                         )
                     }
                 }
@@ -866,7 +866,7 @@ private fun ActionRow(
             // keeps its D-pad focus stop while a run is in flight; a disabled
             // clickable drops out of focus traversal entirely.
             .clickable(onClick = { if (!running && enabled) onClick() })
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(

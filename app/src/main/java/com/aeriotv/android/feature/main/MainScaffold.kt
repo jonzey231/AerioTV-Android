@@ -2928,11 +2928,11 @@ private fun TvTopTabBar(
     androidx.compose.ui.layout.Layout(
         modifier = Modifier
             .fillMaxWidth()
-            // Apple TV: the 32.5 dp capsule's top at y 23.75 dp (measured on
-            // the Apple TV, atv4/p01). The bar keeps its 70 dp overall
-            // height, so the content under it (laid out from the bar's
-            // measured height) does not move.
-            .padding(top = 23.75.dp, bottom = 13.75.dp)
+            // Apple TV: the 32.5 dp capsule's top at y 23.6 dp (measured on
+            // the Apple TV, atv4/p01). The bar keeps exactly 70 dp overall
+            // (whole pixels at 2 px per dp), so the content under it (laid
+            // out from the bar's measured height) does not move.
+            .padding(top = 23.5.dp, bottom = 14.dp)
             // AFTER the padding, so these bounds are the drawn content's.
             .onGloballyPositioned { onDrawnBottomChanged(it.boundsInRoot().bottom) },
         content = {

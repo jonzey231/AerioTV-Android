@@ -454,7 +454,7 @@ internal fun ProfileRow(
             .onFocusChanged { focused = it.isFocused }
             .settingsRowCard(focused)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ProfileAvatar(profile, 32)
@@ -754,7 +754,7 @@ fun ProfilesSection(playlistId: String) {
                         .onFocusChanged { focused = it.isFocused }
                         .settingsRowCard(focused)
                         .clickable { adding = true }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                        .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Outlined.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary)

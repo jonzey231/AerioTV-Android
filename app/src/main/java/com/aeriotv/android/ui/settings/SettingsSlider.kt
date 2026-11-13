@@ -155,13 +155,13 @@ fun SettingsSliderRow(
     /** Optional caption under the slider (Apple: labelSmall, tertiary). */
     footer: String? = null,
 ) {
-    Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    Column(modifier = modifier.padding(horizontal = settingsRowInsetH(), vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = label,
                 style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = settingsRowTitleWeight(),
                 modifier = Modifier.weight(1f),
             )
             if (dimValue) {

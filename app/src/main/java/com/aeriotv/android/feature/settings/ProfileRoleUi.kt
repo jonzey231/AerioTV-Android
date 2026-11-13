@@ -139,7 +139,17 @@ fun ManageProfilesPage(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "Manage Profiles", onBack = onBack)
         val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
-        LazyColumn(Modifier.fillMaxWidth().settingsPaneTopEdge(paneList).padding(horizontal = 16.dp), state = paneList, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Android TV's rail page: the first row rests where every other rail
+        // page's first element does (12 dp under the pane's top bar, y 102.5
+        // dp on screen), not above the rail's top line.
+        val inTvPane = com.aeriotv.android.ui.settings.rememberIsTvDevice() &&
+            com.aeriotv.android.ui.settings.LocalSettingsInPane.current
+        LazyColumn(
+            Modifier.fillMaxWidth().settingsPaneTopEdge(paneList).padding(horizontal = 16.dp),
+            state = paneList,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(top = if (inTvPane) 12.dp else 0.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (!unlocked) {
                 // The gate (owner 2026-11-12, Apple parity): a centered lock, the
                 // sentence, and one "Enter PIN" button that opens the same PIN pad.

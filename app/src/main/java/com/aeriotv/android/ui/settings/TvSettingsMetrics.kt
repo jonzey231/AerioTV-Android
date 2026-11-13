@@ -122,10 +122,20 @@ object TvSettingsMetrics {
     // Apple TV's detail cards run from x 307.5 to 867.25 dp (tvOS 615 to
     // 1734.5). Android TV pages pad their cards 16 dp inside the pane, so the
     // pane itself is inset by the rest.
-    val paneInsetStart = 36.5.dp
-    val paneInsetEnd = 76.25.dp
-    /** The first card's top lands at y 98.5 dp, level with the rail's first row (tvOS y 197). */
-    val paneInsetTop = 4.5.dp
+    //
+    // Apple TV's one pane container (TVSettingsPane, AerioTV a22268e): every
+    // rail page's cards run from x 311.5 to 863.5 dp (tvOS 623 to 1727) and
+    // its first element's top sits at y 102.5 dp (tvOS 205), 4 dp under the
+    // rail's resting top. Measured on the Apple TV simulator at a22268e:
+    // eyebrow glyphs from y 105 dp, the first card from y 122 dp.
+    val paneInsetStart = 40.5.dp
+    val paneInsetEnd = 80.25.dp
+    /** Puts every page's first element at y 102.5 dp (tvOS 205). */
+    val paneInsetTop = 8.5.dp
+    /** A pane row's, eyebrow's, and footer's side inset. tvOS 20. */
+    val paneRowPaddingH = 10.dp
+    /** Space between two sections of a pane page. tvOS 32 (TVSettingsPane spacing). */
+    val paneSectionSpacing = 16.dp
     /**
      * A scrolled pane page fades out over this band under the rail's resting
      * top ([railRestingTop]). tvOS 30 (TVSettingsPaneMetrics.fadeHeight).
@@ -229,6 +239,26 @@ fun settingsSectionTitleStyle(): androidx.compose.ui.text.TextStyle =
     androidx.compose.material3.MaterialTheme.typography.titleLarge.tvSized(
         TvSettingsMetrics.sectionTitleSize, 29.sp,
     )
+
+/** A Settings row's side inset: tvOS 20 on TV ([TvSettingsMetrics.paneRowPaddingH]), 16 dp on touch. */
+@androidx.compose.runtime.Composable
+fun settingsRowInsetH(): androidx.compose.ui.unit.Dp =
+    if (rememberIsTvDevice()) TvSettingsMetrics.paneRowPaddingH else 16.dp
+
+/** A row's icon (or swatch) to its text: tvOS 14 on TV ([TvSettingsMetrics.iconTileGap]), 14 dp on touch. */
+@androidx.compose.runtime.Composable
+fun settingsTileGap(): androidx.compose.ui.unit.Dp =
+    if (rememberIsTvDevice()) TvSettingsMetrics.iconTileGap else 14.dp
+
+/** A row's subtitle style: the pane row subtitle on TV (tvOS 22), the footnote on touch. */
+@androidx.compose.runtime.Composable
+fun settingsRowSubtitleOrFootnote(): androidx.compose.ui.text.TextStyle =
+    if (rememberIsTvDevice()) settingsRowSubtitleStyle() else settingsFootnoteStyle()
+
+/** Space between a Settings page's sections: tvOS 32 on TV, [touch] on phones and tablets. */
+@androidx.compose.runtime.Composable
+fun settingsSectionSpacing(touch: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp =
+    if (rememberIsTvDevice()) TvSettingsMetrics.paneSectionSpacing else touch
 
 /** A pane row's title weight: regular on TV (tvOS bodyMedium), medium on touch. */
 @androidx.compose.runtime.Composable

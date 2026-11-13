@@ -104,7 +104,7 @@ fun GeneralSettingsScreen(
                         top = 12.dp,
                         bottom = LocalTabBarBottomInset.current,
                     ),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
             ) {
                 // MARK: Startup
                 //
@@ -314,7 +314,7 @@ fun GeneralSettingsScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .settingsRowCard(focused = false)
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
@@ -459,7 +459,7 @@ private fun AboutRefreshingRow(item: AboutRefreshingItem) {
             .fillMaxWidth()
             .heightIn(min = 52.dp)
             .settingsRowCard(false)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
         AboutRefreshingRowContent(item)

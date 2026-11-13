@@ -215,7 +215,7 @@ fun SettingsSectionHeader(
         // page background. Touch keeps the theme tint.
         color = color ?: if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.textThemeTint,
         fontWeight = FontWeight.SemiBold,
-        modifier = modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+        modifier = modifier.padding(start = settingsRowInsetH(), end = settingsRowInsetH(), bottom = 6.dp),
     )
 }
 
@@ -245,12 +245,13 @@ fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = settingsFootnoteStyle().subtext(),
-        color = settingsDimTint(),
+        // TV: Apple TV's tvFooter ink, textTertiary (the eyebrow's color).
+        color = if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else settingsDimTint(),
         // Tagged so a TV row-card stack leaves it bare (no card behind it)
         // when a footer sits between rows.
         modifier = modifier
             .layoutId(SettingsFooterLayoutId)
-            .padding(start = 16.dp, end = 16.dp, top = 6.dp),
+            .padding(start = settingsRowInsetH(), end = settingsRowInsetH(), top = 6.dp),
     )
 }
 
@@ -275,7 +276,12 @@ fun SettingsCard(
                 modifier = modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(TvSettingsRowCardCorner))
-                    .background(settingsCardFill()),
+                    .background(settingsCardFill())
+                    .border(
+                        TvSettingsRowCardBorder,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                        RoundedCornerShape(TvSettingsRowCardCorner),
+                    ),
                 content = { content() },
             )
         }
@@ -391,7 +397,7 @@ fun SettingsRowContainer(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 16.dp, vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
+            .padding(horizontal = settingsRowInsetH(), vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = { content() },
     )
@@ -647,7 +653,7 @@ fun SettingsInfoRow(
             .fillMaxWidth()
             .heightIn(min = if (isTv) TvSettingsMetrics.paneRowMinHeight else 52.dp)
             .settingsRowCard(focused = false)
-            .padding(horizontal = 16.dp, vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
+            .padding(horizontal = settingsRowInsetH(), vertical = if (isTv) TvSettingsMetrics.paneRowPaddingV else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leadingIcon != null) SettingsLeadingGlyph(leadingIcon, tint = MaterialTheme.colorScheme.onSurfaceVariant, bareSize = 20.dp)
@@ -978,10 +984,12 @@ val LocalSuppressRowChrome = androidx.compose.runtime.staticCompositionLocalOf {
 /** layoutId marking a footer inside a card: TV draws no row card behind it. */
 const val SettingsFooterLayoutId = "settings-footer"
 
-/** TV row card corner (each row is its own card on Apple TV). */
-val TvSettingsRowCardCorner = 12.dp
-/** Gap between two row cards on TV. */
-val TvSettingsRowCardGap = 6.dp
+/** TV row card corner (each row is its own card on Apple TV). tvOS 12. */
+val TvSettingsRowCardCorner = 6.dp
+/** Gap between two row cards on TV. tvOS 8 (SettingsSection .plain). */
+val TvSettingsRowCardGap = 4.dp
+/** A TV row card's resting outline: tvOS 1 pt (tvCardBorderWidth), the accent at 10%. */
+val TvSettingsRowCardBorder = 0.5.dp
 
 /**
  * TV form of [SettingsCard]: Apple TV gives every row its OWN rounded card,
@@ -993,8 +1001,10 @@ val TvSettingsRowCardGap = 6.dp
 @Composable
 private fun TvSettingsRowCards(modifier: Modifier, content: @Composable () -> Unit) {
     val fill = settingsCardFill()
+    val outline = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
     val gapPx = with(LocalDensity.current) { TvSettingsRowCardGap.roundToPx() }
     val cornerPx = with(LocalDensity.current) { TvSettingsRowCardCorner.toPx() }
+    val borderPx = with(LocalDensity.current) { TvSettingsRowCardBorder.toPx() }
     var rects by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
     androidx.compose.ui.layout.Layout(
         content = content,
@@ -1007,6 +1017,14 @@ private fun TvSettingsRowCards(modifier: Modifier, content: @Composable () -> Un
                         topLeft = Offset(0f, top.toFloat()),
                         size = androidx.compose.ui.geometry.Size(size.width, h.toFloat()),
                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerPx, cornerPx),
+                    )
+                    // Apple TV's strokeBorder: inside the card's own bounds.
+                    drawRoundRect(
+                        color = outline,
+                        topLeft = Offset(borderPx / 2f, top + borderPx / 2f),
+                        size = androidx.compose.ui.geometry.Size(size.width - borderPx, h - borderPx),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerPx - borderPx / 2f, cornerPx - borderPx / 2f),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = borderPx),
                     )
                 }
             },

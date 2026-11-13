@@ -49,8 +49,11 @@ class TvRailGeometryTest {
         assertEquals(70f, m.railRowStart.value, 0.001f)
         assertEquals(255f, m.railColumnWidth.value, 0.001f)
         assertEquals(9f, m.railRowPaddingH.value, 0.001f)
-        // Pane cards from x 307.5 to 867.25 (tvOS 615 to 1734.5): pages pad their cards 16 dp.
-        assertEquals(307.5f, m.railColumnWidth.value + m.paneInsetStart.value + 16f, 0.001f)
-        assertEquals(867.25f, 960f - m.paneInsetEnd.value - 16.5f, 0.001f)
+        // Pane cards from x 311.5 to 863.25 (tvOS 623 to 1727, Apple TV's one
+        // pane container, a22268e): pages pad their cards 16 dp.
+        assertEquals(311.5f, m.railColumnWidth.value + m.paneInsetStart.value + 16f, 0.001f)
+        assertEquals(863.25f, 960f - m.paneInsetEnd.value - 16.5f, 0.001f)
+        // Rows, eyebrows, and footers sit 10 dp inside the card (tvOS 20).
+        assertEquals(10f, m.paneRowPaddingH.value, 0.001f)
     }
 }

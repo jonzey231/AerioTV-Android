@@ -163,7 +163,7 @@ fun DeveloperSettingsScreen(
                 top = 12.dp,
                 bottom = LocalTabBarBottomInset.current,
             ),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
         ) {
             item("logging") {
                 LoggingSection(
@@ -611,17 +611,17 @@ private fun DevToggleRow(
         // Apple TV keeps the Debug Logging tile in the accent at full size
         // in both states; the phone dims it while off.
         DevIconTile(icon = icon, isActive = checked || rememberIsTvDevice())
-        Spacer(Modifier.size(14.dp))
+        Spacer(Modifier.size(com.aeriotv.android.ui.settings.settingsTileGap()))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = title,
                 style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = com.aeriotv.android.ui.settings.settingsRowTitleWeight(),
             )
             Text(
                 text = subtitle,
-                style = settingsFootnoteStyle(),
+                style = com.aeriotv.android.ui.settings.settingsRowSubtitleOrFootnote(),
                 color = if (checked) MaterialTheme.colorScheme.textAccent
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -643,19 +643,19 @@ private fun DevActionRow(
     val tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     SettingsRowContainer(onClick = onClick) {
         DevIconTile(icon = icon, tint = tint)
-        Spacer(Modifier.size(14.dp))
+        Spacer(Modifier.size(com.aeriotv.android.ui.settings.settingsTileGap()))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = label,
                 style = settingsRowTitleStyle(),
                 color = if (destructive) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Medium,
+                fontWeight = com.aeriotv.android.ui.settings.settingsRowTitleWeight(),
             )
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    style = settingsFootnoteStyle().subtext(),
+                    style = com.aeriotv.android.ui.settings.settingsRowSubtitleOrFootnote().subtext(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -669,19 +669,19 @@ private fun DevLogSizeRow(sizeText: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            .heightIn(min = if (rememberIsTvDevice()) com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowMinHeight else 52.dp)
             .settingsRowCard(focused = false)
             .settingsTvFocusableRow()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = if (rememberIsTvDevice()) com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowPaddingV else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         DevIconTile(icon = Icons.Outlined.Description, isActive = false)
-        Spacer(Modifier.size(14.dp))
+        Spacer(Modifier.size(com.aeriotv.android.ui.settings.settingsTileGap()))
         Text(
             text = "Log File Size",
             style = settingsRowTitleStyle(),
             color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Medium,
+            fontWeight = com.aeriotv.android.ui.settings.settingsRowTitleWeight(),
             modifier = Modifier.weight(1f),
         )
         Text(
