@@ -4406,8 +4406,13 @@ class PlaylistRepository @Inject constructor(
      * On-device recordings that came from [playlistId] (local captures and
      * Save to Device copies, every profile): the delete prompt's count.
      */
-    suspend fun onDeviceRecordingCount(playlistId: String): Int =
-        runCatching { database.localRecordingDao().allForPlaylist(playlistId).size }.getOrDefault(0)
+    /** The delete prompt's count: its rows, and a running capture only when it has no row yet. */
+    suspend fun onDeviceRecordingCount(playlistId: String, capturingNow: Boolean = false): Int =
+        runCatching {
+            com.aeriotv.android.feature.dvr.InterruptedCapture.promptCount(
+                database.localRecordingDao().allForPlaylist(playlistId).map { it.status }, capturingNow,
+            )
+        }.getOrDefault(if (capturingNow) 1 else 0)
 
     /**
      * Delete [playlistId] from this device (playlist delete cutoff, Logan

@@ -37,6 +37,18 @@ class PlaylistDeleteCutoffTest {
     // ---- the prompt ----
 
     @Test
+    fun aRunningCaptureIsCountedOnceInThePrompt() {
+        val c = com.aeriotv.android.feature.dvr.InterruptedCapture
+        // Its row is written when it starts: one recording, not two.
+        assertEquals(1, c.promptCount(listOf(c.RECORDING), capturingNow = true))
+        assertEquals(2, c.promptCount(listOf("completed", c.RECORDING), capturingNow = true))
+        // A capture whose start row failed to write still counts.
+        assertEquals(2, c.promptCount(listOf("completed"), capturingNow = true))
+        assertEquals(1, c.promptCount(listOf("completed"), capturingNow = false))
+        assertEquals(0, c.promptCount(emptyList(), capturingNow = false))
+    }
+
+    @Test
     fun thePromptNamesThePlaylistAndCountsItsRecordings() {
         assertEquals("Delete Living Room?", PlaylistDeleteCopy.title("Living Room"))
         assertEquals(

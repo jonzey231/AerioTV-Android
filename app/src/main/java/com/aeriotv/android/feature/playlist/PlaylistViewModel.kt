@@ -3583,8 +3583,9 @@ class PlaylistViewModel @Inject constructor(
      * recorded from it now. Zero keeps the plain confirmation.
      */
     suspend fun onDeviceRecordingCount(playlistId: String): Int =
-        repository.onDeviceRecordingCount(playlistId) +
-            if (com.aeriotv.android.feature.dvr.LocalRecordingService.isRecordingFor(playlistId)) 1 else 0
+        repository.onDeviceRecordingCount(
+            playlistId, capturingNow = com.aeriotv.android.feature.dvr.LocalRecordingService.isRecordingFor(playlistId),
+        )
 
     /** Delete a saved playlist by id. If the deleted row was the active one,
      * fall back to the most-recent remaining playlist (or NeedsUrl if none).

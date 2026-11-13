@@ -16,6 +16,16 @@ import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
  */
 internal object InterruptedCapture {
     const val RECORDING = "recording"
+
+    /**
+     * How many on-device recordings the playlist delete prompt names: every
+     * row from the playlist ([statuses]), and the capture running now
+     * ([capturingNow]) only when it has no row yet. Its row is written when
+     * it starts (status [RECORDING]), so adding it again counted it twice
+     * (2 for one recording on the emulator, 2026-11-13).
+     */
+    fun promptCount(statuses: List<String>, capturingNow: Boolean): Int =
+        statuses.size + if (capturingNow && statuses.none { it == RECORDING }) 1 else 0
     const val INTERRUPTED = "interrupted"
     const val FAILED = "failed"
 
