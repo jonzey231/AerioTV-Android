@@ -540,10 +540,13 @@ private class StorageCapHold(private val scope: kotlinx.coroutines.CoroutineScop
 }
 
 /**
- * Phones and tablets: "Maximum" with "− 10 GB +", the Used line and bar under
- * it, in the card's row inset. A key is dimmed and inert at its end of the
- * range. Typography as the other Settings value rows (title left, the value
- * in the accent).
+ * Phones and tablets (Apple eb7555d, measured on its iPhone 17 and iPad Air
+ * 11-inch captures, points): one self-contained card. "Maximum" on the left
+ * and the "− 10 GB +" capsule (178.6 wide, 37.3 tall) 18 below the card's
+ * top and 16 in from its right; "Used" and its amount 15 under the capsule,
+ * the 8-tall bar 8 under them, 20 to the card's bottom; the low-space warning
+ * last. Material keys: a 48 dp target at each end of the capsule, the glyph
+ * centered 24 in, dimmed and inert at its end of the range.
  */
 @Composable
 private fun PhoneStorageCapCard(
@@ -555,7 +558,14 @@ private fun PhoneStorageCapCard(
 ) {
     val atMin = shownMB <= STORAGE_MIN_MB
     val atMax = shownMB >= STORAGE_MAX_MB
-    Column(modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp)) {
+    Column(
+        modifier = Modifier.padding(
+            start = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+            end = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+            top = 18.dp,
+            bottom = 20.dp,
+        ),
+    ) {
         Row(modifier = adjustable, verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "Maximum",
@@ -564,42 +574,57 @@ private fun PhoneStorageCapCard(
                 fontWeight = settingsRowTitleWeight(),
                 modifier = Modifier.weight(1f),
             )
-            StorageStepKey(Icons.Filled.Remove, enabled = !atMin, onPress = { hold.begin(up = false) }, onRelease = { hold.end() })
-            Text(
-                text = com.aeriotv.android.core.data.DvrStorageCapRules.label(shownMB),
-                style = com.aeriotv.android.ui.settings.settingsRowValueStyle(),
-                color = MaterialTheme.colorScheme.textAccent,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.widthIn(min = 76.dp),
-            )
-            StorageStepKey(Icons.Filled.Add, enabled = !atMax, onPress = { hold.begin(up = true) }, onRelease = { hold.end() })
+            // The capsule: Apple's glass reads as the accent at 12% with a
+            // white lift over the card; the keys stay Material glyphs.
+            Row(
+                modifier = Modifier
+                    .size(width = PHONE_CAPSULE_WIDTH, height = PHONE_CAPSULE_HEIGHT)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                    .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StorageStepKey(Icons.Filled.Remove, enabled = !atMin, onPress = { hold.begin(up = false) }, onRelease = { hold.end() })
+                Text(
+                    text = com.aeriotv.android.core.data.DvrStorageCapRules.label(shownMB),
+                    style = settingsRowTitleStyle(),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                StorageStepKey(Icons.Filled.Add, enabled = !atMax, onPress = { hold.begin(up = true) }, onRelease = { hold.end() })
+            }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(PHONE_USED_GAP))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "Used",
-                style = MaterialTheme.typography.bodyMedium,
+                style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = settingsRowTitleWeight(),
                 modifier = Modifier.weight(1f),
             )
             Text(
                 text = usedText,
-                style = MaterialTheme.typography.bodyMedium,
+                style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(4.dp))
-        LinearProgressIndicator(
-            progress = { usedFraction },
-            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-            color = storageUsageColor(usedFraction),
-            trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
-            gapSize = 0.dp,
-            drawStopIndicator = {},
-        )
+        Spacer(Modifier.height(PHONE_BAR_GAP))
+        // A plain two-tone bar, as Apple draws it: a few MB of 200 GB shows
+        // nothing, where Material's indicator drew a round dot.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)),
+        ) {
+            Box(Modifier.fillMaxHeight().fillMaxWidth(usedFraction).background(storageUsageColor(usedFraction)))
+        }
         if (usedFraction >= 0.80f) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Filled.Warning,
@@ -630,8 +655,7 @@ private fun StorageStepKey(
     val release by androidx.compose.runtime.rememberUpdatedState(onRelease)
     Box(
         modifier = Modifier
-            .size(40.dp)
-            .clip(androidx.compose.foundation.shape.CircleShape)
+            .size(width = 48.dp, height = PHONE_CAPSULE_HEIGHT)
             .then(
                 if (!enabled) Modifier else Modifier.pointerInput(Unit) {
                     detectTapGestures(onPress = {
@@ -646,10 +670,17 @@ private fun StorageStepKey(
             imageVector = icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.textAccent.copy(alpha = if (enabled) 1f else 0.3f),
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(24.dp),
         )
     }
 }
+
+/** Apple's iPhone and iPad stepper capsule (eb7555d). */
+private val PHONE_CAPSULE_WIDTH = 178.6.dp
+private val PHONE_CAPSULE_HEIGHT = 37.3.dp
+/** Capsule to the Used line, and the Used line to its bar (tuned to Apple's glyph distances). */
+private val PHONE_USED_GAP = 9.8.dp
+private val PHONE_BAR_GAP = 2.dp
 
 /**
  * Android TV (Apple's TVStorageCapAdjuster, halved): "Maximum" with the value
