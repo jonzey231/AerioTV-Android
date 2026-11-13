@@ -334,12 +334,16 @@ private fun SettingsTvOptionsSheetRow(
                         .padding(horizontal = 20.dp, vertical = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    // TV: centered, like every Apple TV Settings page title
+                    // (Apple 21d6e31; a tvOS picker is a pushed page).
+                    val centerTitle = rememberIsTvDevice()
                     Text(
                         text = title,
                         style = settingsTitleStyle(),
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
+                        textAlign = if (centerTitle) androidx.compose.ui.text.style.TextAlign.Center else null,
+                        modifier = if (centerTitle) Modifier.fillMaxWidth().padding(bottom = 4.dp) else Modifier.padding(start = 6.dp, bottom = 4.dp),
                     )
                     // The first option takes focus so the D-pad lands inside
                     // the sheet rather than on nothing.
