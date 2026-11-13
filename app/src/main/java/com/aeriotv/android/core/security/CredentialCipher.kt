@@ -100,6 +100,9 @@ class CredentialCipher @Inject constructor() {
         }
     }
 
+    /** Whether [stored] is a value [encrypt] produced (tagged), as opposed to plain text. */
+    fun isEncrypted(stored: String?): Boolean = stored?.startsWith(PREFIX) == true
+
     private fun secretKey(): SecretKey {
         cachedKey?.let { return it }
         synchronized(keyLock) {

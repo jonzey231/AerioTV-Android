@@ -99,6 +99,7 @@ class DispatcharrSyncManager @Inject constructor(
     /** Rule 5: Drive follows and converges with Dispatcharr Sync (Provider: the two reference each other). */
     private val drive: Provider<com.aeriotv.android.core.sync.DriveSyncManager>,
     private val tmdb: com.aeriotv.android.core.network.TMDBService,
+    private val cipher: com.aeriotv.android.core.security.CredentialCipher,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = context.getSharedPreferences("aerio_dsync", Context.MODE_PRIVATE)
@@ -235,6 +236,7 @@ class DispatcharrSyncManager @Inject constructor(
         registerNetworkCallback()
         watchBetweenSessions()
         scope.launch {
+            runCatching { sealSavedTmdbKeys() }.onFailure { Log.w(TAG, "[DSYNC] tmdbKey: sealing saved copies failed: ${it.javaClass.simpleName}") }
             combine(
                 prefs.dispatcharrSyncEnabled,
                 playlistDao.observeActive().map { rows -> rows.firstOrNull()?.takeIf { it.isDispatcharrDirectConnect() }?.id },
@@ -1124,18 +1126,81 @@ class DispatcharrSyncManager @Inject constructor(
     private fun k(name: String, s: Session, key: DsyncKey? = null) =
         "$name|${s.playlistId}|${s.profileKey}" + (key?.let { "|${it.suffix}" } ?: "")
 
-    private fun rawOf(s: Session, key: DsyncKey): JsonObject? =
-        state.getString(k("raw", s, key), null)?.let { runCatching { json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+    // ---- the saved server copy at rest (section 4.13: the TMDB key is sealed) ----
 
-    private fun lastDataOf(s: Session, key: DsyncKey): String? = state.getString(k("data", s, key), null)
+    /** Seals a TMDB key for the state file; null when it cannot be (never the plain key). */
+    private val sealTmdb: (String) -> String? = { v ->
+        if (cipher.isEncrypted(v)) v else cipher.encrypt(v)?.takeIf { cipher.isEncrypted(it) }
+    }
+
+    /** Opens a sealed TMDB key (a plain value from an older build reads as is); null when it cannot be. */
+    private val openTmdb: (String) -> String? = { v -> cipher.decrypt(v) }
+
+    private fun parseObj(s: String?): JsonObject? =
+        s?.let { runCatching { json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+
+    private fun rawOf(s: Session, key: DsyncKey): JsonObject? {
+        val raw = parseObj(state.getString(k("raw", s, key), null)) ?: return null
+        return if (key == DsyncKey.TmdbKey) DsyncAtRest.openCategory(raw, openTmdb) else raw
+    }
+
+    private fun lastDataOf(s: Session, key: DsyncKey): String? {
+        val stored = state.getString(k("data", s, key), null) ?: return null
+        if (key != DsyncKey.TmdbKey) return stored
+        return parseObj(stored)?.let { DsyncAtRest.openData(it, openTmdb) }?.toString()
+    }
+
+    /** The category's saved server copy; the tmdbKey copy is sealed, or not kept when it cannot be. */
+    private fun putRaw(e: android.content.SharedPreferences.Editor, s: Session, key: DsyncKey, raw: JsonObject) {
+        val stored = if (key == DsyncKey.TmdbKey) DsyncAtRest.sealCategory(raw, sealTmdb) else raw
+        if (stored == null) e.remove(k("raw", s, key)) else e.putString(k("raw", s, key), stored.toString())
+    }
+
+    private fun saveRaw(s: Session, key: DsyncKey, raw: JsonObject) {
+        val e = state.edit()
+        putRaw(e, s, key, raw)
+        e.apply()
+    }
 
     private fun saveAfter(s: Session, key: DsyncKey, raw: JsonObject, at: Long, dev: String, data: JsonObject) {
-        state.edit()
-            .putString(k("raw", s, key), raw.toString())
-            .putLong(k("at", s, key), at)
-            .putString(k("dev", s, key), dev)
-            .putString(k("data", s, key), data.toString())
-            .apply()
+        val e = state.edit()
+        putRaw(e, s, key, raw)
+        e.putLong(k("at", s, key), at)
+        e.putString(k("dev", s, key), dev)
+        val storedData = if (key == DsyncKey.TmdbKey) DsyncAtRest.sealData(data, sealTmdb) else data
+        if (storedData == null) e.remove(k("data", s, key)) else e.putString(k("data", s, key), storedData.toString())
+        e.apply()
+    }
+
+    /**
+     * Seals TMDB keys that an earlier build (49ab608e) saved in plain text in
+     * the state file: every saved bucket and the tmdbKey category's own
+     * copies. Runs once per launch before any session starts; a copy already
+     * sealed is left alone.
+     */
+    private fun sealSavedTmdbKeys() {
+        val e = state.edit()
+        var n = 0
+        state.all.forEach { (name, v) ->
+            val str = v as? String ?: return@forEach
+            val isBucket = name.startsWith("braw|")
+            val isRaw = name.startsWith("raw|") && name.endsWith("|${DsyncKey.TmdbKey.suffix}")
+            val isData = name.startsWith("data|") && name.endsWith("|${DsyncKey.TmdbKey.suffix}")
+            if (!isBucket && !isRaw && !isData) return@forEach
+            val obj = parseObj(str) ?: return@forEach
+            // sealTmdb leaves a sealed key as it is, so only plain keys change.
+            val sealed = when {
+                isBucket -> DsyncAtRest.sealBucket(obj, sealTmdb)
+                isRaw -> DsyncAtRest.sealCategory(obj, sealTmdb)
+                else -> DsyncAtRest.sealData(obj, sealTmdb)
+            }
+            val out = sealed?.toString()
+            if (out == str) return@forEach
+            if (out == null) e.remove(name) else e.putString(name, out)
+            n++
+        }
+        e.apply()
+        if (n > 0) Log.i(TAG, "[DSYNC] tmdbKey: sealed $n saved server copies")
     }
 
     /** Persistent (survives process death). [dirtyAt] = the last local change, Unix seconds. */
@@ -1186,11 +1251,13 @@ class DispatcharrSyncManager @Inject constructor(
     /** The server key for [b] in this session; empty before /me/ answered (every caller checks userKey first). */
     private fun wire(s: Session, b: DsyncBucket): String = b.wire(s.userKey.orEmpty())
 
+    /** The saved bucket, its TMDB key opened (section 4.13 at rest). */
     private fun bucketRaw(s: Session, b: DsyncBucket): JsonObject? =
-        state.getString(k("braw", s) + "|" + b.name, null)?.let { runCatching { json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+        parseObj(state.getString(k("braw", s) + "|" + b.name, null))?.let { DsyncAtRest.openBucket(it, openTmdb) }
 
+    /** Saves the bucket with its TMDB key sealed, never in plain text. */
     private fun saveBucketRaw(s: Session, b: DsyncBucket, raw: JsonObject) {
-        state.edit().putString(k("braw", s) + "|" + b.name, raw.toString()).apply()
+        state.edit().putString(k("braw", s) + "|" + b.name, DsyncAtRest.sealBucket(raw, sealTmdb).toString()).apply()
     }
 
     private suspend fun pullAll(s: Session, reason: String) = s.mutex.withLock {
@@ -1475,7 +1542,7 @@ class DispatcharrSyncManager @Inject constructor(
             return
         }
         if (wins && decision == DsyncGate.DirtyPull.KeepLocal) {
-            state.edit().putString(k("raw", s, key), raw.toString()).apply()
+            saveRaw(s, key, raw)
             Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes kept local (local change newer)")
             s.read += key
             return
@@ -1504,7 +1571,7 @@ class DispatcharrSyncManager @Inject constructor(
             }
         } else {
             // Keep the newest raw for round-trip and the row merges.
-            state.edit().putString(k("raw", s, key), raw.toString()).apply()
+            saveRaw(s, key, raw)
             Log.i(TAG, "[DSYNC] pull ${key.suffix} bytes=$bytes not newer")
             if (key == DsyncKey.Progress) runCatching { retryHeldProgress(s, env) }
                 .onFailure { Log.w(TAG, "[DSYNC] progress held retry failed: ${it.javaClass.simpleName}") }
@@ -1729,7 +1796,10 @@ class DispatcharrSyncManager @Inject constructor(
         }
         val sub = DsyncV2.encodeCategory(raw, deviceId, now, data)
         // No byte guard before the PUT: send the full value; trim only on a 413.
-        var value = DsyncV2.encodeBucket(bucketRaw(s, b), deviceId, BuildConfig.VERSION_NAME, now, mapOf(key to sub))
+        // The copy refreshBeforePut just fetched (in memory) carries every other
+        // category, the TMDB key included, exactly as the server holds it; the
+        // saved copy is the fallback when the server had none.
+        var value = DsyncV2.encodeBucket(s.fetchedRaw[wire(s, b)] ?: bucketRaw(s, b), deviceId, BuildConfig.VERSION_NAME, now, mapOf(key to sub))
         value = withProviders(s, value)
         // Roster paused: `profiles` goes up exactly as the server holds it now
         // (or not at all), never local rows or a copy saved from an earlier server.
@@ -1850,7 +1920,7 @@ class DispatcharrSyncManager @Inject constructor(
         if (!DsyncEnvelopeCodec.remoteWins(at, dev, env.updatedAt, env.deviceId)) return Refresh.Ok
         return when (DsyncGate.onNewerPull(key, isDirty(s, key), dirtyAt(s, key), env.updatedAt)) {
             DsyncGate.DirtyPull.KeepLocal -> {
-                state.edit().putString(k("raw", s, key), env.raw.toString()).apply()
+                saveRaw(s, key, env.raw)
                 Refresh.Ok
             }
             else -> {
