@@ -276,8 +276,10 @@ fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier, endsSecti
     Text(
         text = text,
         style = settingsFootnoteStyle().subtext(),
-        // TV: Apple TV's tvFooter ink, textTertiary (the eyebrow's color).
-        color = if (isTv) MaterialTheme.colorScheme.tertiary else settingsDimTint(),
+        // Apple's footer ink on every platform: textTertiary (the accent at
+        // 28% on iPhone and iPad, 45% on Apple TV), dimmer than the rows'
+        // secondary text.
+        color = MaterialTheme.colorScheme.tertiary,
         // Tagged so a TV row-card stack leaves it bare (no card behind it)
         // when a footer sits between rows.
         modifier = modifier

@@ -196,7 +196,8 @@ fun SettingsSliderRow(
                 text = footer,
                 style = (if (rememberIsTvDevice()) settingsFootnoteStyle()
                 else MaterialTheme.typography.labelSmall).subtext(),
-                color = settingsDimTint(),
+                // Phones and tablets: Apple's footer ink, textTertiary. TV unchanged.
+                color = if (rememberIsTvDevice()) settingsDimTint() else MaterialTheme.colorScheme.tertiary,
             )
         }
     }

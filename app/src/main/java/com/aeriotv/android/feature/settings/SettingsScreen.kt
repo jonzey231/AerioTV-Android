@@ -602,17 +602,18 @@ private fun PlaylistsSection(
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // Apple's playlistFooterHint ink: textTertiary.
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.List,
                         contentDescription = null,
-                        tint = com.aeriotv.android.ui.settings.settingsDimTint(),
+                        tint = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.size(14.dp),
                     )
                     Spacer(Modifier.size(6.dp))
                     Text(
                         text = "Tap a playlist to open it, or its circle to make it active.",
                         style = MaterialTheme.typography.labelSmall.subtext(),
-                        color = com.aeriotv.android.ui.settings.settingsDimTint(),
+                        color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
             }
@@ -1203,8 +1204,8 @@ private fun SectionFooter(text: String) {
         // have quietly enlarged frozen phone canon.
         style = (if (rememberIsTvDevice()) settingsFootnoteStyle()
         else MaterialTheme.typography.labelSmall).subtext(),
-        // TV: Apple TV's footer ink, textTertiary.
-        color = if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else com.aeriotv.android.ui.settings.settingsDimTint(),
+        // Apple's footer ink, textTertiary, on every platform.
+        color = MaterialTheme.colorScheme.tertiary,
         // Phones and tablets: Apple's footer distances (SettingsCardMetrics).
         modifier = Modifier
             .settingsFooterPull()
