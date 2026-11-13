@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,8 +75,10 @@ fun MoviesAndTvShowsSettingsScreen(
             SettingsDetailTopBar(title = "Movies & TV Shows", onBack = onBack)
 
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
                 LazyColumn(
-                    modifier = Modifier.settingsFormWidth(),
+                    state = paneList,
+                    modifier = Modifier.settingsFormWidth().settingsPaneTopEdge(paneList),
                     contentPadding = PaddingValues(
                         start = 16.dp,
                         end = 16.dp,

@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import com.aeriotv.android.ui.scale.subtext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,11 +61,13 @@ fun AppUpdatesScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "Updates", onBack = onBack)
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            val paneScroll = rememberScrollState()
             Column(
                 modifier = Modifier
                     .settingsFormWidth()
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .settingsPaneTopEdge(paneScroll)
+                    .verticalScroll(paneScroll)
                     .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = LocalTabBarBottomInset.current),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {

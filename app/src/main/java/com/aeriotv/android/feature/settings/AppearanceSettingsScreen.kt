@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import androidx.compose.material.icons.filled.Palette
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
@@ -176,8 +177,10 @@ fun AppearanceSettingsScreen(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.TopCenter,
         ) {
+            val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
             LazyColumn(
-                modifier = Modifier.settingsFormWidth(),
+                state = paneList,
+                modifier = Modifier.settingsFormWidth().settingsPaneTopEdge(paneList),
                 // Bottom padding covers the bottom-nav bar (~80 dp) plus
                 // 24 dp breathing room, so the last LazyColumn item ("Reset
                 // Colors to Defaults" under the Palette card) isn't clipped

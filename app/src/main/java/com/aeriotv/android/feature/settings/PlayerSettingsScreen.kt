@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -146,11 +147,13 @@ fun PlayerSettingsScreen(
         SettingsDetailTopBar(title = "Player", onBack = onBack)
 
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            val paneScroll = rememberScrollState()
             Column(
                 modifier = Modifier
                     .settingsFormWidth()
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .settingsPaneTopEdge(paneScroll)
+                    .verticalScroll(paneScroll)
                     .padding(
                         start = 16.dp,
                         end = 16.dp,

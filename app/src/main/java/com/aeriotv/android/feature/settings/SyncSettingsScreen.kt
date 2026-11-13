@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import com.aeriotv.android.ui.scale.subtext
 import android.app.Activity
 import android.widget.Toast
@@ -286,12 +287,14 @@ fun SyncSettingsScreen(
         val lastSynced = maxOf(lastPush, lastPull)
         val tvRows = rememberIsTvDevice()
 
+        val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
         LazyColumn(
+            state = paneList,
             // fillMaxHeight bounds the LazyColumn so its inner viewport can
             // scroll past the first screen of content - without it, the column
             // sized to wrap its contents and Settings -> Sync was stuck on
             // whatever fit above the bottom edge.
-            modifier = Modifier.settingsFormWidth().fillMaxHeight(),
+            modifier = Modifier.settingsFormWidth().fillMaxHeight().settingsPaneTopEdge(paneList),
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,

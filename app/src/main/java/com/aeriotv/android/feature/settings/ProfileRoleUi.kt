@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -137,7 +138,8 @@ fun ManageProfilesPage(onBack: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         SettingsDetailTopBar(title = "Manage Profiles", onBack = onBack)
-        LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
+        LazyColumn(Modifier.fillMaxWidth().settingsPaneTopEdge(paneList).padding(horizontal = 16.dp), state = paneList, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (!unlocked) {
                 // The gate (owner 2026-11-12, Apple parity): a centered lock, the
                 // sentence, and one "Enter PIN" button that opens the same PIN pad.

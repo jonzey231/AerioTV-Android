@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import com.aeriotv.android.ui.scale.subtext
 import android.content.Intent
 import androidx.compose.foundation.background
@@ -145,12 +146,14 @@ fun DeveloperSettingsScreen(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
+        val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
         LazyColumn(
+            state = paneList,
             // Phase B1 bug fix: this was the only settings screen missing the
             // readable-width cap, so on a tablet or TV its rows stretched the
             // full window while every sibling screen capped. Matches the
             // Network/DVR/Playlist pattern.
-            modifier = Modifier.settingsFormWidth().fillMaxSize(),
+            modifier = Modifier.settingsFormWidth().fillMaxSize().settingsPaneTopEdge(paneList),
             // 104dp bottom clears the MainScaffold NavigationBar so the
             // Build section (version code, "What's Captured" list) isn't
             // clipped.

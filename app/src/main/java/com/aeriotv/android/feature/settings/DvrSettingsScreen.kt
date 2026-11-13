@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.key
@@ -183,8 +184,10 @@ fun DvrSettingsScreen(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = androidx.compose.ui.Alignment.TopCenter,
         ) {
+        val paneList = androidx.compose.foundation.lazy.rememberLazyListState()
         LazyColumn(
-            modifier = Modifier.settingsFormWidth().fillMaxSize(),
+            state = paneList,
+            modifier = Modifier.settingsFormWidth().fillMaxSize().settingsPaneTopEdge(paneList),
             // Bottom padding clears the MainScaffold NavigationBar (~80dp)
             // so the final card (Output Folder + its footer) isn't clipped.
             contentPadding = PaddingValues(

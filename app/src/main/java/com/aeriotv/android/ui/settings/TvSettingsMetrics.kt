@@ -126,6 +126,11 @@ object TvSettingsMetrics {
     val paneInsetEnd = 76.25.dp
     /** The first card's top lands at y 98.5 dp, level with the rail's first row (tvOS y 197). */
     val paneInsetTop = 4.5.dp
+    /**
+     * A scrolled pane page fades out over this band under the rail's resting
+     * top ([railRestingTop]). tvOS 30 (TVSettingsPaneMetrics.fadeHeight).
+     */
+    val paneFadeHeight = 15.dp
 
     // MARK: Line height
     //

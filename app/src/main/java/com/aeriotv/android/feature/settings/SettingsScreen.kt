@@ -1,5 +1,6 @@
 package com.aeriotv.android.feature.settings
 
+import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
 import androidx.compose.foundation.background
@@ -252,7 +253,8 @@ fun SettingsScreen(
             // Full-screen measures the WINDOW; a detail pane must measure the
             // PANE or it sizes itself against the whole tablet and overflows.
             modifier = Modifier.settingsFormWidth()
-                .fillMaxSize(),
+                .fillMaxSize()
+                .settingsPaneTopEdge(listState),
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
