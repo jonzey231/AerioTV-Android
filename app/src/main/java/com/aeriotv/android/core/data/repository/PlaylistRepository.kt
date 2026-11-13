@@ -4197,6 +4197,13 @@ class PlaylistRepository @Inject constructor(
         // The VOD snapshot file is keyed by the playlist's IDENTITY, which is
         // derived from the row, so compute it BEFORE the row is gone.
         val row = dao.byId(playlistId)
+        // The row goes first (Apple performServerCascadeDelete parity): the
+        // Settings list observes it, so the playlist disappears at once
+        // instead of after the purges below, which took about 6 s on a phone
+        // (2026-11-12). Reminders, watch progress and local recordings are
+        // ON DELETE CASCADE against this row, so the DAO delete takes them
+        // with it. The stores below are keyed by the id string alone.
+        dao.deleteById(playlistId)
         // Guide + coverage, channel snapshot, VOD catalog (all identities),
         // VOD snapshot metadata file. Each is best-effort: a failure to clean
         // one store must not abort the delete itself.
@@ -4210,9 +4217,6 @@ class PlaylistRepository @Inject constructor(
             runCatching { vodSnapshotStore.delete(vodSnapshotStore.identity(row)) }
                 .onFailure { Log.w("PlaylistRepo", "delete: VOD snapshot purge failed", it) }
         }
-        // Reminders, watch progress and local recordings are ON DELETE
-        // CASCADE against this row, so the DAO delete takes them with it.
-        dao.deleteById(playlistId)
     }
 
     /**
