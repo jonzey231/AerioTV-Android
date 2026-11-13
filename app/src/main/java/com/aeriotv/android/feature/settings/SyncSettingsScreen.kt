@@ -77,9 +77,9 @@ import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.settings.SettingsSectionFooter
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.settingsRowCard
-import com.aeriotv.android.ui.settings.settingsTvFocusableRow
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudSync
@@ -303,7 +303,11 @@ fun SyncSettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (!signedIn && !driveNeedsSignIn) {
+            // Touch only: Android TV opens on the GOOGLE DRIVE eyebrow, as
+            // Apple TV opens on ICLOUD; its account row already says
+            // "Sign in to start syncing across devices", with the sign-in
+            // row right under it.
+            if (!tvRows && !signedIn && !driveNeedsSignIn) {
                 item { SignedOutWelcomeBanner() }
             }
             item {
@@ -312,16 +316,36 @@ fun SyncSettingsScreen(
                 // tinted icon tile, with Drive in place of iCloud. The
                 // account row stays first because Drive, unlike iCloud,
                 // needs an in-app sign-in.
+                // Apple TV (a22268e): small-caps eyebrows over standard rows,
+                // as every other Settings page; ICLOUD there, GOOGLE DRIVE here.
                 SettingsSection(
                     header = "Google Drive",
-                    titleHeader = true,
-                    // Apple TV shows no footer under this card.
-                    footer = if (tvRows) null else "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read.",
+                    // Apple TV shows no footer under this card. A build with
+                    // no OAuth client says so here on TV, under its rows.
+                    footer = if (tvRows) {
+                        if (!signedIn && !configured) DEVELOPER_CONFIG_HINT else null
+                    } else {
+                        "Playlists, preferences, and VOD watch progress sync across all devices signed into the same Google account. Credentials are stored in your Drive app data, which only AerioTV can read."
+                    },
                 ) {
                     AccountRow(
                         signedIn = signedIn,
                         email = accountEmail,
                     )
+                    // TV: Drive's own sign-in is a standard row in this card,
+                    // right under the account it signs in.
+                    if (tvRows && !signedIn) {
+                        GoogleSignInRow(
+                            onClick = {
+                                if (inFlight) return@GoogleSignInRow
+                                if (!configured) {
+                                    notConfiguredDialogOpen = true
+                                } else {
+                                    triggerSignIn()
+                                }
+                            },
+                        )
+                    }
                     SyncTileToggleRow(
                         icon = Icons.Filled.Cloud,
                         title = "Drive Sync",
@@ -342,13 +366,12 @@ fun SyncSettingsScreen(
                     if (masterEnabled && signedIn) {
                         SyncTileActionRow(
                             icon = Icons.Filled.CloudSync,
-                            // tvOS: single-line rows, the stamp rides the title.
-                            title = if (tvRows && lastSynced > 0L) {
-                                "Push to Drive  ·  Last synced ${lastSyncedAgo(lastSynced)}"
-                            } else {
-                                "Push to Drive"
-                            },
-                            subtitle = if (tvRows) null else if (lastSynced > 0L) {
+                            title = "Push to Drive",
+                            // Apple TV (a22268e): the stamp is the row's
+                            // subtitle, never inline after the title.
+                            subtitle = if (tvRows) {
+                                if (lastSynced > 0L) "Last synced ${lastSyncedAgo(lastSynced)}" else null
+                            } else if (lastSynced > 0L) {
                                 "Send this device's data up  ·  Last synced ${lastSyncedAgo(lastSynced)}"
                             } else {
                                 "Send this device's playlists, preferences and progress up"
@@ -388,6 +411,21 @@ fun SyncSettingsScreen(
                             },
                         )
                     }
+                    // TV: Sign Out closes the Drive card as a standard row,
+                    // tinted like Clear Drive Data.
+                    if (tvRows && (signedIn || driveNeedsSignIn)) {
+                        SyncTileActionRow(
+                            icon = Icons.AutoMirrored.Filled.Logout,
+                            title = "Sign Out",
+                            subtitle = null,
+                            destructive = true,
+                            onClick = {
+                                if (inFlight) return@SyncTileActionRow
+                                viewModel.signOut()
+                                Toast.makeText(context, "Signed out of Drive.", Toast.LENGTH_SHORT).show()
+                            },
+                        )
+                    }
                 }
             }
             // Sign-in / sign-out lives in its own row below the card so the
@@ -406,7 +444,7 @@ fun SyncSettingsScreen(
                     )
                 }
             }
-            item {
+            if (!tvRows) item {
                 if (driveNeedsSignIn && !signedIn) {
                     SignOutButton(
                         busy = inFlight,
@@ -459,7 +497,6 @@ fun SyncSettingsScreen(
                 item {
                     SettingsSection(
                         header = "Dispatcharr Sync",
-                        titleHeader = true,
                         footer = when {
                             dsyncOn && masterEnabled -> "Dispatcharr Sync takes precedence for shared data on this server. Google Drive keeps a backup."
                             tvRows -> null
@@ -507,12 +544,10 @@ fun SyncSettingsScreen(
                             val dLast = dsyncUi.lastSyncAt
                             SyncTileActionRow(
                                 icon = Icons.Filled.CloudSync,
-                                title = if (tvRows && dLast > 0L) {
-                                    "Push to Dispatcharr  ·  Last synced ${lastSyncedAgo(dLast)}"
-                                } else {
-                                    "Push to Dispatcharr"
-                                },
-                                subtitle = if (tvRows) null else if (dLast > 0L) {
+                                title = "Push to Dispatcharr",
+                                subtitle = if (tvRows) {
+                                    if (dLast > 0L) "Last synced ${lastSyncedAgo(dLast)}" else null
+                                } else if (dLast > 0L) {
                                     "Send this device's data up  ·  Last synced ${lastSyncedAgo(dLast)}"
                                 } else {
                                     "Send this device's data up"
@@ -547,7 +582,7 @@ fun SyncSettingsScreen(
             // Sync. Reachable with sync off, as Apple: the Delete actions
             // there work for stale-state cleanup.
             item {
-                SettingsSection(header = "Sync Categories", titleHeader = true) {
+                SettingsSection(header = "Sync Categories") {
                     SyncTileActionRow(
                         icon = Icons.Filled.Tune,
                         title = "Sync Categories",
@@ -773,12 +808,47 @@ private fun SignedOutWelcomeBanner() {
  * of dominating the screen with a red error banner. End-user releases ship
  * with the ID baked in and never see this row.
  */
+private const val DEVELOPER_CONFIG_HINT =
+    "This build doesn't have a Google Cloud OAuth client configured, so " +
+        "Sign in with Google is disabled. Add GOOGLE_DRIVE_WEB_CLIENT_ID to " +
+        "local.properties and register the signing-cert SHA-1 in the same Cloud project."
+
+/**
+ * Android TV's Sign in with Google: a standard Settings row in the Drive
+ * card. Google's four-color G stays untinted on Google's dark button surface
+ * (#131314), in the row's icon tile; the label is Google's own wording.
+ */
+@Composable
+private fun GoogleSignInRow(onClick: () -> Unit) {
+    SettingsRowContainer(onClick = onClick, traceTitle = "Sign in with Google") {
+        Box(
+            modifier = Modifier
+                .size(com.aeriotv.android.ui.settings.TvSettingsMetrics.iconTileBox)
+                .clip(RoundedCornerShape(com.aeriotv.android.ui.settings.TvSettingsMetrics.iconTileCorner))
+                .background(Color(0xFF131314)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = androidx.compose.ui.res.painterResource(id = com.aeriotv.android.R.drawable.ic_google_g),
+                contentDescription = null,
+                tint = Color.Unspecified,
+                modifier = Modifier.size(13.dp),
+            )
+        }
+        Spacer(Modifier.width(syncTileGap()))
+        SyncRowText(
+            title = "Sign in with Google",
+            subtitle = null,
+            titleColor = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
 @Composable
 private fun DeveloperConfigHint() {
     Text(
-        text = "This build doesn't have a Google Cloud OAuth client configured, so " +
-            "Sign in with Google is disabled. Add GOOGLE_DRIVE_WEB_CLIENT_ID to " +
-            "local.properties and register the signing-cert SHA-1 in the same Cloud project.",
+        text = DEVELOPER_CONFIG_HINT,
         style = MaterialTheme.typography.labelSmall.subtext(),
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.70f),
         modifier = Modifier.padding(horizontal = 4.dp),
@@ -792,9 +862,10 @@ private fun AccountRow(signedIn: Boolean, email: String) {
         modifier = Modifier
             .fillMaxWidth()
             .then(if (tv) Modifier.heightIn(min = com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowMinHeight) else Modifier)
+            // Apple TV: a standard row, not a focus stop (Select would do
+            // nothing on it).
             .settingsRowCard(focused = false)
-            .settingsTvFocusableRow()
-            .padding(horizontal = 16.dp, vertical = if (tv) com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowPaddingV else 14.dp),
+            .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = if (tv) com.aeriotv.android.ui.settings.TvSettingsMetrics.paneRowPaddingV else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Apple TV's account row is a SettingsRow: the person glyph in the
@@ -827,7 +898,8 @@ private fun AccountRow(signedIn: Boolean, email: String) {
             )
         }
         if (!tv) Spacer(Modifier.size(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        // TV: the standard row's 2 dp between title and subtitle.
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (tv) 2.dp else 0.dp)) {
             Text(
                 text = if (signedIn) "Signed in to Drive" else "Not signed in",
                 style = if (tv) settingsRowTitleStyle() else MaterialTheme.typography.bodyLarge,
