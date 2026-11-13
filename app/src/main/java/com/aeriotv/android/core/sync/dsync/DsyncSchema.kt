@@ -26,8 +26,9 @@ enum class DsyncKey(
     val suffix: String,
     /**
      * Which existing Sync Categories toggle gates this key; null = always
-     * (profiles, and tmdbKey, which syncs whenever Dispatcharr Sync is on and
-     * never through Drive: schema section 4.13).
+     * (profiles, and tmdbKey, which syncs whenever Dispatcharr Sync is on;
+     * Google Drive carries it separately, in the Credentials file: schema
+     * section 4.13).
      */
     val category: SyncCategory?,
     val schemaVersion: Int = 1,
