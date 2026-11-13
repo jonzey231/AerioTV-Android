@@ -203,7 +203,13 @@ class EncryptingPlaylistDao(
 
     // --- writes: encrypt on the way in ---
 
-    override suspend fun upsert(playlist: PlaylistEntity) = delegate.upsert(diverted(playlist).encrypted())
+    // A row written with an id a delete removed is a new instance of that
+    // playlist (a setup, restore, sync, or import reusing the id): its own
+    // writes go through again (DeletedPlaylists).
+    override suspend fun upsert(playlist: PlaylistEntity) {
+        com.aeriotv.android.core.data.repository.DeletedPlaylists.reborn(playlist.id)
+        delegate.upsert(diverted(playlist).encrypted())
+    }
 
     override suspend fun update(playlist: PlaylistEntity) = delegate.update(diverted(playlist).encrypted())
 
@@ -239,8 +245,10 @@ class EncryptingPlaylistDao(
     override suspend fun updateCastAacProfileId(id: String, profileId: Int?) =
         delegate.updateCastAacProfileId(id, profileId)
 
-    override suspend fun upsertAsActive(entity: PlaylistEntity) =
+    override suspend fun upsertAsActive(entity: PlaylistEntity) {
+        com.aeriotv.android.core.data.repository.DeletedPlaylists.reborn(entity.id)
         delegate.upsertAsActive(diverted(entity).encrypted())
+    }
 
     // --- @Delete matches by primary key only; credential columns are ignored ---
 

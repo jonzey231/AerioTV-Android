@@ -9,7 +9,12 @@ package com.aeriotv.android.core.profiles
  * key when the fetch starts; every write and publish checks [isCurrent] and
  * uses [cacheKey], never the live scope.
  */
-class ScopeBinding(val token: String, val cacheKey: String) {
+class ScopeBinding(
+    val token: String,
+    val cacheKey: String,
+    /** The playlist's instance when this refresh started (DeletedPlaylists): a write after a delete and re-add is dropped. */
+    val instance: Long = 0L,
+) {
 
     /** True while the profile this refresh started under is still active. */
     fun isCurrent(): Boolean = ProfileScope.current() == token
@@ -25,7 +30,11 @@ class ScopeBinding(val token: String, val cacheKey: String) {
 
     companion object {
         fun capture(playlistId: String): ScopeBinding =
-            ScopeBinding(ProfileScope.current(), ProfileScope.cacheKey(playlistId))
+            ScopeBinding(
+                ProfileScope.current(),
+                ProfileScope.cacheKey(playlistId),
+                com.aeriotv.android.core.data.repository.DeletedPlaylists.instance(playlistId),
+            )
     }
 }
 

@@ -1385,7 +1385,9 @@ class PlaylistViewModel @Inject constructor(
         epgLoadPlaylistId = playlist.id
         epgLoadForced = force
         epgLoadColdLaunch = cold
-        epgLoadJob = viewModelScope.launch {
+        // The playlist instance it started under: after a delete and re-add
+        // with the same id, this load's late writes are dropped (DeletedPlaylists).
+        epgLoadJob = viewModelScope.launch(com.aeriotv.android.core.data.repository.DeletedPlaylists.started(playlist.id)) {
             prior?.join()
             coroutineContext[kotlinx.coroutines.Job]?.let { trackPlaylistTask(playlist.id, "EPG load", it) }
             try {

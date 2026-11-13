@@ -2385,7 +2385,7 @@ class PlaylistRepository @Inject constructor(
         awaitGuidePainted: suspend () -> Unit,
     ) {
         if (!catchupReachPrunedAtLaunch.add(playlistId)) return
-        layeringScope.launch {
+        layeringScope.launch(DeletedPlaylists.started(playlistId)) {
             awaitGuidePainted()
             runCatching { pruneEpgBeyondCatchupReach(playlistId) }
                 .onFailure { Log.w("PlaylistRepo", "[EPG] launch catch-up reach prune failed", it) }
@@ -2672,7 +2672,7 @@ class PlaylistRepository @Inject constructor(
     fun startEpgBackgroundSweep(playlistId: String) {
         epgSweepJobs.compute(playlistId) { _, existing ->
             if (existing?.isActive == true) return@compute existing
-            layeringScope.launch {
+            layeringScope.launch(DeletedPlaylists.started(playlistId)) {
                 // Settle window: the guide paints from cache, the cold-launch
                 // channel load finishes, and a tune started from the launch
                 // screen reaches its first frame before we touch the network.
@@ -2811,7 +2811,7 @@ class PlaylistRepository @Inject constructor(
     ) {
         layeringJobs.compute(playlist.id) { _, existing ->
             if (existing?.isActive == true) return@compute existing
-            layeringScope.launch {
+            layeringScope.launch(DeletedPlaylists.started(playlist.id)) {
                 val now = System.currentTimeMillis()
                 val dayMs = 86_400_000L
                 // Logan 2026-09-11: the playlist's Guide Days setting
@@ -2977,7 +2977,7 @@ class PlaylistRepository @Inject constructor(
     ) {
         layeringJobs.compute(playlistId) { _, existing ->
             if (existing?.isActive == true) return@compute existing
-            layeringScope.launch {
+            layeringScope.launch(DeletedPlaylists.started(playlistId)) {
                 // GH #53: source discovery moved in here with the fetching. It
                 // needs /api/epg/epgdata/ as well as /api/epg/sources/ now (to
                 // learn which feed each tvg-id came from), and neither belongs
@@ -3338,7 +3338,7 @@ class PlaylistRepository @Inject constructor(
                     // IF the server's EPG sources moved since this cache was
                     // built; the fingerprint is only that gate. Rate limited
                     // inside, so a second guide load is free.
-                    layeringScope.launch { maybeSweepEpgForSourceChanges(playlist.id) }
+                    layeringScope.launch(DeletedPlaylists.started(playlist.id)) { maybeSweepEpgForSourceChanges(playlist.id) }
                 } else {
                     layerUpstreamInBackground(playlist.id, base, customXmltv, knownChannelKeys)
                 }
@@ -3745,7 +3745,7 @@ class PlaylistRepository @Inject constructor(
         // stays clean and reloads never feed a duplicate key to the url-keyed
         // Live TV lists. Distinct streams that share a tvg-id are kept.
         val channels = rawChannels.distinctBy { it.url }
-        DeletedPlaylists.ensureAlive(playlistId, "channel snapshot")
+        DeletedPlaylists.ensureAlive(playlistId, "channel snapshot", binding.instance)
         // GH #31: persist in CHUNKS inside ONE transaction instead of mapping the
         // whole ~100k-row entity list + one giant insertAll. That overlap (the
         // channel list + the full entity list + the transaction bind) was the
