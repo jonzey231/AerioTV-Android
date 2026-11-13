@@ -597,7 +597,7 @@ private fun metaLine(rec: Rec, now: Long): String {
     val second = when (s) {
         DvrViewModel.Recording.Status.Recording -> "Recording"
         DvrViewModel.Recording.Status.Scheduled -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(rec.startMillis))
-        else -> { val m = ((rec.endMillis - rec.startMillis) / 60_000L).toInt(); if (m >= 60) "${m / 60} h ${m % 60} min" else "$m min" }
+        else -> DvrFormat.duration(rec.endMillis - rec.startMillis)
     }
     val se = if ((rec.season ?: 0) > 0) "S${rec.season} E${rec.episode ?: 0}" else null
     return listOfNotNull(day, second, se).joinToString(" · ")
@@ -775,10 +775,7 @@ private fun TvDvrPage(
     val red = Color(0xFFFF4757)
     val timeFmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
     fun timeRange(rec: Rec): String = timeFmt.format(Date(rec.startMillis)) + " to " + timeFmt.format(Date(rec.endMillis))
-    fun durationLabel(rec: Rec): String {
-        val m = ((rec.endMillis - rec.startMillis) / 60_000L).toInt()
-        return if (m >= 60) "${m / 60} h ${m % 60} min" else "$m min"
-    }
+    fun durationLabel(rec: Rec): String = DvrFormat.duration(rec.endMillis - rec.startMillis)
     // A hero action opens a ROUTE over MAIN: arm the return state so Back
     // lands back on the button that was pressed (the page records WHICH one).
     val armHero: () -> Unit = { com.aeriotv.android.feature.movies.tv.TvReturnMemory.arm("dvr", null, gridState) }
