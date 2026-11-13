@@ -37,7 +37,7 @@ class DsyncSchemaTest {
     }
 
     @Test fun keysMatchSchema() {
-        assertEquals(13, DsyncKey.entries.size)
+        assertEquals(14, DsyncKey.entries.size)
         DsyncKey.entries.forEach { assertTrue(it.wire, DsyncKey.isValidKeyName(it.wire)) }
         assertEquals("app.molinete.aerio.hiddenTitles", DsyncKey.HiddenTitles.wire)
         assertEquals(DsyncKey.Favorites, DsyncKey.fromWire("app.molinete.aerio.favorites"))

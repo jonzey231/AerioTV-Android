@@ -1047,13 +1047,44 @@ class AppPreferences @Inject constructor(
      * Legacy plaintext values written by older builds pass through unchanged.
      */
     val tmdbApiKey: Flow<String> = scopedData.map { cipher.decrypt(it[KEY_TMDB_API_KEY]) ?: "" }
+
+    /**
+     * Save or clear the key from the TMDB field: a user edit. The edit time
+     * (Unix seconds) is written in the same step, which is how Dispatcharr
+     * Sync tells an edit here from a key restored another way (schema
+     * section 4.13).
+     */
     suspend fun setTmdbApiKey(value: String) {
         store.edit { prefs ->
-            val trimmed = value.trim()
-            if (trimmed.isBlank()) prefs.remove(KEY_TMDB_API_KEY)
-            else prefs[KEY_TMDB_API_KEY] = cipher.encrypt(trimmed) ?: trimmed
+            writeTmdbApiKey(prefs, value)
+            prefs[KEY_TMDB_API_KEY_EDITED_AT] = System.currentTimeMillis() / 1000
         }
     }
+
+    /**
+     * Dispatcharr Sync's apply of a pulled key: not an edit on this device.
+     * The edit time becomes the server copy's stamp ([at], Unix seconds).
+     */
+    suspend fun setTmdbApiKeyFromSync(value: String, at: Long) {
+        store.edit { prefs ->
+            writeTmdbApiKey(prefs, value)
+            prefs[KEY_TMDB_API_KEY_EDITED_AT] = at
+        }
+    }
+
+    private fun writeTmdbApiKey(prefs: MutablePreferences, value: String) {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) prefs.remove(KEY_TMDB_API_KEY)
+        else prefs[KEY_TMDB_API_KEY] = cipher.encrypt(trimmed) ?: trimmed
+    }
+
+    /**
+     * The key and when it was last saved, cleared, or applied from
+     * Dispatcharr Sync on this device (Unix seconds; 0 = unknown), read
+     * from one snapshot so the two always match. Dispatcharr Sync only.
+     */
+    val tmdbApiKeyState: Flow<Pair<String, Long>> =
+        scopedData.map { (cipher.decrypt(it[KEY_TMDB_API_KEY]) ?: "") to (it[KEY_TMDB_API_KEY_EDITED_AT] ?: 0L) }
 
     /**
      * iOS `debugLoggingEnabled` parity (DeveloperSettingsView line 14). The
@@ -3074,6 +3105,9 @@ class AppPreferences @Inject constructor(
         val KEY_PROGRAM_POSTERS_TMDB_ENABLED =
             booleanPreferencesKey("app_behaviors_program_posters_tmdb_enabled")
         val KEY_TMDB_API_KEY = stringPreferencesKey("tmdb_api_key")
+        // When the key was last set, cleared, or applied here (Unix seconds),
+        // for Dispatcharr Sync's newest-edit rule. A time, never the key.
+        val KEY_TMDB_API_KEY_EDITED_AT = longPreferencesKey("tmdb_api_key_edited_at")
         // Device-specific (depends on the TV / receiver); never synced.
         val KEY_AUDIO_PASSTHROUGH = booleanPreferencesKey("audio_passthrough_enabled")
         val KEY_SYNC_INITIAL_PULL_DONE = booleanPreferencesKey("sync_initial_pull_done")

@@ -581,7 +581,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Persist the draft key (device-local) and confirm with a Saved status. */
+    /** Persist the draft key (a user edit, which Dispatcharr Sync sends) and confirm with a Saved status. */
     fun saveTmdbKey(draft: String) {
         viewModelScope.launch {
             prefs.setTmdbApiKey(draft)

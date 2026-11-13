@@ -58,6 +58,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -97,6 +98,7 @@ class DispatcharrSyncManager @Inject constructor(
     private val providersStore: com.aeriotv.android.core.sync.SyncProvidersStore,
     /** Rule 5: Drive follows and converges with Dispatcharr Sync (Provider: the two reference each other). */
     private val drive: Provider<com.aeriotv.android.core.sync.DriveSyncManager>,
+    private val tmdb: com.aeriotv.android.core.network.TMDBService,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = context.getSharedPreferences("aerio_dsync", Context.MODE_PRIVATE)
@@ -1914,7 +1916,22 @@ class DispatcharrSyncManager @Inject constructor(
         DsyncKey.RadioDefault -> prefs.radioModeByDefault
         DsyncKey.Collections -> prefs.channelCollections
         DsyncKey.Profiles -> combine(profileStore.profiles, pinStore.changes) { p, v -> p.map { listOf(it.username, it.displayName) } to v }
+        DsyncKey.TmdbKey -> tmdbEdits()
     }
+
+    /**
+     * Section 4.13: a count that rises with each save or clear of the TMDB
+     * key on this device. Detection reads a SHA-256 digest of the key, never
+     * the key. A key restored another way (an older Drive snapshot) is not an
+     * edit here, and an apply from a pull is suppressed like every apply.
+     */
+    private fun tmdbEdits(): Flow<Int> = prefs.tmdbApiKeyState
+        .map { (key, at) -> DsyncPayloads.TmdbLocal(DsyncPayloads.tmdbDigest(key), at) }
+        .distinctUntilChanged()
+        .runningFold(0 to (null as DsyncPayloads.TmdbLocal?)) { (n, prev), cur ->
+            (if (DsyncPayloads.tmdbIsEdit(prev, cur)) n + 1 else n) to cur
+        }
+        .map { it.first }
 
     // ---- channel id mapping (schema 4: Dispatcharr channel `id` int) ----
 
@@ -2199,6 +2216,12 @@ class DispatcharrSyncManager @Inject constructor(
             }
         }
         DsyncKey.RadioDefault -> DsyncPayloads.encodeRadioDefault(base, prefs.radioModeByDefaultIn(s.token))
+        DsyncKey.TmdbKey -> {
+            // A device with no key never starts the category: a fresh "" would
+            // read as a clear newer than every other device's key.
+            val apiKey = prefs.tmdbApiKey.first().trim()
+            if (apiKey.isEmpty() && base == null) null else DsyncPayloads.encodeTMDBKey(base, apiKey)
+        }
         DsyncKey.Collections -> {
             val m = channelMap(s)
             val n = prefs.channelCollectionsIn(s.token).size
@@ -2741,6 +2764,24 @@ class DispatcharrSyncManager @Inject constructor(
             DsyncKey.RadioDefault -> {
                 val on = DsyncPayloads.decodeRadioDefault(d) ?: return ApplyResult.Malformed
                 prefs.setRadioModeByDefaultIn(on, s.token)
+            }
+            DsyncKey.TmdbKey -> {
+                // Never logs the key, only whether it is set.
+                val remote = DsyncPayloads.decodeTMDBKey(d) ?: return ApplyResult.Malformed
+                val (stored, editedAt) = prefs.tmdbApiKeyState.first()
+                val local = stored.trim()
+                if (DsyncPayloads.tmdbKeepsLocal(local, remote, editedAt, env.updatedAt)) {
+                    Log.i(TAG, "[DSYNC] tmdbKey: kept this device's ${if (local.isEmpty()) "clear" else "key"} (newer than the server's ${if (remote.isEmpty()) "clear" else "key"}); sending it")
+                    setDirty(s, key, true)
+                    schedule(s, key, 0L)
+                } else if (local != remote) {
+                    // Applying a pull is not an edit here: the change watcher skips it.
+                    s.suppressUntil[key] = System.currentTimeMillis() + SUPPRESS_MS
+                    prefs.setTmdbApiKeyFromSync(remote, env.updatedAt)
+                    // As Save in Settings does: lookups (misses included) were keyed to the old key.
+                    tmdb.clearCache()
+                    Log.i(TAG, "[DSYNC] tmdbKey: ${if (remote.isEmpty()) "cleared" else "set"} from the server")
+                }
             }
             DsyncKey.Collections -> {
                 val rows = DsyncPayloads.decodeCollections(d) ?: return ApplyResult.Malformed

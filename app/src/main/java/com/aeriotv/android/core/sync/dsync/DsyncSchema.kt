@@ -24,7 +24,11 @@ import kotlinx.serialization.json.longOrNull
  */
 enum class DsyncKey(
     val suffix: String,
-    /** Which existing Sync Categories toggle gates this key; null = always (profiles). */
+    /**
+     * Which existing Sync Categories toggle gates this key; null = always
+     * (profiles, and tmdbKey, which syncs whenever Dispatcharr Sync is on and
+     * never through Drive: schema section 4.13).
+     */
     val category: SyncCategory?,
     val schemaVersion: Int = 1,
 ) {
@@ -41,6 +45,7 @@ enum class DsyncKey(
     RadioDefault("radioDefault", SyncCategory.Preferences),
     Collections("collections", SyncCategory.Favorites),
     Profiles("profiles", null),
+    TmdbKey("tmdbKey", null),
     ;
 
     val wire: String get() = PREFIX + suffix
@@ -511,6 +516,47 @@ object DsyncPayloads {
     }
     fun encodeRadioDefault(base: JsonObject?, on: Boolean): JsonObject = base.with("on" to JsonPrimitive(on))
 
+    // tmdbKey (section 4.13): the user's TMDB API key or read access token,
+    // trimmed; "" (or a missing member) = no key, so clearing syncs too.
+    // A non-string apiKey is malformed.
+    fun decodeTMDBKey(data: JsonObject): String? {
+        val v = data["apiKey"] ?: return ""
+        return v.asStr()?.trim()
+    }
+    fun encodeTMDBKey(base: JsonObject?, key: String): JsonObject = base.with("apiKey" to JsonPrimitive(key.trim()))
+
+    /**
+     * Newest edit wins for the TMDB key, checked when a newer remote value
+     * arrives (section 4.13): true = keep this device's key and send it.
+     * [localEditedAt] is when the key was last set or cleared on this
+     * device by its user, or applied from the server (Unix seconds; 0 =
+     * unknown: set before this build, or restored from an older Drive
+     * snapshot). With an unknown time a key beats a clear, so a stale clear
+     * on the server never wipes a key.
+     */
+    fun tmdbKeepsLocal(local: String, remote: String, localEditedAt: Long, remoteAt: Long): Boolean {
+        if (local == remote) return false
+        if (localEditedAt > 0) return localEditedAt > remoteAt
+        return remote.isEmpty() && local.isNotEmpty()
+    }
+
+    /** Change detection for the TMDB key: a SHA-256 digest (lowercase hex), never the key itself. */
+    fun tmdbDigest(key: String): String =
+        MessageDigest.getInstance("SHA-256").digest(key.trim().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    /** The TMDB key as this device holds it, for change detection: its [digest] and last edit time ([editedAt], Unix seconds). */
+    data class TmdbLocal(val digest: String, val editedAt: Long)
+
+    /**
+     * Whether the step from [prev] to [cur] is an edit made on this device.
+     * A save or clear in the TMDB field writes the key and its edit time
+     * together, so both change; a key that arrives another way (a Drive
+     * restore of an older snapshot) changes the key alone and is not an
+     * edit here. Saving the same key again changes nothing to send.
+     */
+    fun tmdbIsEdit(prev: TmdbLocal?, cur: TmdbLocal): Boolean =
+        prev != null && prev.digest != cur.digest && prev.editedAt != cur.editedAt
+
     // collections
     fun decodeCollections(data: JsonObject): List<CollectionRow>? = rows(data)?.map { el ->
         val r = el as? JsonArray ?: return null
@@ -833,7 +879,7 @@ object DsyncCoexistence {
 
     /**
      * Rule 4: the keys a "user chose Google Drive" replace pushes whole from
-     * local. Profiles (per-row merge), remoteMap, and radioDefault are excluded.
+     * local. Profiles (per-row merge), remoteMap, radioDefault, and tmdbKey are excluded.
      */
     /**
      * Pull before replace (section 10a): during the setup choice pull a shared
@@ -891,7 +937,7 @@ object DsyncCoexistence {
      * (DriveFileMappingTest), never falls through to a default.
      */
     fun driveFileFor(key: DsyncKey): SyncCategory? = when (key) {
-        DsyncKey.Profiles -> null
+        DsyncKey.Profiles, DsyncKey.TmdbKey -> null
         DsyncKey.RemoteMap, DsyncKey.RadioDefault -> SyncCategory.Preferences
         else -> com.aeriotv.android.core.sync.SetupSourceChoice.driveFile(key.suffix)
             ?: error("no Drive file for ${key.suffix}")
@@ -1007,7 +1053,7 @@ object DsyncManual {
      * The shared keys a manual push or pull covers: every forced-replace key
      * whose Sync Categories item is not Off. `settings` is always included
      * (its lanes are gated per name, so an all-Off device writes nothing).
-     * Profiles, remoteMap, and radioDefault are never forced.
+     * Profiles, remoteMap, radioDefault, and tmdbKey are never forced.
      */
     fun keys(scopes: Map<String, com.aeriotv.android.core.sync.SyncScope>): List<DsyncKey> =
         DsyncCoexistence.FORCE_KEYS.filter { key ->

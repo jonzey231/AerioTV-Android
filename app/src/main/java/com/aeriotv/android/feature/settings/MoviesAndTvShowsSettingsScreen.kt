@@ -252,11 +252,13 @@ fun MoviesAndTvShowsSettingsScreen(
 private const val VOD_REFRESH_FOOTNOTE =
     "How often the library re-scans in the background. Opening the app always shows the cached library first."
 
-// Apple's footers say iCloud Keychain; Android carries the key in the Sync
-// snapshot to the user's own Google Drive app data (AppPreferences sync
-// export), so the sentence names that instead. The rest is Apple's text.
+// Apple's first sentence names the Keychain and iCloud Keychain. Android
+// keeps the key on the device (encrypted at rest; Google Drive stopped
+// carrying it on 2026-10-27), so the first sentence says only that. The
+// Dispatcharr Sync sentence (schema section 4.13) and the rest are Apple's
+// text, byte for byte.
 private const val TMDB_SYNC_SENTENCE =
-    "If Sync is enabled, your key is saved to your Google Drive app data and syncs to your other devices."
+    "Your key is saved on this device. With Dispatcharr Sync on, this key syncs to your other devices signed in as this user."
 private const val TMDB_FOOTER_PHONE = TMDB_SYNC_SENTENCE +
     " Get a free key at themoviedb.org under Settings, then API; paste either the API Key or the Read Access Token. With a key, artwork and details for Movies and TV Shows come from TMDB first and your provider fills any gaps."
 private const val TMDB_FOOTER_TV = TMDB_SYNC_SENTENCE +
