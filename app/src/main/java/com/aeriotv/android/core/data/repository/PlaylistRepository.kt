@@ -565,7 +565,7 @@ class PlaylistRepository @Inject constructor(
     ): com.aeriotv.android.core.network.MeResponse {
         val base = row.urlString.trimEnd('/')
         sent?.apiKey?.trim()?.takeIf { it.isNotEmpty() }?.let { key ->
-            return dispatcharrClient.fetchMe(base, key)
+            return dispatcharrClient.fetchMe(base, key, keyCheck = true)
                 ?: throw com.aeriotv.android.core.network.DispatcharrError.InvalidCredentials("The sent sign-in was not accepted.")
         }
         val user = sent?.username?.trim()?.takeIf { it.isNotEmpty() }
@@ -573,7 +573,7 @@ class PlaylistRepository @Inject constructor(
         if (user == null || pass == null) throw IllegalArgumentException("no sign-in sent")
         val jwt = dispatcharrClient.login(base, user, pass)
         val key = dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
-        return dispatcharrClient.fetchMe(base, key)
+        return dispatcharrClient.fetchMe(base, key, keyCheck = true)
             ?: throw com.aeriotv.android.core.network.DispatcharrError.InvalidCredentials("The sent sign-in was not accepted.")
     }
 
@@ -619,7 +619,7 @@ class PlaylistRepository @Inject constructor(
             val key = dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
             // Item 11: only the playlist's current account reconnects. On a
             // mismatch nothing is written and the token is dropped unused.
-            val me = dispatcharrClient.fetchMe(base, key)
+            val me = dispatcharrClient.fetchMe(base, key, keyCheck = true)
                 ?: throw com.aeriotv.android.core.network.DispatcharrError.Transport("Could not read the account.")
             requireSameAccount(playlistId, row, me)
             val updated = writeSignIn(
@@ -1415,7 +1415,7 @@ class PlaylistRepository @Inject constructor(
                 dispatcharrClient.verifyConnection(base, k)
                 k
             }
-            val me = runCatching { dispatcharrClient.fetchMe(base, key) }.getOrNull()
+            val me = runCatching { dispatcharrClient.fetchMe(base, key, keyCheck = true) }.getOrNull()
             OwnSignIn(com.aeriotv.android.core.profiles.EditPlaylistSignIn.ownAfter(typed, key, own), base, me)
         }
 

@@ -515,10 +515,17 @@ class DispatcharrClient @Inject constructor() {
 
     /** Profiles: the full /api/accounts/users/me/ record for the user [apiKey]
      *  authenticates as, or null on any failure. */
-    suspend fun fetchMe(baseUrl: String, apiKey: String, childSealBypass: Boolean = false): MeResponse? = runCatching {
+    suspend fun fetchMe(
+        baseUrl: String,
+        apiKey: String,
+        childSealBypass: Boolean = false,
+        /** An explicit check of this key (a sign-in just issued it): sent as is, past the held-key gate. */
+        keyCheck: Boolean = false,
+    ): MeResponse? = runCatching {
         val response = client.get("${baseUrl.trimEnd('/')}/api/accounts/users/me/") {
             applyAuth(apiKey)
             if (childSealBypass) attributes.put(BypassChildSeal, true)
+            if (keyCheck) attributes.put(BypassKeyGate, true)
         }
         if (!response.status.isSuccess()) return@runCatching null
         response.body<MeResponse>()

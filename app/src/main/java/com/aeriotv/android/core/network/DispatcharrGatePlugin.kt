@@ -52,16 +52,19 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
             throw refusal
         }
         // Built with a key a re-sign-in has since replaced: send the current
-        // one (never logged), not a counted failure on a dead key.
+        // one (never logged), not a counted failure on a dead key. Never for
+        // an explicit check of one key (the sign-in form, Fix Login, a
+        // re-login's check), and never into a held key (keySwap).
+        val bypassKeyGate = request.attributes.contains(BypassKeyGate)
         requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
-            ?.let { old -> DispatcharrRequestGate.replacementFor(old)?.let { old to it } }
+            ?.let { old -> keySwap(old, bypassKeyGate)?.let { old to it } }
             ?.let { (old, new) ->
                 val (x, auth) = swappedAuthHeaders(request.headers["X-API-Key"], request.headers["Authorization"], old, new)
                 x?.let { request.headers["X-API-Key"] = it }
                 auth?.let { request.headers["Authorization"] = it }
                 Log.i(TAG, "[AUTH] ${request.method.value} $path: sent with the re-issued key")
             }
-        if (!request.attributes.contains(BypassKeyGate)) {
+        if (!bypassKeyGate) {
             val key = requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
             if (key != null && DispatcharrRequestGate.isKeyRejected(key)) {
                 Log.i(TAG, "[AUTH] skipped ${request.method.value} $path: this API key was rejected by the server; waiting for Edit Playlist")
@@ -98,6 +101,21 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
 
 /** Set on an explicit key check (verifyConnection, Edit Playlist, the setup sender) so a rejected key can be tried again on purpose. */
 internal val BypassKeyGate = AttributeKey<Boolean>("DispatcharrBypassKeyGate")
+
+/**
+ * The key a request built with [key] is sent with instead, or null to send
+ * it as built. Measured on a phone 2026-11-12: a re-login against another
+ * server had recorded the user's real key as replaced by that server's key,
+ * which was then held; when the user signed in again and the real server
+ * issued the real key, its check was swapped to the held key and refused
+ * locally, so the right password could not sign in. An explicit key check
+ * ([bypassKeyGate]) is never swapped, and nothing is swapped into a key that
+ * is held.
+ */
+internal fun keySwap(key: String, bypassKeyGate: Boolean): String? {
+    if (bypassKeyGate) return null
+    return DispatcharrRequestGate.replacementFor(key)?.takeUnless { DispatcharrRequestGate.isKeyRejected(it) }
+}
 
 /** Set on the same-server check and the held sign-in form: they may reach a held Child's playlist (item 8). */
 internal val BypassChildSeal = AttributeKey<Boolean>("DispatcharrBypassChildSeal")

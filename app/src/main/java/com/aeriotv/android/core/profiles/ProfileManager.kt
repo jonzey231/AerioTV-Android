@@ -2197,7 +2197,8 @@ class ProfileManager @Inject constructor(
         val base = repository.effectiveBaseUrl(row)
         val jwt = client.login(base, username.trim(), password, childSealBypass = true)
         val key = client.fetchCurrentUserApiKey(base, jwt.access, childSealBypass = true)
-        val me = client.fetchMe(base, key, childSealBypass = true) ?: throw DispatcharrError.Transport("Could not read the account.")
+        // The key the sign-in was just issued is checked as it is (never swapped, past the held-key gate).
+        val me = client.fetchMe(base, key, childSealBypass = true, keyCheck = true) ?: throw DispatcharrError.Transport("Could not read the account.")
         // Another account's sign-in never becomes this profile's.
         if (!ProfileHostHold.isOwnUser(p.username, me.username)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }
@@ -2231,7 +2232,8 @@ class ProfileManager @Inject constructor(
         val base = repository.effectiveBaseUrl(row)
         val jwt = client.login(base, username.trim(), password)
         val key = client.fetchCurrentUserApiKey(base, jwt.access)
-        val me = client.fetchMe(base, key) ?: throw DispatcharrError.Transport("Could not read the account.")
+        // The key the sign-in was just issued is checked as it is (never swapped, past the held-key gate).
+        val me = client.fetchMe(base, key, keyCheck = true) ?: throw DispatcharrError.Transport("Could not read the account.")
         if (!ProfileHostHold.isOwnUser(p.username, me.username)) throw DispatcharrError.InvalidCredentials("Signed in as another user.")
         val oldKey = p.apiKey?.trim()?.takeIf { it.isNotEmpty() }
         store.update(profileId) { it.copy(password = password).applyMe(me, key) }

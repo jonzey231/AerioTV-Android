@@ -253,6 +253,8 @@ object DispatcharrRequestGate {
 
     /** [key] just authenticated: it is good again everywhere. */
     fun clearKey(key: String) {
+        // A key just proven good is never swapped for another one again.
+        replaced.remove(keyHash(key))
         rechecks.remove(keyHash(key))
         val holders = rejected.remove(keyHash(key)) ?: return
         if (_prompt.value?.holder in holders) _prompt.value = null
