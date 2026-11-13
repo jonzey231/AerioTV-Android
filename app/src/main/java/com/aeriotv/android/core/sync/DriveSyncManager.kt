@@ -70,6 +70,8 @@ class DriveSyncManager @Inject constructor(
     private val profileStore: javax.inject.Provider<com.aeriotv.android.core.profiles.ProfileStore>,
     /** A pulled playlist on a new server address holds its profile sign-ins (A-APP-1). */
     private val profileManager: javax.inject.Provider<com.aeriotv.android.core.profiles.ProfileManager>,
+    /** A TMDB key applied from the Credentials file drops lookups made with the old one. */
+    private val tmdb: com.aeriotv.android.core.network.TMDBService,
 ) {
     /** The record every file of the current push carries (envelope.syncProviders). */
     @Volatile private var pushProviders: SyncProvidersRecord? = null
@@ -664,8 +666,23 @@ class DriveSyncManager @Inject constructor(
                     val rejectedHere = l?.apiKey?.let { keyRejectedHere(it) } == true
                     Log.i(TAG, "[DRIVE] push Credentials ${m.playlistId.take(8)}: key from $src; local key rejected here=$rejectedHere; drive t=${DriveFileStats.time(r?.updatedAt)} local t=${DriveFileStats.time(l?.updatedAt)}")
                 }
-                if (remote != null && merged == remote.entries) return null
-                json.encodeToString(CredentialsSnapshot(mergedEnvelope(remote?.envelope, merged.map { it.updatedAt ?: 0L }), merged)) to done
+                // The TMDB key (one per device): newest edit wins, the Dispatcharr
+                // Sync rule. Logged as set or cleared, never the key.
+                val tmdbLocal = appPreferences.tmdbApiKeyState.first()
+                val tmdbRemote = DriveMerge.tmdbOf(remote)
+                val tmdbOut = DriveMerge.tmdbToWrite(tmdbRemote, tmdbLocal.key, tmdbLocal.editedAt)
+                if (tmdbOut != tmdbRemote && tmdbOut != null) {
+                    Log.i(TAG, "[DRIVE] push Credentials tmdbKey: this device's ${if (tmdbOut.key.isEmpty()) "clear" else "key"} t=${DriveFileStats.time(tmdbOut.atMs)} (drive ${if (tmdbRemote == null) "has none" else "t=${DriveFileStats.time(tmdbRemote.atMs)}"})")
+                }
+                if (remote != null && merged == remote.entries && tmdbOut == tmdbRemote) return null
+                json.encodeToString(
+                    CredentialsSnapshot(
+                        mergedEnvelope(remote?.envelope, merged.map { it.updatedAt ?: 0L } + listOfNotNull(tmdbOut?.atMs)),
+                        merged,
+                        tmdbKey = tmdbOut?.key,
+                        tmdbUpdatedAt = tmdbOut?.atMs,
+                    ),
+                ) to done
             }
         }
     }
@@ -2083,6 +2100,11 @@ class DriveSyncManager @Inject constructor(
      * is never taken (Logan 2026-11-10). A field empty here is filled.
      */
     private suspend fun applyCredentialsSnapshot(snapshot: CredentialsSnapshot) {
+        // The key never holds up the playlist sign-ins below.
+        runCatching { applyTmdbKey(snapshot) }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            Log.w(TAG, "[DRIVE] apply Credentials tmdbKey failed: ${it.javaClass.simpleName}")
+        }
         // Accounts other devices know (identity for the playlist merge only).
         snapshot.entries.forEach { SyncStamps.learnAccount(it.playlistId, it.account) }
         snapshot.entries.forEach { entry ->
@@ -2115,6 +2137,29 @@ class DriveSyncManager @Inject constructor(
                 Log.i(TAG, "[DRIVE] apply Credentials ${entry.playlistId.take(8)}: this device's key was rejected; adopted the synced key, hold lifted")
             }
         }
+    }
+
+    /**
+     * The TMDB key the Credentials file carries (2026-11-13): applied when it
+     * differs and this device's own key does not win (newest edit, the
+     * Dispatcharr Sync rule). The apply keeps Drive's time and is marked as a
+     * sync's, so it is not an edit here and neither sync sends it on as one.
+     * Logs say set or cleared, never the key.
+     */
+    private suspend fun applyTmdbKey(snapshot: CredentialsSnapshot) {
+        val remote = DriveMerge.tmdbOf(snapshot) ?: return
+        val local = appPreferences.tmdbApiKeyState.first()
+        val next = DriveMerge.tmdbToApply(remote, local.key, local.editedAt)
+        if (next == null) {
+            if (local.key.trim() != remote.key) {
+                Log.i(TAG, "[DRIVE] apply Credentials tmdbKey: kept this device's ${if (local.key.isBlank()) "clear" else "key"} (newer than Drive's ${if (remote.key.isEmpty()) "clear" else "key"})")
+            }
+            return
+        }
+        appPreferences.setTmdbApiKeyFromSync(next.key, next.atMs / 1000)
+        // As Save in Settings does: lookups (misses included) were keyed to the old key.
+        tmdb.clearCache()
+        Log.i(TAG, "[DRIVE] apply Credentials tmdbKey: ${if (next.key.isEmpty()) "cleared" else "set"} from Drive t=${DriveFileStats.time(next.atMs)}")
     }
 
     /**

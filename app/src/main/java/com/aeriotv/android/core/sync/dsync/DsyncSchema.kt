@@ -544,18 +544,25 @@ object DsyncPayloads {
     fun tmdbDigest(key: String): String =
         MessageDigest.getInstance("SHA-256").digest(key.trim().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
-    /** The TMDB key as this device holds it, for change detection: its [digest] and last edit time ([editedAt], Unix seconds). */
-    data class TmdbLocal(val digest: String, val editedAt: Long)
+    /**
+     * The TMDB key as this device holds it, for change detection: its
+     * [digest], last edit time ([editedAt], Unix seconds), and whether that
+     * write was a sync's apply ([fromSync]).
+     */
+    data class TmdbLocal(val digest: String, val editedAt: Long, val fromSync: Boolean = false)
 
     /**
      * Whether the step from [prev] to [cur] is an edit made on this device.
      * A save or clear in the TMDB field writes the key and its edit time
-     * together, so both change; a key that arrives another way (a Drive
-     * restore of an older snapshot) changes the key alone and is not an
-     * edit here. Saving the same key again changes nothing to send.
+     * together, so both change. A key that arrives another way is not an
+     * edit here: a restore from an older Drive snapshot changes the key
+     * alone, and a key applied from Google Drive's Credentials file or from
+     * Dispatcharr Sync is marked [TmdbLocal.fromSync] (its time is the
+     * source's, so sending it on as an edit here would beat a newer edit
+     * made elsewhere). Saving the same key again changes nothing to send.
      */
     fun tmdbIsEdit(prev: TmdbLocal?, cur: TmdbLocal): Boolean =
-        prev != null && prev.digest != cur.digest && prev.editedAt != cur.editedAt
+        prev != null && !cur.fromSync && prev.digest != cur.digest && prev.editedAt != cur.editedAt
 
     // collections
     fun decodeCollections(data: JsonObject): List<CollectionRow>? = rows(data)?.map { el ->

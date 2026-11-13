@@ -1023,11 +1023,9 @@ class AppPreferences @Inject constructor(
      * iOS TMDBPosters parity (Aerio VODService.swift). Opt-in, OFF by default:
      * when on AND a key is set, missing artwork (VOD posters, and later EPG
      * program posters) is filled from the user's OWN free TMDB key. The toggle
-     * and key SYNC via Drive (snapshotSyncablePreferences) so they carry across
-     * the user's devices -- the same model the app already uses for playlist
-     * credentials (buildCredentialsSnapshot), stored in the user's own Drive
-     * appData. (Encryption-at-rest for all synced credentials remains the
-     * holistic job of task #53.)
+     * syncs via Drive preferences (snapshotSyncablePreferences); the key rides
+     * the Drive Credentials file with the playlist credentials
+     * (buildCredentialsSnapshot), in the user's own Drive appData.
      */
     val programPostersTmdbEnabled: Flow<Boolean> =
         scopedData.map { it[KEY_PROGRAM_POSTERS_TMDB_ENABLED.s()] ?: false }
@@ -1066,17 +1064,21 @@ class AppPreferences @Inject constructor(
         store.edit { prefs ->
             writeTmdbApiKey(prefs, value)
             prefs[KEY_TMDB_API_KEY_EDITED_AT] = System.currentTimeMillis() / 1000
+            prefs[KEY_TMDB_API_KEY_FROM_SYNC] = false
         }
     }
 
     /**
-     * Dispatcharr Sync's apply of a pulled key: not an edit on this device.
-     * The edit time becomes the server copy's stamp ([at], Unix seconds).
+     * A pulled key applied by Dispatcharr Sync or Google Drive: not an edit
+     * on this device. The edit time becomes the source copy's stamp ([at],
+     * Unix seconds), and the write is marked as a sync's, so neither sync
+     * sends it on as a new edit of this device's.
      */
     suspend fun setTmdbApiKeyFromSync(value: String, at: Long) {
         store.edit { prefs ->
             writeTmdbApiKey(prefs, value)
             prefs[KEY_TMDB_API_KEY_EDITED_AT] = at
+            prefs[KEY_TMDB_API_KEY_FROM_SYNC] = true
         }
     }
 
@@ -1087,12 +1089,24 @@ class AppPreferences @Inject constructor(
     }
 
     /**
-     * The key and when it was last saved, cleared, or applied from
-     * Dispatcharr Sync on this device (Unix seconds; 0 = unknown), read
-     * from one snapshot so the two always match. Dispatcharr Sync only.
+     * The TMDB key as the syncs see it: the key, when it was last saved,
+     * cleared, or applied from a sync on this device (Unix seconds; 0 =
+     * unknown), and whether that last write was a sync's apply.
      */
-    val tmdbApiKeyState: Flow<Pair<String, Long>> =
-        scopedData.map { (cipher.decrypt(it[KEY_TMDB_API_KEY]) ?: "") to (it[KEY_TMDB_API_KEY_EDITED_AT] ?: 0L) }
+    data class TmdbKeyState(val key: String, val editedAt: Long, val fromSync: Boolean)
+
+    /**
+     * [TmdbKeyState] read from one snapshot, so the key, its time, and its
+     * source always match. Dispatcharr Sync and Google Drive only.
+     */
+    val tmdbApiKeyState: Flow<TmdbKeyState> =
+        scopedData.map {
+            TmdbKeyState(
+                key = cipher.decrypt(it[KEY_TMDB_API_KEY]) ?: "",
+                editedAt = it[KEY_TMDB_API_KEY_EDITED_AT] ?: 0L,
+                fromSync = it[KEY_TMDB_API_KEY_FROM_SYNC] ?: false,
+            )
+        }
 
     /**
      * iOS `debugLoggingEnabled` parity (DeveloperSettingsView line 14). The
@@ -2295,7 +2309,8 @@ class AppPreferences @Inject constructor(
      * Snapshot the keys we sync via Drive (default profile), split into lanes
      * by each item's scope on this device. Device-local settings (buffer
      * size, network timeout, display matching, DVR storage) never ride it,
-     * and the TMDB API key is no longer sent (it was cleartext).
+     * and the TMDB API key is no longer sent here (it was cleartext); it
+     * rides the Credentials file instead (2026-11-13).
      *
      * Drive replaces the whole file, so values this device does not write
      * (items Off here, the other class's lane, other platforms' names) are
@@ -3116,6 +3131,9 @@ class AppPreferences @Inject constructor(
         // When the key was last set, cleared, or applied here (Unix seconds),
         // for Dispatcharr Sync's newest-edit rule. A time, never the key.
         val KEY_TMDB_API_KEY_EDITED_AT = longPreferencesKey("tmdb_api_key_edited_at")
+        // True when the last write of the key was a sync's apply (Dispatcharr
+        // Sync or Google Drive), false after a save or clear in the field.
+        val KEY_TMDB_API_KEY_FROM_SYNC = booleanPreferencesKey("tmdb_api_key_from_sync")
         // Device-specific (depends on the TV / receiver); never synced.
         val KEY_AUDIO_PASSTHROUGH = booleanPreferencesKey("audio_passthrough_enabled")
         val KEY_SYNC_INITIAL_PULL_DONE = booleanPreferencesKey("sync_initial_pull_done")

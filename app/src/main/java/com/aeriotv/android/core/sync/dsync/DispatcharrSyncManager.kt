@@ -1993,10 +1993,11 @@ class DispatcharrSyncManager @Inject constructor(
      * Section 4.13: a count that rises with each save or clear of the TMDB
      * key on this device. Detection reads a SHA-256 digest of the key, never
      * the key. A key restored another way (an older Drive snapshot) is not an
-     * edit here, and an apply from a pull is suppressed like every apply.
+     * edit here, and an apply from a pull (this sync's or Google Drive's) is
+     * marked as a sync's write and is not an edit either.
      */
     private fun tmdbEdits(): Flow<Int> = prefs.tmdbApiKeyState
-        .map { (key, at) -> DsyncPayloads.TmdbLocal(DsyncPayloads.tmdbDigest(key), at) }
+        .map { DsyncPayloads.TmdbLocal(DsyncPayloads.tmdbDigest(it.key), it.editedAt, it.fromSync) }
         .distinctUntilChanged()
         .runningFold(0 to (null as DsyncPayloads.TmdbLocal?)) { (n, prev), cur ->
             (if (DsyncPayloads.tmdbIsEdit(prev, cur)) n + 1 else n) to cur

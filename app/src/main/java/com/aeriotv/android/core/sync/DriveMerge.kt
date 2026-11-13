@@ -197,6 +197,44 @@ internal object DriveMerge {
         return if (u == localUsername && p == localPassword && k == localApiKey) null else Triple(u, p, k)
     }
 
+    // ── TMDB API key (Credentials file, 2026-11-13) ───────────────────────
+
+    /** The TMDB key in the Drive Credentials file: [key] trimmed ("" = cleared), [atMs] its edit time (Unix ms; 0 = unknown). */
+    data class TmdbDrive(val key: String, val atMs: Long)
+
+    /** The Drive copy of the TMDB key, null when the file carries none (an older writer, or no key set anywhere yet). */
+    fun tmdbOf(file: CredentialsSnapshot?): TmdbDrive? =
+        file?.tmdbKey?.let { TmdbDrive(it.trim(), file.tmdbUpdatedAt ?: 0L) }
+
+    /**
+     * What a push writes for the TMDB key: this device's key ([localKey],
+     * edited at [localEditedAtSec], Unix seconds) when it wins by the
+     * Dispatcharr Sync rule (DsyncPayloads.tmdbKeepsLocal: newest edit wins;
+     * with no known local time a key beats a clear), else Drive's copy as it
+     * is. A clear is a value like any other and goes out when it is newer.
+     * Null: write no key (Drive has none, and this device has no key and no
+     * known edit; an empty key of unknown age would read as a clear).
+     */
+    fun tmdbToWrite(remote: TmdbDrive?, localKey: String, localEditedAtSec: Long): TmdbDrive? {
+        val local = localKey.trim()
+        val mine = TmdbDrive(local, localEditedAtSec.coerceAtLeast(0L) * 1000)
+        if (remote == null) return if (local.isEmpty() && localEditedAtSec <= 0) null else mine
+        return if (com.aeriotv.android.core.sync.dsync.DsyncPayloads.tmdbKeepsLocal(local, remote.key, localEditedAtSec, remote.atMs / 1000)) mine else remote
+    }
+
+    /**
+     * What a pull applies: Drive's key when it differs from this device's and
+     * this device's does not win by the same rule, else null (keep local).
+     * The applied key keeps Drive's time ([TmdbDrive.atMs]): an apply is
+     * never a new edit here.
+     */
+    fun tmdbToApply(remote: TmdbDrive?, localKey: String, localEditedAtSec: Long): TmdbDrive? {
+        remote ?: return null
+        val local = localKey.trim()
+        if (local == remote.key) return null
+        return if (com.aeriotv.android.core.sync.dsync.DsyncPayloads.tmdbKeepsLocal(local, remote.key, localEditedAtSec, remote.atMs / 1000)) null else remote
+    }
+
     // ── Preferences (per key) ─────────────────────────────────────────────
 
     /** One lane's values plus their change times, keyed "lane:key". */
