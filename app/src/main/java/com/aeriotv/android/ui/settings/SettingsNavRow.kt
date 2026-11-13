@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -94,6 +95,8 @@ fun SettingsNavRow(
      * exact. Null keeps the padded height.
      */
     railMinHeight: androidx.compose.ui.unit.Dp? = null,
+    /** The rail glyph's box for this row (sp, follows Text Size); null keeps [TvSettingsMetrics.railIconGlyph]. */
+    railIconGlyph: androidx.compose.ui.unit.TextUnit? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val isTv = rememberIsTvDevice()
@@ -112,7 +115,7 @@ fun SettingsNavRow(
     val iconBox = if (isTv) TvSettingsMetrics.railIconWidth else SettingsCardMetrics.iconTile
     // The Settings rail's glyph is sp-sized, so it follows Text Size as
     // Apple's scaledFont rail icon does.
-    val railGlyph = with(androidx.compose.ui.platform.LocalDensity.current) { TvSettingsMetrics.railIconGlyph.toDp() }
+    val railGlyph = with(androidx.compose.ui.platform.LocalDensity.current) { (railIconGlyph ?: TvSettingsMetrics.railIconGlyph).toDp() }
     val iconGlyph = when {
         railMinHeight != null -> railGlyph
         isTv -> TvSettingsMetrics.navIconGlyph
@@ -207,7 +210,10 @@ fun SettingsNavRow(
                 imageVector = icon,
                 contentDescription = null,
                 tint = iconTint ?: MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(iconGlyph),
+                // A rail glyph may be wider than the 17 dp column (Material
+                // pads its glyphs inside the box more than SF Symbols do), so
+                // it is drawn at its own size, centered, without moving the text.
+                modifier = if (railMinHeight != null) Modifier.requiredSize(iconGlyph) else Modifier.size(iconGlyph),
             )
         }
         Spacer(Modifier.size(gap))

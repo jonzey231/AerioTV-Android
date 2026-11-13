@@ -68,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.aeriotv.android.ui.settings.LocalSettingsInPane
 import com.aeriotv.android.ui.settings.SettingsNavRow
 import com.aeriotv.android.ui.settings.SettingsSectionHeader
@@ -732,6 +733,7 @@ private fun SettingsTvRail(
                 title = title,
                 subtitle = subtitle,
                 icon = tvRailIcon(route),
+                railIconGlyph = tvRailIconBox(route),
                 // tvOS tints: DVR's record.circle red, Developer's ladybug the
                 // secondary accent, every other glyph the accent.
                 iconTint = when (route) {
@@ -794,6 +796,28 @@ private fun tvRailIcon(route: SettingsRoute): androidx.compose.ui.graphics.vecto
     SettingsRoute.Section(SettingsSection.About), SettingsRoute.About -> Icons.Filled.Info
     SettingsRoute.ManageProfiles -> Icons.Filled.ManageAccounts
     else -> settingsRouteIcon(route)
+}
+
+/**
+ * Each rail glyph's box, so the drawn glyph is Apple TV's size (measured on
+ * the Apple TV, settings-compare/atv4, 2026-11-13: tv.fill 15 dp wide,
+ * film.fill 14, info.circle.fill 12.2 across...). Material icons pad their
+ * glyphs differently, so one box size drew them about two-thirds as large
+ * on the Streamer; each box here scales its glyph's larger side to Apple's.
+ */
+private fun tvRailIconBox(route: SettingsRoute): androidx.compose.ui.unit.TextUnit = when (route) {
+    SettingsRoute.Playlists -> 17.7.sp
+    SettingsRoute.Section(SettingsSection.LiveTV) -> 16.0.sp
+    SettingsRoute.Section(SettingsSection.Player) -> 17.5.sp
+    SettingsRoute.Section(SettingsSection.MoviesAndTvShows) -> 19.2.sp
+    SettingsRoute.Section(SettingsSection.DvrSettings) -> 15.3.sp
+    SettingsRoute.Section(SettingsSection.Appearance) -> 18.6.sp
+    SettingsRoute.Section(SettingsSection.General) -> 14.4.sp
+    SettingsRoute.Section(SettingsSection.RemoteControl) -> 14.6.sp
+    SettingsRoute.Section(SettingsSection.Sync) -> 14.9.sp
+    SettingsRoute.Section(SettingsSection.Developer) -> 19.2.sp
+    SettingsRoute.Section(SettingsSection.About), SettingsRoute.About -> 15.3.sp
+    else -> 16.0.sp
 }
 
 /** The system red Apple uses for the tvOS DVR rail glyph (UIColor.systemRed, dark). */
