@@ -92,13 +92,34 @@ private fun ColumnScope.WhatsNewBody(
     items: List<WhatsNewItem>,
 ) {
     val isTv = rememberIsTvDevice()
-    Text(
-        text = "What's New in v$version",
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.padding(horizontal = 24.dp),
-    )
+    if (isTv) {
+        // Apple TV header (owner 2026-11-12): the title centered, the app
+        // and version under it in the secondary color, no icon.
+        Text(
+            text = WhatsNewCopy.title(version),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = WhatsNewCopy.versionLine(version),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        )
+    } else {
+        Text(
+            text = WhatsNewCopy.title(version),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+    }
     Spacer(Modifier.height(16.dp))
     // GH #59: the notes scroll, and on TV the D-pad has to be able to drive
     // that scroll. Rather than making the whole block one focusable proxy
@@ -168,6 +189,15 @@ private fun ColumnScope.WhatsNewBody(
         ) {
             items(items) { item ->
                 WhatsNewRow(item = item, isTv = false)
+            }
+            // The iPhone sheet's section footer.
+            item("version") {
+                Text(
+                    text = WhatsNewCopy.versionLine(version),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                )
             }
         }
     }
@@ -324,6 +354,12 @@ fun WhatsNewSheetOnDemand(onDismiss: () -> Unit) {
 }
 
 data class WhatsNewItem(val title: String, val body: String)
+
+/** The sheet's header copy, word for word with Apple's (App/WhatsNew.swift). */
+object WhatsNewCopy {
+    fun title(version: String): String = "What's new in $version"
+    fun versionLine(version: String): String = "AerioTV $version"
+}
 
 object WhatsNewContent {
     /** Headline changes for the current build. Edit this list and bump
