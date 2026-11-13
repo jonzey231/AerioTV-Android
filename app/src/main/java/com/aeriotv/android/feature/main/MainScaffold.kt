@@ -2063,23 +2063,45 @@ fun MainScaffold(
                             .onSizeChanged {
                                 if (DockPlacement.containerWidth != it.width) DockPlacement.containerWidth = it.width
                             }
-                            .padding(bottom = 8.dp)
-                            // While the bar is (or is coming back) out, this
-                            // strip owns every touch in it. During the 420 ms
-                            // restore the bar is still scaled toward the pill,
-                            // and a tap where a tab will be fell through to the
-                            // screen underneath: a Settings tap started a
-                            // channel from the guide (Nothing Phone 2026-11-06).
-                            .then(
-                                if (bottomBarVisible) Modifier.pointerInput(Unit) {
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            awaitPointerEvent().changes.forEach { it.consume() }
-                                        }
-                                    }
-                                } else Modifier,
-                            ),
+                            .padding(bottom = 8.dp),
                     ) {
+                        // While the bar is (or is coming back) out, the bar's
+                        // own frame owns every touch in it. During the 420 ms
+                        // restore the bar is still scaled toward the pill,
+                        // and a tap where a tab will be fell through to the
+                        // screen underneath: a Settings tap started a channel
+                        // from the guide (Nothing Phone 2026-11-06). The
+                        // blocker is the bar's last measured frame, placed as
+                        // the bar is (top, centered): on a phone that is the
+                        // full width, as before; on a tablet the old strip
+                        // spanned the screen, and the Settings sidebar rows
+                        // beside the centered bar took no taps. Its own size,
+                        // not the bar's, so it is there from the restore's
+                        // first frame, before the scaled bar is composed (the
+                        // strip had no height then, and a tap fell through).
+                        // Below the bar, so its tabs still take their own.
+                        if (bottomBarVisible) {
+                            Box(
+                                Modifier
+                                    .then(
+                                        if (barSize.width > 0 && barSize.height > 0) {
+                                            Modifier
+                                                .align(Alignment.TopCenter)
+                                                .size(
+                                                    with(density) { barSize.width.toDp() },
+                                                    with(density) { barSize.height.toDp() },
+                                                )
+                                        } else Modifier.matchParentSize(),
+                                    )
+                                    .pointerInput(Unit) {
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                awaitPointerEvent().changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    },
+                            )
+                        }
                         if (collapse < 0.999f) {
                             val pillW = with(density) { 64.dp.toPx() }
                             val pillH = with(density) { 52.dp.toPx() }
