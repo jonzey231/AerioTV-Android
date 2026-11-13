@@ -554,6 +554,20 @@ class PlaylistViewModel @Inject constructor(
         viewModelScope.launch {
             profileManager.manageRequests.collect { requestSettingsPage("playlist-detail") }
         }
+        // Every change of the active profile lands Live TV on the new
+        // profile's own group (its Default Group, else All), the same rule a
+        // switch follows. A switch, a playlist activation, and the launch land
+        // on their own path; any other change (a server address hold moving
+        // the profile to the default one) lands here (Nothing Phone
+        // 2026-11-13: the guide stayed on the held profile's Favorites).
+        viewModelScope.launch {
+            com.aeriotv.android.core.profiles.ProfileScope.changes.collect { change ->
+                if (!com.aeriotv.android.core.profiles.ProfileLanding.needsLanding(change.reason)) return@collect
+                val playlist = _state.value.playlist ?: return@collect
+                val group = landingGroupFor(playlist.id, groupNamesOf(_state.value.channels), change.reason)
+                _state.update { it.copy(selectedGroup = group) }
+            }
+        }
         // A completed switch to another profile lands on the Live TV tab.
         viewModelScope.launch {
             com.aeriotv.android.core.profiles.ProfileSwitchFocus.switches.drop(1).collect { requestLiveTvTab() }
@@ -1128,11 +1142,18 @@ class PlaylistViewModel @Inject constructor(
         playlistId: String,
         knownGroups: Collection<String>,
         landing: Landing,
+    ): String = landingGroupFor(playlistId, knownGroups, landing.label)
+
+    /** [landingGroupFor] for any [reason]; every landing logs "[PROFILE] landing group=... reason=...". */
+    private suspend fun landingGroupFor(
+        playlistId: String,
+        knownGroups: Collection<String>,
+        reason: String,
     ): String {
         val preferred = appPreferences.defaultGroupTokenOnce(playlistId)
         val group = com.aeriotv.android.feature.livetv.landingGroupToken(preferred, knownGroups)
             ?: ALL_GROUPS
-        Log.i(TAG, "[PROFILE] ${landing.label} landing group=$group (default=${if (preferred.isBlank()) "unset" else "set"})")
+        Log.i(TAG, "[PROFILE] landing group=$group reason=$reason (default=${if (preferred.isBlank()) "unset" else "set"})")
         return group
     }
 

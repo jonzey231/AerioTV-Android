@@ -188,7 +188,7 @@ class ProfileManager @Inject constructor(
         }
         refreshActiveRole(pid)
         if (active != null && !active.isDefault && active.playlistId == pid) {
-            ProfileScope.activate(active.toOverlay())
+            ProfileScope.activate(active.toOverlay(), ProfileScope.Why.LAUNCH)
             Log.i(TAG, "[PROFILE] restored ${active.displayName} on ${pid.take(8)}")
         }
         // PIN: a locked restored profile (the default one included) shows the
@@ -723,7 +723,7 @@ class ProfileManager @Inject constructor(
     }
 
     private suspend fun onActivePlaylist(pid: String?) = mutex.withLock {
-        if (pid == null) { ProfileScope.activate(null); ProfileRoles.set(null); return@withLock }
+        if (pid == null) { ProfileScope.activate(null, ProfileScope.Why.PLAYLIST); ProfileRoles.set(null); return@withLock }
         store.lastActivePlaylistId = pid
         playlistDao.rawById(pid)?.let { ensureDefaultProfile(it) }
         var active = store.activeProfileId(pid)?.let(store::byId)
@@ -742,9 +742,9 @@ class ProfileManager @Inject constructor(
         }
         val current = ProfileScope.activeOverlay()
         if (active != null && !active.isDefault) {
-            if (current?.profileId != active.id) ProfileScope.activate(active.toOverlay())
+            if (current?.profileId != active.id) ProfileScope.activate(active.toOverlay(), ProfileScope.Why.PLAYLIST)
         } else if (current != null) {
-            ProfileScope.activate(null)
+            ProfileScope.activate(null, ProfileScope.Why.PLAYLIST)
         }
         refreshActiveRole(pid)
     }
@@ -1678,10 +1678,10 @@ class ProfileManager @Inject constructor(
                 // A hold that landed since switchTo looked: never activate it.
                 if (!target.isDefault && unusable(target.id)) throw ProfileSignInHeld()
                 if (target.isDefault) {
-                    ProfileScope.activate(null)
+                    ProfileScope.activate(null, ProfileScope.Why.SWITCH)
                     store.setActiveProfileId(playlistId, null)
                 } else {
-                    ProfileScope.activate(target.toOverlay())
+                    ProfileScope.activate(target.toOverlay(), ProfileScope.Why.SWITCH)
                     store.setActiveProfileId(playlistId, target.id)
                 }
                 tokenStore.clear(playlistId)
@@ -1723,7 +1723,7 @@ class ProfileManager @Inject constructor(
                 // apply it to the playlist row (the default profile's home).
                 val me = a.me ?: client.fetchMe(base, a.key)
                 tMe = System.currentTimeMillis()
-                ProfileScope.activate(null)
+                ProfileScope.activate(null, ProfileScope.Why.SWITCH)
                 store.setActiveProfileId(playlistId, null)
                 if (me != null) applyMeToDefaultRow(playlistId, target.id, me, base, a.key)
             } else {
@@ -1742,7 +1742,7 @@ class ProfileManager @Inject constructor(
                 ownSignInRepaired(playlistId, updated.id)
                 followServerRole(updated.id, updated.userLevel)
                 runCatching { tagVerified(playlistId, updated.id) }
-                ProfileScope.activate(updated.toOverlay())
+                ProfileScope.activate(updated.toOverlay(), ProfileScope.Why.SWITCH)
                 store.setActiveProfileId(playlistId, updated.id)
             }
             tokenStore.clear(playlistId)
@@ -2059,7 +2059,7 @@ class ProfileManager @Inject constructor(
         } else if (activeId != null && hostHolds.isHeld(activeId)) {
             store.setActiveProfileId(playlistId, null)
             if (live) {
-                ProfileScope.activate(null)
+                ProfileScope.activate(null, ProfileScope.Why.HELD)
                 tokenStore.clear(playlistId)
                 CapabilityCorrections.clear(playlistId)
                 closePlayer.trySend(Unit)
@@ -2296,7 +2296,7 @@ class ProfileManager @Inject constructor(
             hostHolds.tag(p.id, null)
             hostHolds.clearPausedAdd(p.id)
         }
-        if (ProfileScope.activeOverlay()?.playlistId == playlistId) ProfileScope.activate(null)
+        if (ProfileScope.activeOverlay()?.playlistId == playlistId) ProfileScope.activate(null, ProfileScope.Why.PLAYLIST)
         store.removeForPlaylist(playlistId)
         heldForRoute.remove(playlistId)
         heldChanged()

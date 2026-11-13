@@ -1,7 +1,11 @@
 package com.aeriotv.android.core.profiles
 
 import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -72,7 +76,7 @@ object ProfileScope {
     @Volatile var held: Set<String> = emptySet()
         set(value) {
             field = value
-            if (overlay?.profileId?.let { it in value && it !in sealed } == true) activate(null)
+            if (overlay?.profileId?.let { it in value && it !in sealed } == true) activate(null, Why.HELD)
         }
 
     /**
@@ -134,11 +138,41 @@ object ProfileScope {
         return if (o.profileId in sealed) null else o.apiKey
     }
 
+    /**
+     * Why the active profile changed. Every change goes through [activate],
+     * and each one reaches [changes] with its reason, so Live TV lands on the
+     * new profile's own group whichever path made the change (Nothing Phone
+     * 2026-11-13: a server address hold moved jwilliams4362 to the default
+     * profile and the guide stayed on jwilliams4362's Favorites).
+     */
+    object Why {
+        /** A profile switch; its reload lands the guide. */
+        const val SWITCH = "switch"
+        /** A playlist activation; the playlist's load lands the guide. */
+        const val PLAYLIST = "playlist"
+        /** The launch restore; the launch lands the guide. */
+        const val LAUNCH = "launch"
+        /** The active profile's sign-in was held after a server address change. */
+        const val HELD = "held, moved to the default profile"
+        const val UNSPECIFIED = "profile change"
+    }
+
+    /** The active profile changed to [token] ("" = default) because of [reason]. */
+    data class Change(val token: String, val reason: String)
+
+    private val _changes = MutableSharedFlow<Change>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** Every change of the active profile, with its reason ([Why]). */
+    val changes: SharedFlow<Change> = _changes.asSharedFlow()
+
     /** Install (or clear, with null) the active non-default profile. A held profile is never installed, except a held Child ([sealed]). */
-    fun activate(newOverlay: Overlay?) {
+    fun activate(newOverlay: Overlay?, reason: String = Why.UNSPECIFIED) {
         val next = newOverlay?.takeUnless { it.profileId in held && it.profileId !in sealed }
         overlay = next
-        _token.value = next?.profileId.orEmpty()
+        val token = next?.profileId.orEmpty()
+        val changed = _token.value != token
+        _token.value = token
+        if (changed) _changes.tryEmit(Change(token, reason))
     }
 
     /** Non-default profile usernames per playlist, kept by ProfileManager.
