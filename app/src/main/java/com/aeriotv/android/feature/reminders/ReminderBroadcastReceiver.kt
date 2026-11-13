@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import kotlinx.coroutines.launch
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.aeriotv.android.MainActivity
@@ -29,13 +30,35 @@ class ReminderBroadcastReceiver : BroadcastReceiver() {
     @InstallIn(SingletonComponent::class)
     interface ReminderReceiverEntryPoint {
         fun reminderBannerBus(): ReminderBannerBus
+        fun reminderDao(): com.aeriotv.android.core.data.db.dao.ReminderDao
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        val key = intent.getStringExtra(EXTRA_REMINDER_KEY) ?: return
+        // A reminder whose playlist is not on this device never fires
+        // (ReminderVisibility), and neither does one that is gone.
+        val pending = goAsync()
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                val dao = EntryPointAccessors
+                    .fromApplication(context.applicationContext, ReminderReceiverEntryPoint::class.java)
+                    .reminderDao()
+                val visible = runCatching { dao.visibleAnyScope(key) != null }.getOrDefault(true)
+                if (visible) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { fire(context, intent, key) }
+                } else {
+                    android.util.Log.i("ReminderReceiver", "reminder not shown: its playlist is not on this device, or it was removed")
+                }
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private fun fire(context: Context, intent: Intent, key: String) {
         val title = intent.getStringExtra(EXTRA_TITLE) ?: return
         val channelName = intent.getStringExtra(EXTRA_CHANNEL_NAME).orEmpty()
         val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID).orEmpty()
-        val key = intent.getStringExtra(EXTRA_REMINDER_KEY) ?: return
 
         // Foreground -> in-app banner; background -> system notification.
         val bus = EntryPointAccessors

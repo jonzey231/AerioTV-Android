@@ -28,4 +28,19 @@ interface LocalRecordingDao {
 
     @Query("DELETE FROM local_recording WHERE profileScope = :scope")
     suspend fun deleteScope(scope: String)
+
+    /** Every on-device recording that came from [playlistId], any profile. */
+    @Query("SELECT * FROM local_recording WHERE playlistId = :playlistId")
+    suspend fun allForPlaylist(playlistId: String): List<LocalRecordingEntity>
+
+    /**
+     * A playlist delete that keeps its recordings: they belong to no playlist
+     * now ("Saved on this device", the default profile's DVR under every
+     * playlist), played from the file only. Returns how many.
+     */
+    @Query("UPDATE local_recording SET playlistId = NULL, profileScope = '' WHERE playlistId = :playlistId")
+    suspend fun detachPlaylist(playlistId: String): Int
+
+    @Query("DELETE FROM local_recording WHERE playlistId = :playlistId")
+    suspend fun deleteForPlaylist(playlistId: String)
 }

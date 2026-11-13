@@ -700,20 +700,28 @@ fun PlaylistDetailScreen(
     }
 
     if (confirmDelete && playlist != null) {
-        com.aeriotv.android.ui.settings.AlertPrompt(
-            onDismissRequest = { confirmDelete = false },
-            title = "Delete playlist?",
-            message = "This removes \"${playlist.name}\" and its credentials from this " +
-                "device. If another playlist is saved, it becomes active.",
-            actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
-                    confirmDelete = false
-                    viewModel.deletePlaylist(playlist.id)
-                    onBack()
-                },
-                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { confirmDelete = false },
-            ),
-        )
+        PlaylistDeleteConfirm(
+            playlistId = playlist.id,
+            playlistName = playlist.name,
+            countRecordings = viewModel::onDeviceRecordingCount,
+            onDismiss = { confirmDelete = false },
+            onDelete = { keep ->
+                confirmDelete = false
+                viewModel.deletePlaylist(playlist.id, keep)
+                onBack()
+            },
+        ) { confirm ->
+            com.aeriotv.android.ui.settings.AlertPrompt(
+                onDismissRequest = { confirmDelete = false },
+                title = "Delete playlist?",
+                message = "This removes \"${playlist.name}\" and its credentials from this " +
+                    "device. If another playlist is saved, it becomes active.",
+                actions = listOf(
+                    com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) { confirm() },
+                    com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { confirmDelete = false },
+                ),
+            )
+        }
     }
 
     if (confirmRefreshAll && playlist != null) {

@@ -66,6 +66,10 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
             }
         if (!bypassKeyGate) {
             val key = requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
+            if (key != null && DispatcharrRequestGate.isKeyDeleted(key)) {
+                Log.i(TAG, "[AUTH] skipped ${request.method.value} $path: its playlist was deleted on this device")
+                throw DispatcharrError.KeyRejected()
+            }
             if (key != null && DispatcharrRequestGate.isKeyRejected(key)) {
                 Log.i(TAG, "[AUTH] skipped ${request.method.value} $path: this API key was rejected by the server; waiting for Edit Playlist")
                 throw DispatcharrError.KeyRejected()

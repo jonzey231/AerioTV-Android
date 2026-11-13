@@ -73,6 +73,7 @@ class PlaylistViewModel @Inject constructor(
     private val exoHolder: com.aeriotv.android.core.playback.AerioExoPlayerHolder,
     private val exoWindowState: com.aeriotv.android.feature.player.ExoWindowState,
     private val miniPlayerSession: com.aeriotv.android.feature.miniplayer.MiniPlayerSession,
+    private val castSender: com.aeriotv.android.core.cast.AerioCastSender,
     // Launch ordering only: the guide announces its cached paint here so the
     // other sections' CACHED restores can start right behind it instead of
     // waiting out the 20 s settle delay (see AppSettleGate.awaitGuidePainted).
@@ -3555,9 +3556,20 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The delete prompt's count: on-device recordings that came from
+     * [playlistId] (local captures and Save to Device copies), plus one being
+     * recorded from it now. Zero keeps the plain confirmation.
+     */
+    suspend fun onDeviceRecordingCount(playlistId: String): Int =
+        repository.onDeviceRecordingCount(playlistId) +
+            if (com.aeriotv.android.feature.dvr.LocalRecordingService.isRecordingFor(playlistId)) 1 else 0
+
     /** Delete a saved playlist by id. If the deleted row was the active one,
-     * fall back to the most-recent remaining playlist (or NeedsUrl if none). */
-    fun deletePlaylist(playlistId: String) {
+     * fall back to the most-recent remaining playlist (or NeedsUrl if none).
+     * [keepRecordings]: its on-device recordings stay as "Saved on this
+     * device"; false deletes them. Nothing is sent to the server. */
+    fun deletePlaylist(playlistId: String, keepRecordings: Boolean = true) {
         // Crash guard (Apple d051505 parity): stop every task that holds this
         // playlist BEFORE the row is deleted; none of them may read or write
         // the deleted record afterward.
@@ -3565,7 +3577,15 @@ class PlaylistViewModel @Inject constructor(
         cancelPlaylistTasks(playlistId)
         viewModelScope.launch {
             val wasActive = repository.activePlaylist()?.id == playlistId
-            repository.deletePlaylist(playlistId)
+            // An on-device recording from it stops now, keeping what it
+            // captured unless its recordings go with it.
+            if (com.aeriotv.android.feature.dvr.LocalRecordingService.playlistDeleted(appContext, playlistId, keepRecordings)) {
+                Log.i(TAG, "[PLAYLIST] delete ${playlistId.take(8)}: its on-device recording stopped")
+            }
+            // Nothing from it plays on: the player, the mini player or PiP,
+            // Multiview, and a Cast session (playback is the active playlist's).
+            if (wasActive) stopPlaybackForDelete(playlistId)
+            repository.deletePlaylist(playlistId, keepRecordings)
             if (wasActive) {
                 val remaining = repository.allOnce()
                 val next = remaining.firstOrNull()
@@ -3578,6 +3598,16 @@ class PlaylistViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun stopPlaybackForDelete(playlistId: String) {
+        runCatching { miniPlayerSession.dismiss() }
+        runCatching { exoWindowState.hide() }
+        runCatching { exoHolder.stop() }
+        runCatching { com.aeriotv.android.feature.multiview.MultiviewTilePlayers.stopAll("playlist deleted") }
+        runCatching { if (castSender.content.value != null) castSender.stopPlayback() }
+        runCatching { profileManager.requestClosePlayer() }
+        Log.i(TAG, "[PLAYLIST] delete ${playlistId.take(8)}: playback from it stopped")
     }
 
     fun clearPlaylist() {

@@ -208,6 +208,8 @@ class EncryptingPlaylistDao(
     // writes go through again (DeletedPlaylists).
     override suspend fun upsert(playlist: PlaylistEntity) {
         com.aeriotv.android.core.data.repository.DeletedPlaylists.reborn(playlist.id)
+        // A key saved again is this playlist's now, not a deleted one's.
+        com.aeriotv.android.core.network.DispatcharrRequestGate.forgetDeleted(playlist.apiKey)
         delegate.upsert(diverted(playlist).encrypted())
     }
 
@@ -247,6 +249,7 @@ class EncryptingPlaylistDao(
 
     override suspend fun upsertAsActive(entity: PlaylistEntity) {
         com.aeriotv.android.core.data.repository.DeletedPlaylists.reborn(entity.id)
+        com.aeriotv.android.core.network.DispatcharrRequestGate.forgetDeleted(entity.apiKey)
         delegate.upsertAsActive(diverted(entity).encrypted())
     }
 

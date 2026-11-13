@@ -239,6 +239,8 @@ class DispatcharrAuthBroker @Inject constructor(
             Log.i(TAG, "silentRebootstrap SKIP: playlist ${playlist.id.take(8)} has no creds (API Key mode)")
             return null
         }
+        // A deleted playlist signs in nowhere (playlist delete cutoff).
+        if (com.aeriotv.android.core.data.repository.DeletedPlaylists.isDeleted(playlist.id)) return null
         // The saved password goes only to a proven address (StoredSecrets):
         // never to a new server address the same-server check has not
         // passed. The row is read again: the caller's copy can predate the
@@ -264,8 +266,9 @@ class DispatcharrAuthBroker @Inject constructor(
         password: String,
     ): String? {
         return try {
-            // Re-read the row: a caller that waited may hold a stale copy.
-            val row = dao.byId(playlist.id) ?: playlist
+            // Re-read the row: a caller that waited may hold a stale copy. No
+            // row: the playlist was deleted, and nothing is sent for it.
+            val row = dao.byId(playlist.id) ?: return null
             // A profile switch since the caller read its row: the row now
             // carries another identity, and that identity's key must never be
             // replaced with this account's (2026-11-12, security).

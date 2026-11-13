@@ -2265,6 +2265,38 @@ class ProfileManager @Inject constructor(
     }
 
     /**
+     * The playlist was deleted on this device (playlist delete cutoff): its
+     * profiles and their stored sign-ins go, with their PINs and sign-in
+     * tags. Nothing is sent anywhere: no roster tombstone, so the server's
+     * roster and other devices keep these users. Their reminders and
+     * recordings are not touched here (the delete decides those). Returns
+     * the removed sign-ins' API keys, for the request gate.
+     */
+    fun forgetPlaylistProfiles(playlistId: String): List<String> {
+        val gone = store.forPlaylist(playlistId)
+        val keys = gone.mapNotNull { it.apiKey?.trim()?.takeIf { k -> k.isNotEmpty() } }
+        gone.filterNot { it.isDefault }.forEach { p ->
+            runCatching { pinStore.remove(p.id) }
+            runCatching { snapshotStamps.remove("$playlistId@${p.id}") }
+            rosterAdds.forget(p.id)
+            hostHolds.tag(p.id, null)
+            hostHolds.clearPausedAdd(p.id)
+        }
+        if (ProfileScope.activeOverlay()?.playlistId == playlistId) ProfileScope.activate(null)
+        store.removeForPlaylist(playlistId)
+        heldForRoute.remove(playlistId)
+        heldChanged()
+        Log.i(TAG, "[PROFILE] playlist ${playlistId.take(8)} deleted: ${gone.size} profile(s) and their sign-ins removed from this device")
+        return keys
+    }
+
+    /** True when a profile here still signs in with [key]. */
+    fun usesKey(key: String): Boolean = store.profiles.value.any { it.apiKey?.trim() == key.trim() }
+
+    /** Close any player route left open (the playlist it plays from was deleted). */
+    fun requestClosePlayer() { closePlayer.trySend(Unit) }
+
+    /**
      * The playlist was deleted: its recorded identity and its hold go. Held
      * profiles a sync merge moved to another playlist stay held until they
      * sign in again.

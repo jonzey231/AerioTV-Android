@@ -299,7 +299,8 @@ fun SettingsScreen(
                     onActivate = { pl -> viewModel.switchToPlaylist(pl.id) },
                     onAdd = onAddPlaylist,
                     onEdit = { pl -> onEditPlaylist(pl.id) },
-                    onDelete = { pl -> viewModel.deletePlaylist(pl.id) },
+                    onDelete = { pl, keep -> viewModel.deletePlaylist(pl.id, keep) },
+                    countRecordings = viewModel::onDeviceRecordingCount,
                 )
             }
 
@@ -420,7 +421,8 @@ private fun PlaylistsSection(
     onActivate: ((PlaylistEntity) -> Unit)? = null,
     onAdd: () -> Unit,
     onEdit: (PlaylistEntity) -> Unit,
-    onDelete: (PlaylistEntity) -> Unit,
+    onDelete: (PlaylistEntity, keepRecordings: Boolean) -> Unit,
+    countRecordings: suspend (String) -> Int,
 ) {
     val isTv = rememberIsTvDevice()
     // Apple's row context menu (long press): on tvOS "Use This Playlist"
@@ -615,19 +617,27 @@ private fun PlaylistsSection(
     }
 
     pendingDelete?.let { pl ->
-        // Apple's root-list alert, word for word.
-        com.aeriotv.android.ui.settings.AlertPrompt(
-            onDismissRequest = { pendingDelete = null },
-            title = "Delete Playlist?",
-            message = "This will remove \"${pl.name}\" from the app. Your server data will not be affected.",
-            actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
-                    pendingDelete = null
-                    onDelete(pl)
-                },
-                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
-            ),
-        )
+        PlaylistDeleteConfirm(
+            playlistId = pl.id,
+            playlistName = pl.name,
+            countRecordings = countRecordings,
+            onDismiss = { pendingDelete = null },
+            onDelete = { keep ->
+                pendingDelete = null
+                onDelete(pl, keep)
+            },
+        ) { confirm ->
+            // Apple's root-list alert, word for word.
+            com.aeriotv.android.ui.settings.AlertPrompt(
+                onDismissRequest = { pendingDelete = null },
+                title = "Delete Playlist?",
+                message = "This will remove \"${pl.name}\" from the app. Your server data will not be affected.",
+                actions = listOf(
+                    com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) { confirm() },
+                    com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
+                ),
+            )
+        }
     }
 }
 

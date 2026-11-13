@@ -125,6 +125,8 @@ class ProfileStore @Inject constructor(
 
     @Synchronized
     fun upsert(profile: DispatcharrProfile) {
+        // A key saved again is this profile's now, not a deleted playlist's.
+        com.aeriotv.android.core.network.DispatcharrRequestGate.forgetDeleted(profile.apiKey)
         val list = _profiles.value.filterNot { it.id == profile.id } + profile
         save(list)
     }
@@ -132,6 +134,7 @@ class ProfileStore @Inject constructor(
     @Synchronized
     fun update(id: String, transform: (DispatcharrProfile) -> DispatcharrProfile) {
         val list = _profiles.value.map { if (it.id == id) transform(it) else it }
+        list.firstOrNull { it.id == id }?.let { com.aeriotv.android.core.network.DispatcharrRequestGate.forgetDeleted(it.apiKey) }
         save(list)
     }
 

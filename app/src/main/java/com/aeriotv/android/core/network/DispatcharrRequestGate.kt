@@ -218,9 +218,31 @@ object DispatcharrRequestGate {
     /** Absolute end of [serverKey]'s 429 pause on [clock], 0 when not paused. */
     fun pausedUntilAt(serverKey: String): Long = pausedUntil[serverKey] ?: 0
 
-    /** True while [key] is known rejected (any playlist). */
-    fun isKeyRejected(key: String): Boolean =
-        key.isNotBlank() && !rejected[keyHash(key)].isNullOrEmpty()
+    /** True while [key] is known rejected (any playlist), or its playlist was deleted here. */
+    fun isKeyRejected(key: String): Boolean {
+        if (key.isBlank()) return false
+        val h = keyHash(key)
+        return !rejected[h].isNullOrEmpty() || h in deleted
+    }
+
+    /**
+     * Keys of playlists deleted on this device, and of their profiles
+     * (playlist delete cutoff, Logan 2026-11-12: "the app should no longer
+     * have access to anything within that playlist. Immediately."). Nothing
+     * goes out with them, and no prompt is raised for them. Only hashes are
+     * kept. A playlist or profile saved again with the key lifts it.
+     */
+    private val deleted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun markDeleted(key: String?) {
+        key?.trim()?.takeIf { it.isNotEmpty() }?.let { deleted += keyHash(it) }
+    }
+
+    fun forgetDeleted(key: String?) {
+        key?.trim()?.takeIf { it.isNotEmpty() }?.let { deleted -= keyHash(it) }
+    }
+
+    fun isKeyDeleted(key: String): Boolean = key.isNotBlank() && keyHash(key) in deleted
 
     /** True while [playlistId] has a rejected key on record (its own or a profile's). */
     fun isPlaylistRejected(playlistId: String): Boolean = rejected.values.any { set -> set.any { playlistOf(it) == playlistId } }
@@ -255,6 +277,7 @@ object DispatcharrRequestGate {
     fun clearKey(key: String) {
         // A key just proven good is never swapped for another one again.
         replaced.remove(keyHash(key))
+        deleted.remove(keyHash(key))
         rechecks.remove(keyHash(key))
         val holders = rejected.remove(keyHash(key)) ?: return
         if (_prompt.value?.holder in holders) _prompt.value = null
@@ -360,6 +383,7 @@ object DispatcharrRequestGate {
         rejected.clear()
         rechecks.clear()
         replaced.clear()
+        deleted.clear()
         _prompt.value = null
     }
 }

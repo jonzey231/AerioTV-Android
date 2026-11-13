@@ -187,6 +187,11 @@ class LocalRecordingService : Service() {
         startForegroundCompat(notif)
 
         val recJob = scope.launch {
+            // The playlist this records from, read once at the start (a later
+            // read could name whichever playlist is active by the end).
+            val recPlaylistId = runCatching { playlistDao.firstActive()?.id }.getOrNull()
+            _active.value = _active.value?.copy(playlistId = recPlaylistId)
+            runningPlaylistId = recPlaylistId
             // Acquire the wake lock before the read-loop if the user left the
             // "Keep device awake during recording" toggle on. Bounded to
             // duration + 1 min so a hung job can never hold the CPU awake
@@ -256,11 +261,17 @@ class LocalRecordingService : Service() {
             // Persist the row so the DVR tab can surface it. Finalize on any
             // bytes (a stopped partial is still a valid recording); discard an
             // empty write so a 0-byte file isn't left in Downloads.
-            if (bytesWritten > 0L) sink.finalize() else sink.discard()
+            // Its playlist deleted meanwhile: kept without a playlist ("Saved
+            // on this device"), or discarded with the playlist's recordings.
+            val deleted = deletedOutcome(recPlaylistId)
+            if (bytesWritten > 0L && deleted != false) sink.finalize() else sink.discard()
             val finalBytes = sink.resolveBytes() ?: bytesWritten
-            if (finalBytes > 0L) {
+            if (finalBytes > 0L && deleted != false) {
+                // Not cancellable: a stop (the user's, or a playlist delete)
+                // cancels this job, and the row of what it captured must
+                // still be written.
                 runCatching {
-                    localRecordingDao.insert(
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { localRecordingDao.insert(
                         LocalRecordingEntity(
                             channelName = channelName.ifBlank { title },
                             title = title,
@@ -269,9 +280,9 @@ class LocalRecordingService : Service() {
                             endedAt = System.currentTimeMillis(),
                             byteSize = finalBytes,
                             status = status,
-                            playlistId = playlistDao.firstActive()?.id,
-                        ),
-                    )
+                            playlistId = if (deleted == true) null else recPlaylistId,
+                        ).let { if (deleted == true) it.copy(profileScope = "") else it },
+                    ) }
                 }.onFailure { Log.w(TAG, "Couldn't persist local recording row", it) }
             }
             releaseWakeLock()
@@ -331,6 +342,8 @@ class LocalRecordingService : Service() {
         startForegroundCompat(buildNotification(title, "Saving to device…"))
 
         val recJob = scope.launch {
+            val dlPlaylistId = runCatching { playlistDao.firstActive()?.id }.getOrNull()
+            runningPlaylistId = dlPlaylistId
             // A multi-GB recording can take minutes; hold the CPU awake (gated
             // by the same DVR keep-awake toggle) so doze doesn't stall the
             // read loop. Generous 6h cap as a leak backstop.
@@ -402,7 +415,8 @@ class LocalRecordingService : Service() {
             // A partial download is a truncated, useless video: only keep a
             // fully-completed pull, and discard anything else so it doesn't
             // linger in the user's Downloads.
-            val complete = status == "completed" && bytesWritten > 0L
+            val deleted = deletedOutcome(dlPlaylistId)
+            val complete = status == "completed" && bytesWritten > 0L && deleted != false
             if (complete) sink.finalize() else sink.discard()
             val finalBytes = sink.resolveBytes() ?: bytesWritten
             val ok = complete && finalBytes > 0L
@@ -417,8 +431,8 @@ class LocalRecordingService : Service() {
                             endedAt = System.currentTimeMillis(),
                             byteSize = finalBytes,
                             status = "completed",
-                            playlistId = playlistDao.firstActive()?.id,
-                        ),
+                            playlistId = if (deleted == true) null else dlPlaylistId,
+                        ).let { if (deleted == true) it.copy(profileScope = "") else it },
                     )
                 }.onFailure { Log.w(TAG, "Couldn't persist downloaded recording", it) }
             }
@@ -681,7 +695,42 @@ class LocalRecordingService : Service() {
             val channelName: String,
             val startedAt: Long,
             val endsAt: Long,
+            /** The playlist it records from, read when it starts (a delete stops it). */
+            val playlistId: String? = null,
         )
+
+        /** A recording (not a download) from [playlistId] is running now. */
+        fun isRecordingFor(playlistId: String): Boolean = _active.value?.playlistId == playlistId
+
+        /** The playlist the running recording or download is from, null when idle or not known yet. */
+        @Volatile private var runningPlaylistId: String? = null
+
+        /** Playlists deleted while their capture ran: true = keep what it captured. */
+        private val deletedWhileRunning = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+        /**
+         * [playlistId] is being deleted (playlist delete cutoff): a recording
+         * or download from it stops now. A recording keeps what it captured
+         * as "Saved on this device" when [keep], else its file goes. True when
+         * one was running for it.
+         */
+        fun playlistDeleted(context: Context, playlistId: String, keep: Boolean): Boolean {
+            if (!isActive || runningPlaylistId != playlistId) return false
+            deletedWhileRunning[playlistId] = keep
+            stop(context)
+            return true
+        }
+
+        /**
+         * What a finished capture from [playlistId] does: null = an ordinary
+         * row on its playlist; true = kept without a playlist (it was deleted
+         * meanwhile); false = discarded (deleted with its recordings).
+         */
+        internal fun deletedOutcome(playlistId: String?): Boolean? {
+            playlistId ?: return null
+            deletedWhileRunning.remove(playlistId)?.let { return it }
+            return if (com.aeriotv.android.core.data.repository.DeletedPlaylists.isDeleted(playlistId)) true else null
+        }
 
         private val _active = MutableStateFlow<Active?>(null)
 
@@ -705,6 +754,7 @@ class LocalRecordingService : Service() {
 
         private fun setActive(value: Boolean, details: Active? = null) {
             isActive = value
+            if (!value) runningPlaylistId = null
             _activeFlow.value = value
             _active.value = if (value) details else null
         }

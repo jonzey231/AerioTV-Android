@@ -324,7 +324,20 @@ fun DvrTabContent(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(items = state.visible, key = { it.id }) { rec ->
+            // Recordings kept from a deleted playlist come last, under their
+            // own header (DvrSavedOnDevice).
+            items(items = DvrSavedOnDevice.rows(state.visible), key = { (it as? DvrViewModel.Recording)?.id ?: DvrSavedOnDevice.HEADER_KEY }) { entry ->
+                if (entry !is DvrViewModel.Recording) {
+                    Text(
+                        DvrSavedOnDevice.TITLE,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 2.dp, start = 4.dp),
+                    )
+                    return@items
+                }
+                val rec = entry
                 RecordingRow(
                     rec = rec,
                     palette = palette,

@@ -56,7 +56,8 @@ class PackageReplacedReceiver : BroadcastReceiver() {
 
     private suspend fun rescheduleReminders(context: Context) {
         val now = System.currentTimeMillis()
-        val future = reminderDao.allScopesOnce().filter { it.startMillis > now }
+        // Orphans (their playlist is not on this device) get no alarm (ReminderVisibility).
+        val future = reminderDao.allVisibleScopesOnce().filter { it.startMillis > now }
         if (future.isEmpty()) return
         val mgr = context.getSystemService(AlarmManager::class.java) ?: return
         future.forEach { entity ->

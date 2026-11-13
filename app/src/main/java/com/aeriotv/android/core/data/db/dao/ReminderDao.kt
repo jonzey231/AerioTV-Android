@@ -23,12 +23,14 @@ interface ReminderDao {
     suspend fun getOnceIn(reminderKey: String, scope: String): ReminderEntity?
     suspend fun getOnce(reminderKey: String): ReminderEntity? = getOnceIn(reminderKey, ProfileScope.current())
 
-    @Query("SELECT * FROM reminder WHERE profileScope = :scope ORDER BY startMillis ASC")
+    // Lists and badges show only reminders whose playlist is on this device
+    // (ReminderVisibility): an orphan's playlist was deleted here.
+    @Query("SELECT * FROM reminder WHERE profileScope = :scope AND $VISIBLE ORDER BY startMillis ASC")
     fun observeAllIn(scope: String): Flow<List<ReminderEntity>>
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeAll(): Flow<List<ReminderEntity>> = ProfileScope.token.flatMapLatest { observeAllIn(it) }
 
-    @Query("SELECT EXISTS(SELECT 1 FROM reminder WHERE reminderKey = :reminderKey AND profileScope = :scope)")
+    @Query("SELECT EXISTS(SELECT 1 FROM reminder WHERE reminderKey = :reminderKey AND profileScope = :scope AND $VISIBLE)")
     fun observeIsSetIn(reminderKey: String, scope: String): Flow<Boolean>
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeIsSet(reminderKey: String): Flow<Boolean> =
@@ -44,5 +46,30 @@ interface ReminderDao {
 
     @Query("DELETE FROM reminder WHERE profileScope = :scope")
     suspend fun deleteScope(scope: String)
+
+    /** Every visible reminder, any profile (alarms after an app update). */
+    @Query("SELECT * FROM reminder WHERE $VISIBLE ORDER BY startMillis ASC")
+    suspend fun allVisibleScopesOnce(): List<ReminderEntity>
+
+    /** Every reminder set on [playlistId], any profile. */
+    @Query("SELECT * FROM reminder WHERE playlistId = :playlistId")
+    suspend fun allForPlaylist(playlistId: String): List<ReminderEntity>
+
+    /** Reminders whose playlist is not on this device (any profile). */
+    @Query("SELECT * FROM reminder WHERE NOT $VISIBLE")
+    suspend fun orphansOnce(): List<ReminderEntity>
+
+    /** [reminderKey] in any profile, visible only. Null when absent or orphaned. */
+    @Query("SELECT * FROM reminder WHERE reminderKey = :reminderKey AND $VISIBLE LIMIT 1")
+    suspend fun visibleAnyScope(reminderKey: String): ReminderEntity?
+
+    /** An orphan comes back on [playlistId], which has its channel. */
+    @Query("UPDATE reminder SET playlistId = :playlistId WHERE reminderKey = :reminderKey AND profileScope = :scope")
+    suspend fun rehome(reminderKey: String, scope: String, playlistId: String)
+
+    companion object {
+        /** SQL: the reminder's playlist is on this device (or it predates playlist ids). */
+        const val VISIBLE = "(playlistId IS NULL OR playlistId IN (SELECT id FROM playlists))"
+    }
     suspend fun clear() = deleteScope(ProfileScope.current())
 }

@@ -306,20 +306,28 @@ fun PlaylistsScreen(
     }
 
     pendingDelete?.let { pl ->
-        com.aeriotv.android.ui.settings.AlertPrompt(
-            onDismissRequest = { pendingDelete = null },
-            title = "Delete playlist?",
-            message = "This removes \"${pl.name}\" and its credentials from this device. " +
-                if (pl.id == activeId) "The next playlist on the list will be activated." else "",
-            actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
-                    val id = pl.id
-                    pendingDelete = null
-                    viewModel.deletePlaylist(id)
-                },
-                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
-            ),
-        )
+        PlaylistDeleteConfirm(
+            playlistId = pl.id,
+            playlistName = pl.name,
+            countRecordings = viewModel::onDeviceRecordingCount,
+            onDismiss = { pendingDelete = null },
+            onDelete = { keep ->
+                val id = pl.id
+                pendingDelete = null
+                viewModel.deletePlaylist(id, keep)
+            },
+        ) { confirm ->
+            com.aeriotv.android.ui.settings.AlertPrompt(
+                onDismissRequest = { pendingDelete = null },
+                title = "Delete playlist?",
+                message = "This removes \"${pl.name}\" and its credentials from this device. " +
+                    if (pl.id == activeId) "The next playlist on the list will be activated." else "",
+                actions = listOf(
+                    com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) { confirm() },
+                    com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
+                ),
+            )
+        }
     }
 }
 

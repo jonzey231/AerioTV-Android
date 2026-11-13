@@ -237,7 +237,9 @@ fun DvrMediaTabContent(
         else (row.positionMs / (if (row.durationMs > 0) row.durationMs.toDouble() else total.coerceAtLeast(1.0))).toFloat().coerceIn(0f, 1f)
     }
 
-    val recordings = state.recordings
+    // Kept from a deleted playlist: their own section, not the library (DvrSavedOnDevice).
+    val savedOnDevice = remember(state.recordings) { state.recordings.filter { it.savedOnDevice }.sortedByDescending { it.startMillis } }
+    val recordings = remember(state.recordings) { state.recordings.filterNot { it.savedOnDevice } }
     val recordingNow = remember(recordings, now) { recordings.filter { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording }.sortedByDescending { it.startMillis } }
     val scheduled = remember(recordings, now) { recordings.filter { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Scheduled }.sortedBy { it.startMillis } }
     val completed = remember(recordings, now) { recordings.filter { val s = it.effectiveStatus(now); s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped } }
@@ -399,7 +401,7 @@ fun DvrMediaTabContent(
         }
     }
 
-    if (recordings.isEmpty() && !state.isLoading) {
+    if (recordings.isEmpty() && savedOnDevice.isEmpty() && !state.isLoading) {
         Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
             Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No Recordings", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
@@ -430,6 +432,7 @@ fun DvrMediaTabContent(
             TvDvrPage(
                 gridState = gridState, now = now,
                 continueWatching = continueWatching, recordingNow = recordingNow, scheduled = scheduled,
+                savedOnDevice = savedOnDevice,
                 recentRecordings = recentRecordings, filteredLibrary = filteredLibrary, available = available,
                 channelName = channelName, channelLogo = channelLogo, progressOf = progressOf,
                 kindPills = kindPills, selectedKind = selectedKind, onKind = { selectedKind = it },
@@ -459,19 +462,34 @@ fun DvrMediaTabContent(
                 ),
                 PageDeck("Recently Recorded", if (recentRecordings.size > 1) recentRecordings else emptyList(), { it.id }, recentCard),
             ),
-            rows = if (scheduled.isEmpty()) emptyList() else listOf(PageRow("scheduled") {
-                Column {
-                    PageSectionTitle("Scheduled")
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(scheduled.size, key = { scheduled[it].id }) { i ->
-                            val rec = scheduled[i]
-                            Box(modifier = Modifier.width(150.dp)) {
-                                DvrPosterCard(rec, channelLogo(rec), 0f, now, onClick = { showInfo(rec) }, menu = { close -> menuItems(rec, close) })
+            rows = buildList {
+                if (scheduled.isNotEmpty()) add(PageRow("scheduled") {
+                    Column {
+                        PageSectionTitle("Scheduled")
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(scheduled.size, key = { scheduled[it].id }) { i ->
+                                val rec = scheduled[i]
+                                Box(modifier = Modifier.width(150.dp)) {
+                                    DvrPosterCard(rec, channelLogo(rec), 0f, now, onClick = { showInfo(rec) }, menu = { close -> menuItems(rec, close) })
+                                }
                             }
                         }
                     }
-                }
-            }),
+                })
+                if (savedOnDevice.isNotEmpty()) add(PageRow(DvrSavedOnDevice.HEADER_KEY) {
+                    Column {
+                        PageSectionTitle(DvrSavedOnDevice.TITLE)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(savedOnDevice.size, key = { savedOnDevice[it].id }) { i ->
+                                val rec = savedOnDevice[i]
+                                Box(modifier = Modifier.width(150.dp)) {
+                                    DvrPosterCard(rec, channelLogo(rec), progressOf(rec), now, onClick = { play(rec) }, menu = { close -> menuItems(rec, close) })
+                                }
+                            }
+                        }
+                    }
+                })
+            },
             headerTitle = if (isSearching) "Results" else "All Recordings",
             headerCount = filteredLibrary.size,
             sortMenu = {
@@ -502,7 +520,8 @@ fun DvrMediaTabContent(
             cell = { rec -> DvrPosterCard(rec, channelLogo(rec), progressOf(rec), now, onClick = { play(rec) }, menu = { close -> menuItems(rec, close) }) },
             emptyContent = {
                 if (state.isLoading) CircularProgressIndicator()
-                else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Only "Saved on this device" recordings: that row is the page.
+                else if (savedOnDevice.isEmpty()) Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
             },
             railLetters = available,
             railIndexOf = { letter -> filteredLibrary.indexOfFirst { bucket(it.title) == letter } },
@@ -721,6 +740,8 @@ private fun TvDvrPage(
     recordingNow: List<Rec>,
     scheduled: List<Rec>,
     recentRecordings: List<Rec>,
+    /** Kept from a deleted playlist (DvrSavedOnDevice). */
+    savedOnDevice: List<Rec>,
     filteredLibrary: List<Rec>,
     available: Set<Char>,
     channelName: (Rec) -> String,
@@ -866,6 +887,7 @@ private fun TvDvrPage(
             shelf("Recording Now", recordingNow) { onPlay(it) },
             shelf("Scheduled", scheduled) { onInfo(it) },
             shelf("Recent Recordings", if (recentRecordings.size > 1) recentRecordings else emptyList()) { onPlay(it) },
+            shelf(DvrSavedOnDevice.TITLE, savedOnDevice) { onPlay(it) },
         ),
         headerTitle = if (isSearching) "Results" else "All Recordings",
         headerCount = filteredLibrary.size,
@@ -899,7 +921,7 @@ private fun TvDvrPage(
         },
         emptyContent = {
             if (isLoading) com.aeriotv.android.ui.tv.TvGatedSpinner()
-            else Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else if (savedOnDevice.isEmpty()) Text("No Recordings", color = MaterialTheme.colorScheme.onSurfaceVariant)
         },
         isLoading = isLoading,
         railLetters = available,

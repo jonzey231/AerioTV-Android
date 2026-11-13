@@ -3888,6 +3888,15 @@ class PlaylistRepository @Inject constructor(
             if (binding.isDefaultProfile) dao.updateChannelCount(playlistId, channels.size)
         }
         stampSnapshot(playlistId, binding)
+        // Reminders kept from a deleted playlist come back on this one when it
+        // has their channel, and this playlist's own reminders get their
+        // alarms back after it was re-added (ReminderVisibility).
+        runCatching {
+            val back = com.aeriotv.android.feature.reminders.ReminderAlarms.restoreForPlaylist(
+                context, database.reminderDao(), playlistId, channels.mapTo(HashSet()) { it.name },
+            )
+            if (back > 0) Log.i("PlaylistRepo", "[REMINDER] $back reminder(s) back on ${playlistId.take(8)}: it has their channel")
+        }.onFailure { Log.w("PlaylistRepo", "reminder restore failed", it) }
     }
 
     /**
@@ -4279,7 +4288,25 @@ class PlaylistRepository @Inject constructor(
      * the cleanup that used to be implicit has to be explicit here or the
      * rows would outlive the playlist forever.
      */
-    suspend fun deletePlaylist(playlistId: String): Result<Unit> = runCatching {
+    /**
+     * On-device recordings that came from [playlistId] (local captures and
+     * Save to Device copies, every profile): the delete prompt's count.
+     */
+    suspend fun onDeviceRecordingCount(playlistId: String): Int =
+        runCatching { database.localRecordingDao().allForPlaylist(playlistId).size }.getOrDefault(0)
+
+    /**
+     * Delete [playlistId] from this device (playlist delete cutoff, Logan
+     * 2026-11-12: "If the playlist is deleted then the app should no longer
+     * have access to anything within that playlist. Immediately."). Nothing
+     * is ever sent to the server for it: no server recording or rule is
+     * cancelled, stopped, or deleted.
+     *
+     * [keepRecordings]: its on-device recordings stay as "Saved on this
+     * device" (no playlist, played from the file); false deletes their files
+     * and rows. Every caller but the delete prompt keeps them.
+     */
+    suspend fun deletePlaylist(playlistId: String, keepRecordings: Boolean = true): Result<Unit> = runCatching {
         // Crash guard (Apple d051505 parity): mark the id deleted and stop
         // every background task that holds it BEFORE anything is purged, so
         // none of them writes rows for this playlist after its next
@@ -4303,6 +4330,7 @@ class PlaylistRepository @Inject constructor(
         // The VOD snapshot file is keyed by the playlist's IDENTITY, which is
         // derived from the row, so compute it BEFORE the row is gone.
         val row = dao.byId(playlistId)
+        cutOffPlaylist(playlistId, row, keepRecordings)
         // The row goes first (Apple performServerCascadeDelete parity): the
         // Settings list observes it, so the playlist disappears at once
         // instead of after the purges below, which took about 6 s on a phone
@@ -4323,6 +4351,49 @@ class PlaylistRepository @Inject constructor(
             runCatching { vodSnapshotStore.delete(vodSnapshotStore.identity(row)) }
                 .onFailure { Log.w("PlaylistRepo", "delete: VOD snapshot purge failed", it) }
         }
+    }
+
+    /**
+     * The parts of a playlist delete that make it unreachable at once, before
+     * its row goes:
+     * - its sign-ins: the playlist's own key and its profiles' keys are
+     *   refused at the request gate (every API call, stream, and logo), unless
+     *   another playlist here still uses the same key; its profiles and their
+     *   stored sign-ins are removed; its held-key prompt and re-checks end;
+     * - its reminders stay, with their alarms cancelled (ReminderVisibility);
+     * - its on-device recordings are kept as "Saved on this device" or
+     *   deleted, as the user chose.
+     */
+    private suspend fun cutOffPlaylist(playlistId: String, row: PlaylistEntity?, keepRecordings: Boolean) {
+        val profiles = profileManager.get()
+        // The playlist's own key (the raw row), and the active profile's when one is overlaid.
+        val own = runCatching { withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { dao.byId(playlistId) } }.getOrNull()
+        val keys = (listOfNotNull(own?.apiKey?.trim()?.takeIf { it.isNotEmpty() }, row?.apiKey?.trim()?.takeIf { it.isNotEmpty() }) +
+            runCatching { profiles.forgetPlaylistProfiles(playlistId) }.getOrDefault(emptyList())).toSet()
+        val others = runCatching { dao.allOnce() }.getOrDefault(emptyList()).filter { it.id != playlistId }
+        val stillUsed = keys.filter { k -> others.any { it.apiKey?.trim() == k } || profiles.usesKey(k) }.toSet()
+        (keys - stillUsed).forEach { com.aeriotv.android.core.network.DispatcharrRequestGate.markDeleted(it) }
+        com.aeriotv.android.core.network.DispatcharrRequestGate.clearPlaylist(playlistId)
+        val reminders = runCatching {
+            com.aeriotv.android.feature.reminders.ReminderAlarms.suspendForPlaylist(context, database.reminderDao(), playlistId)
+        }.getOrDefault(0)
+        val recDao = database.localRecordingDao()
+        val recordings = runCatching {
+            if (keepRecordings) {
+                recDao.detachPlaylist(playlistId)
+            } else {
+                val rows = recDao.allForPlaylist(playlistId)
+                rows.forEach { com.aeriotv.android.core.data.LocalRecordingFiles.delete(context, it.filePath) }
+                recDao.deleteForPlaylist(playlistId)
+                rows.size
+            }
+        }.getOrDefault(0)
+        Log.i(
+            "PlaylistRepo",
+            "[PLAYLIST] delete ${playlistId.take(8)}: ${keys.size - stillUsed.size} sign-in key(s) refused from now on, " +
+                "$reminders reminder(s) kept with alarms cancelled, $recordings on-device recording(s) " +
+                if (keepRecordings) "kept as Saved on this device" else "deleted",
+        )
     }
 
     /**

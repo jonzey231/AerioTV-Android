@@ -99,6 +99,13 @@ class DvrViewModel @Inject constructor(
          */
         val playbackUrl: String? = null,
         /**
+         * An on-device recording whose playlist was deleted with "Delete,
+         * Keep Recordings" (or one from before playlist ids): it belongs to
+         * no playlist, shows in "Saved on this device" under every playlist,
+         * and plays from its file only.
+         */
+        val savedOnDevice: Boolean = false,
+        /**
          * Dispatcharr channel id this recording is for (audit task #50
          * watch-live). Populated on server recordings from the
          * Dispatcharr API response; null on local recordings (the source
@@ -1118,17 +1125,7 @@ class DvrViewModel @Inject constructor(
      * SAF content:// URI, a file:// URI, and a bare filesystem path (the
      * app-private fallback). Best-effort; the Room row is dropped regardless.
      */
-    private fun deleteLocalFile(path: String) {
-        runCatching {
-            when {
-                path.startsWith("content://") ->
-                    appContext.contentResolver.delete(android.net.Uri.parse(path), null, null)
-                path.startsWith("file://") ->
-                    android.net.Uri.parse(path).path?.let { java.io.File(it).delete() }
-                else -> java.io.File(path).delete()
-            }
-        }
-    }
+    private fun deleteLocalFile(path: String) = com.aeriotv.android.core.data.LocalRecordingFiles.delete(appContext, path)
 
     /**
      * Fill in programme title/description for server recordings the server left
@@ -1504,6 +1501,7 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
         status = status,
         fileSizeBytes = byteSize,
         playbackUrl = playable,
+        savedOnDevice = playlistId == null,
     )
 }
 

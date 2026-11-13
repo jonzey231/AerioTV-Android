@@ -1,7 +1,6 @@
 package com.aeriotv.android.core.data.db.entity
 
 import androidx.room.Entity
-import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.ColumnInfo
 import com.aeriotv.android.core.profiles.ProfileScope
@@ -14,24 +13,18 @@ import com.aeriotv.android.core.profiles.ProfileScope
  * The alarm itself is scheduled with AlarmManager at [startMillis] minus a
  * 5-minute pre-roll so users get a heads-up before the programme starts.
  *
- * `playlistId` is the new (DB v9) FK to PlaylistEntity. Cascade-delete on
- * playlist removal so a stale reminder doesn't outlive its source server.
- * Nullable + ON DELETE CASCADE so pre-v9 rows survive with null playlistId.
- * The AlarmManager registration is NOT auto-cancelled by this cascade, the
- * pending intent fires harmlessly with no row to fetch, and the broadcast
- * receiver no-ops on null lookup.
+ * `playlistId` is the playlist the reminder was set on. A playlist delete
+ * keeps its reminders (Logan 2026-11-12: "Leave them but make sure they don't
+ * appear on that same device without that playlist on it"), so since DB v40
+ * this is no longer a cascading foreign key: a reminder whose playlist is
+ * gone is ORPHANED (ReminderVisibility). It is hidden from every list and
+ * badge, its alarm is cancelled and never set again, and it comes back
+ * (re-homed, re-scheduled if still ahead) when a playlist with its channel
+ * is on this device again. Null = a row from before v9, always visible.
  */
 @Entity(
     tableName = "reminder",
     primaryKeys = ["reminderKey", "profileScope"],
-    foreignKeys = [
-        ForeignKey(
-            entity = PlaylistEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["playlistId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
     indices = [Index("playlistId")],
 )
 data class ReminderEntity(
