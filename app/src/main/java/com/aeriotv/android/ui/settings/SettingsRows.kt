@@ -52,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -98,8 +99,28 @@ object SettingsCardMetrics {
     val rowCorner = 10.dp
     /** Side gutter from the page edge to the card. */
     val gutter = 16.dp
-    /** Vertical space between two sections (header to previous footer). */
-    val sectionSpacing = 24.dp
+    /**
+     * Touch: the space between two sections, on every Settings page. Apple's
+     * inset-grouped list, measured on the iPhone 17e and the iPad Pro 11-inch
+     * simulators (2026-11-13, points): a card's bottom edge to the next
+     * header's glyphs 30.6, header glyphs to their card 13.0, a card to its
+     * footer's glyphs 10.0, and footer glyphs to the next header's 19.8. With
+     * [headerBottomGap], [footerTopGap], and [footerPull] this spacing lands
+     * the same distances here. Android TV keeps its pane spacing
+     * (settingsSectionSpacing).
+     */
+    val sectionSpacing = 27.4.dp
+    /** Touch: under a section header, so its glyphs sit Apple's 13.0 above the card. */
+    val headerBottomGap = 9.3.dp
+    /** Touch: above a section footer, so its glyphs sit Apple's 10.0 below the card. */
+    val footerTopGap = 7.2.dp
+    /**
+     * Touch: how far a footer that ends a section pulls the next section up.
+     * Apple's next header follows a footer at 19.8, much closer than it
+     * follows a bare card (30.6), so a footer gives back part of the
+     * section spacing.
+     */
+    val footerPull = 12.3.dp
     /** Divider inset for a plain row (text starts at the row inset). */
     val dividerInset = 16.dp
     /** Divider inset for a row with a leading icon tile (16 + tile + 12). */
@@ -215,7 +236,11 @@ fun SettingsSectionHeader(
         // page background. Touch keeps the theme tint.
         color = color ?: if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.textThemeTint,
         fontWeight = FontWeight.SemiBold,
-        modifier = modifier.padding(start = settingsRowInsetH(), end = settingsRowInsetH(), bottom = 6.dp),
+        modifier = modifier.padding(
+            start = settingsRowInsetH(),
+            end = settingsRowInsetH(),
+            bottom = if (rememberIsTvDevice()) 6.dp else SettingsCardMetrics.headerBottomGap,
+        ),
     )
 }
 
@@ -239,20 +264,48 @@ fun SettingsSectionTitleHeader(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** Footer caption under a section card, in the dim tint. */
+/**
+ * Footer caption under a section card, in the dim tint. [endsSection]: the
+ * footer is the last thing in its section, so on phones and tablets the next
+ * section follows at Apple's footer distance ([Modifier.settingsFooterPull]).
+ * Leave it false for a footer with more content after it in the same column.
+ */
 @Composable
-fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier) {
+fun SettingsSectionFooter(text: String, modifier: Modifier = Modifier, endsSection: Boolean = false) {
+    val isTv = rememberIsTvDevice()
     Text(
         text = text,
         style = settingsFootnoteStyle().subtext(),
         // TV: Apple TV's tvFooter ink, textTertiary (the eyebrow's color).
-        color = if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else settingsDimTint(),
+        color = if (isTv) MaterialTheme.colorScheme.tertiary else settingsDimTint(),
         // Tagged so a TV row-card stack leaves it bare (no card behind it)
         // when a footer sits between rows.
         modifier = modifier
             .layoutId(SettingsFooterLayoutId)
-            .padding(start = settingsRowInsetH(), end = settingsRowInsetH(), top = 6.dp),
+            .then(if (endsSection) Modifier.settingsFooterPull() else Modifier)
+            .padding(
+                start = settingsRowInsetH(),
+                end = settingsRowInsetH(),
+                top = if (isTv) 6.dp else SettingsCardMetrics.footerTopGap,
+            ),
     )
+}
+
+/**
+ * Phones and tablets: a section's closing footer reports
+ * [SettingsCardMetrics.footerPull] less height than it draws, so the next
+ * section starts Apple's footer distance below it rather than the full
+ * section spacing. It only draws into that spacing, which is empty. Android
+ * TV is unchanged.
+ */
+@Composable
+fun Modifier.settingsFooterPull(): Modifier {
+    if (rememberIsTvDevice()) return this
+    val pull = with(LocalDensity.current) { SettingsCardMetrics.footerPull.roundToPx() }
+    return this.layout { measurable, constraints ->
+        val p = measurable.measure(constraints)
+        layout(p.width, (p.height - pull).coerceAtLeast(0)) { p.place(0, 0) }
+    }
 }
 
 /**
@@ -696,7 +749,7 @@ fun SettingsSection(
             else SettingsSectionHeader(header, color = headerColor)
         }
         SettingsCard { content() }
-        if (footer != null) SettingsSectionFooter(footer)
+        if (footer != null) SettingsSectionFooter(footer, endsSection = true)
     }
 }
 

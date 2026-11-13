@@ -260,7 +260,10 @@ fun PlaylistDetailScreen(
                 top = 16.dp,
                 bottom = if (isTv) 32.dp else LocalTabBarBottomInset.current,
             ),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            // Phones and tablets: the shared section spacing (Apple's rhythm).
+            verticalArrangement = Arrangement.spacedBy(
+                com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing),
+            ),
         ) {
             // Apple's order: iOS/iPadOS put the read-only Connection Details
             // and Permissions first; tvOS puts Actions first so a focusable
@@ -763,7 +766,7 @@ private fun Section(
     Column {
         com.aeriotv.android.ui.settings.SettingsSectionHeader(header)
         com.aeriotv.android.ui.settings.SettingsCard { content() }
-        if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer)
+        if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer, endsSection = true)
     }
 }
 

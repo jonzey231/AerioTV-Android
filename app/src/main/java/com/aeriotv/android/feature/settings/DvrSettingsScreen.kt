@@ -196,7 +196,7 @@ fun DvrSettingsScreen(
                 top = 12.dp,
                 bottom = LocalTabBarBottomInset.current,
             ),
-            verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
+            verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing)),
         ) {
             // Section order is Apple's: Default Recording Buffers, Recording
             // Destination, Local Storage, Storage Location, Behavior, Danger Zone.

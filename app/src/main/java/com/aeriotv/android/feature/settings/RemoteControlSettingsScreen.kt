@@ -323,7 +323,7 @@ fun RemoteControlSettingsScreen(
                     .settingsPaneTopEdge(paneScroll)
                     .verticalScroll(paneScroll)
                     .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = LocalTabBarBottomInset.current),
-                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
+                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing)),
             ) {
                 SettingsSection(header = "On-Screen Hints") {
                     SettingsToggleRow(

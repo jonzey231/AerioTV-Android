@@ -750,6 +750,7 @@ fun ProfilesSection(playlistId: String) {
         }
         SettingsSectionFooter(
             "Each profile signs in as its own Dispatcharr user. Favorites, recordings, and watch history are kept per profile on this device.",
+            endsSection = true,
         )
     }
 

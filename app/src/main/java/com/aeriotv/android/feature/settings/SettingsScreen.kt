@@ -89,6 +89,7 @@ import com.aeriotv.android.core.tv.TvQrLink
 import com.aeriotv.android.core.tv.TvQrLinkDialog
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.settings.SettingsNavRow
+import com.aeriotv.android.ui.settings.settingsFooterPull
 import com.aeriotv.android.feature.whatsnew.WhatsNewSheetOnDemand
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
@@ -329,10 +330,15 @@ fun SettingsScreen(
             // same gate as before; Android TV has no sender (the TV is the
             // device being set up).
             if (content != SettingsRootContent.AboutOnly && !isChild && canSetUpTv) item("set-up-another-device") {
-                SetUpAnotherDeviceCard(
-                    subtitle = SET_UP_ANOTHER_DEVICE_LIST_SUBTITLE,
-                    onClick = { showSetUpTv = true },
-                )
+                // A section with no header starts lower after a footer: Apple
+                // puts this card 25.0 below the hint's glyphs, where the
+                // footer distance alone leaves 16.8.
+                Box(Modifier.padding(top = SET_UP_CARD_TOP_GAP)) {
+                    SetUpAnotherDeviceCard(
+                        subtitle = SET_UP_ANOTHER_DEVICE_LIST_SUBTITLE,
+                        onClick = { showSetUpTv = true },
+                    )
+                }
             }
 
             // MARK: App Settings / Sync / DVR / Developer
@@ -584,12 +590,16 @@ private fun PlaylistsSection(
                 // that does not exist on either platform.
                 // iPhone and iPad (measured on Apple's simulators): the hint's
                 // glyphs start 14 dp below the card; Android's sat 3.4 dp below.
+                // It closes the Playlists section, so the next one follows at
+                // Apple's footer distance (settingsFooterPull).
                 Row(
-                    modifier = Modifier.padding(
-                        start = com.aeriotv.android.ui.settings.settingsRowInsetH(),
-                        end = com.aeriotv.android.ui.settings.settingsRowInsetH(),
-                        top = 10.5.dp,
-                    ),
+                    modifier = Modifier
+                        .settingsFooterPull()
+                        .padding(
+                            start = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                            end = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                            top = 10.5.dp,
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
@@ -878,6 +888,9 @@ private fun SectionNavRow(
 }
 
 // MARK: - Set up another device
+
+/** Extra space above the headerless Set up another device card on the root (touch). */
+private val SET_UP_CARD_TOP_GAP = 8.2.dp
 
 /** The Settings root's subtitle for [SetUpAnotherDeviceCard] (Apple SetUpTvSettingsRow.listSubtitle). */
 internal const val SET_UP_ANOTHER_DEVICE_LIST_SUBTITLE =
@@ -1192,7 +1205,14 @@ private fun SectionFooter(text: String) {
         else MaterialTheme.typography.labelSmall).subtext(),
         // TV: Apple TV's footer ink, textTertiary.
         color = if (rememberIsTvDevice()) MaterialTheme.colorScheme.tertiary else com.aeriotv.android.ui.settings.settingsDimTint(),
-        modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH()),
+        // Phones and tablets: Apple's footer distances (SettingsCardMetrics).
+        modifier = Modifier
+            .settingsFooterPull()
+            .padding(
+                start = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                end = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                top = if (rememberIsTvDevice()) 0.dp else com.aeriotv.android.ui.settings.SettingsCardMetrics.footerTopGap,
+            ),
     )
 }
 

@@ -135,7 +135,7 @@ fun LiveTvSettingsScreen(
                     top = 12.dp,
                     bottom = LocalTabBarBottomInset.current,
                 ),
-                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
+                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing)),
             ) {
                 // Recently Watched, placed per form factor below.
                 fun androidx.compose.foundation.lazy.LazyListScope.recentlyWatched() {

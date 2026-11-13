@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -304,7 +305,10 @@ fun SyncSettingsScreen(
                 top = 12.dp,
                 bottom = LocalTabBarBottomInset.current,
             ),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            // Phones and tablets: the shared section spacing (Apple's rhythm).
+            verticalArrangement = Arrangement.spacedBy(
+                com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing),
+            ),
         ) {
             // Touch only: Android TV opens on the GOOGLE DRIVE eyebrow, as
             // Apple TV opens on ICLOUD; its account row already says
@@ -1243,7 +1247,10 @@ fun SyncCategoriesScreen(
                     top = 12.dp,
                     bottom = LocalTabBarBottomInset.current,
                 ),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                // Phones and tablets: the shared section spacing (Apple's rhythm).
+                verticalArrangement = Arrangement.spacedBy(
+                    com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing),
+                ),
             ) {
                 // Every synced option is its own row (owner decision 2026-10-27).
                 // Settings rows take a scope from this device's class only
@@ -1317,7 +1324,15 @@ fun SyncCategoriesScreen(
                         }
                     }
                 } else {
-                    item { SettingsSectionFooter(footer) }
+                    // Its own item after the last group: on phones and tablets it
+                    // draws a section spacing higher, at a footer's distance
+                    // below that group's card.
+                    item {
+                        SettingsSectionFooter(
+                            footer,
+                            if (isTv) Modifier else Modifier.offset(y = -com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing),
+                        )
+                    }
                 }
             }
         }

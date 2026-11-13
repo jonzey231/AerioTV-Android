@@ -163,7 +163,7 @@ fun DeveloperSettingsScreen(
                 top = 12.dp,
                 bottom = LocalTabBarBottomInset.current,
             ),
-            verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
+            verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing)),
         ) {
             item("logging") {
                 LoggingSection(
@@ -481,7 +481,7 @@ private fun DevSectionGroup(
     Column {
         com.aeriotv.android.ui.settings.SettingsSectionHeader(header)
         com.aeriotv.android.ui.settings.SettingsCard(grouped = grouped) { content() }
-        if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer)
+        if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer, endsSection = true)
     }
 }
 

@@ -380,8 +380,10 @@ fun EditPlaylistScreen(
                 top = 16.dp,
                 bottom = LocalTabBarBottomInset.current,
             ),
+            // Android TV keeps its 24 dp; phones and tablets take the shared
+            // section spacing (Apple's inset-grouped rhythm).
             verticalArrangement = Arrangement.spacedBy(
-                com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing,
+                if (isTv) 24.dp else com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing,
             ),
         ) {
             // A failed save keeps the user on the form with their typed values

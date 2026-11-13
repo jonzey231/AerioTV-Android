@@ -194,7 +194,7 @@ fun AppearanceSettingsScreen(
                     top = 12.dp,
                     bottom = LocalTabBarBottomInset.current,
                 ),
-                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(20.dp)),
+                verticalArrangement = Arrangement.spacedBy(com.aeriotv.android.ui.settings.settingsSectionSpacing(com.aeriotv.android.ui.settings.SettingsCardMetrics.sectionSpacing)),
             ) {
                 // COLOR THEME card - the brand presets. Apple splits the old
                 // combined "Theme" card into Color Theme / Light and Dark Mode
@@ -498,7 +498,7 @@ internal fun LazyListScope.settingsCard(
         Column {
             com.aeriotv.android.ui.settings.SettingsSectionHeader(header)
             com.aeriotv.android.ui.settings.SettingsCard { content() }
-            if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer)
+            if (footer != null) com.aeriotv.android.ui.settings.SettingsSectionFooter(footer, endsSection = true)
         }
     }
 }
