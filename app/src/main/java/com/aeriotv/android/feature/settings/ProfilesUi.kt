@@ -31,8 +31,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
@@ -533,28 +531,11 @@ fun SetUpAnotherDeviceSection(playlistId: String) {
     var showSetUpTv by remember { mutableStateOf(false) }
     LaunchedEffect(playlistId, activeId) { canSetUpTv = vm.canSetUpTv(playlistId) }
     if (!canSetUpTv || rememberIsTvDevice()) return
-    SettingsCard {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .settingsRowCard(false)
-                .clickable { showSetUpTv = true }
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Set up another device", color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                Text(
-                    "Send this playlist, your profiles, and sync to another device on your network.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    // The standard row in the send tile, as on the Settings root (Apple 76baca6).
+    SetUpAnotherDeviceCard(
+        subtitle = "Send this playlist, your profiles, and sync to another device on your network.",
+        onClick = { showSetUpTv = true },
+    )
     if (showSetUpTv) {
         com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = playlistId, onDismiss = { showSetUpTv = false })
     }

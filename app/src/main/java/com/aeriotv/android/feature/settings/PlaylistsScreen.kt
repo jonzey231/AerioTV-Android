@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.RadioButtonChecked
-import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -235,26 +234,11 @@ fun PlaylistsScreen(
         ) {
             if (canSetUpTv) {
                 item(key = "set-up-tv") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
-                            .clickable { showSetUpTv = true }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text("Set up another device", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "Send the active playlist to AerioTV on another device. Nothing to type there.",
-                                style = MaterialTheme.typography.bodySmall.subtext(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    // The same card as the Settings root (Apple 76baca6).
+                    SetUpAnotherDeviceCard(
+                        subtitle = SET_UP_ANOTHER_DEVICE_LIST_SUBTITLE,
+                        onClick = { showSetUpTv = true },
+                    )
                 }
             }
             items(playlists, key = { it.id }) { pl ->

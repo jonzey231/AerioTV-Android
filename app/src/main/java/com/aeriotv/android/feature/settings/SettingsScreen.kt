@@ -35,7 +35,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.LiveTv
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RadioButtonChecked
@@ -206,6 +206,16 @@ fun SettingsScreen(
     var qrLink by remember { mutableStateOf<TvQrLink?>(null) }
     var showWhatsNew by remember { mutableStateOf(false) }
     val setupOffer = com.aeriotv.android.feature.devicesetup.LocalSetupTvOffer.current
+    var showSetUpTv by remember { mutableStateOf(false) }
+    val setupPm = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext, SetupEntryPoint::class.java,
+        ).profileManager()
+    }
+    val canSetUpTv = !isTv && activeId != null && setupPm.canSetUpTv(activeId)
+    if (showSetUpTv && activeId != null) {
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = activeId, onDismiss = { showSetUpTv = false })
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Apple TV draws no page title above the first section.
@@ -308,6 +318,20 @@ fun SettingsScreen(
                     onEdit = { pl -> onEditPlaylist(pl.id) },
                     onDelete = { pl, keep -> viewModel.deletePlaylist(pl.id, keep) },
                     countRecordings = viewModel::onDeviceRecordingCount,
+                )
+            }
+
+            // MARK: Set up another device
+            //
+            // Its own card, no header, directly below the Playlists card and
+            // its hint and above APP (Logan 2026-11-13, Apple 76baca6); the
+            // Playlists card holds only the playlists and Add Playlist. The
+            // same gate as before; Android TV has no sender (the TV is the
+            // device being set up).
+            if (content != SettingsRootContent.AboutOnly && !isChild && canSetUpTv) item("set-up-another-device") {
+                SetUpAnotherDeviceCard(
+                    subtitle = SET_UP_ANOTHER_DEVICE_LIST_SUBTITLE,
+                    onClick = { showSetUpTv = true },
                 )
             }
 
@@ -438,46 +462,11 @@ private fun PlaylistsSection(
     val tvGuard = com.aeriotv.android.core.tv.rememberTvMenuGuard()
     var menuFor by remember { mutableStateOf<PlaylistEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var showSetUpTv by remember { mutableStateOf(false) }
-    val setupPm = remember {
-        dagger.hilt.android.EntryPointAccessors.fromApplication(
-            context.applicationContext, SetupEntryPoint::class.java,
-        ).profileManager()
-    }
-    val canSetUpTv = !isTv && activeId != null && setupPm.canSetUpTv(activeId)
-    if (showSetUpTv && activeId != null) {
-        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = activeId, onDismiss = { showSetUpTv = false })
-    }
     Column {
         if (showHeader) {
             SectionHeader("Playlists")
         }
         com.aeriotv.android.ui.settings.SettingsCard {
-            // Set up another device: first row of Playlists on phones and
-            // tablets, matching Apple's SetUpTvSettingsRow and the same row on
-            // PlaylistsScreen (same gate, wording, and icon). TV has no sender.
-            if (canSetUpTv) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showSetUpTv = true }
-                        .padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                        Text("Set up another device", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "Send the active playlist to AerioTV on another device. Nothing to type there.",
-                            style = MaterialTheme.typography.bodySmall.subtext(),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                PlaylistCardDivider()
-            }
             if (playlists.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -880,6 +869,32 @@ private fun SectionNavRow(
         icon = section.icon,
         onClick = onClick,
     )
+}
+
+// MARK: - Set up another device
+
+/** The Settings root's subtitle for [SetUpAnotherDeviceCard] (Apple SetUpTvSettingsRow.listSubtitle). */
+internal const val SET_UP_ANOTHER_DEVICE_LIST_SUBTITLE =
+    "Send the active playlist to AerioTV on another device. Nothing to type there."
+
+/**
+ * Set up another device as a card of its own: the standard Settings row (a
+ * filled send glyph in the accent tile the App and Device rows use, their
+ * title weight, a chevron). Apple's SetUpTvSettingsRow (76baca6) uses
+ * paperplane.fill; Material's filled Send is the closest. Used by the
+ * Settings root, the tablet Playlists pane, the Playlists page, and the
+ * playlist detail, each with its own subtitle.
+ */
+@Composable
+internal fun SetUpAnotherDeviceCard(subtitle: String, onClick: () -> Unit) {
+    com.aeriotv.android.ui.settings.SettingsCard {
+        SettingsNavRow(
+            title = "Set up another device",
+            subtitle = subtitle,
+            icon = Icons.AutoMirrored.Filled.Send,
+            onClick = onClick,
+        )
+    }
 }
 
 // MARK: - About section
