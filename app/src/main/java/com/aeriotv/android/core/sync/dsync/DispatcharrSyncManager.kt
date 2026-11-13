@@ -228,6 +228,8 @@ class DispatcharrSyncManager @Inject constructor(
         profileManager.get().onProfilesMutated = { pid, user, what, at -> onProfilesMutated(pid, user, what, at) }
         profileManager.get().onPickerOpened = { pid, reason -> onPickerOpened(pid, reason) }
         profileManager.get().onRouteChange = { pid, landed -> onRouteChange(pid, landed) }
+        // A route proven after a change (StoredSecrets): a session may start there now.
+        profileManager.get().onRouteProven = { pid -> if (lastTarget?.playlistId == pid) routeGen.value = routeGen.value + 1 }
         registerNetworkCallback()
         watchBetweenSessions()
         scope.launch {
@@ -823,6 +825,7 @@ class DispatcharrSyncManager @Inject constructor(
      */
     suspend fun serverSummary(playlistId: String): com.aeriotv.android.core.sync.SetupSourceChoice.Summary? =
         kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) {
+            if (syncRefusedAtUnprovenRoute(playlistId)) return@withContext null
             val row = playlistDao.byId(playlistId) ?: return@withContext null
             val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext null
             val base = repository.get().effectiveBaseUrl(row)
@@ -858,6 +861,7 @@ class DispatcharrSyncManager @Inject constructor(
     suspend fun upgradeRecordState(playlistId: String): DsyncUpgradeOffer.Record =
         kotlinx.coroutines.withContext(ProfileScope.defaultOnly()) {
             val err = DsyncUpgradeOffer.Record.Error
+            if (syncRefusedAtUnprovenRoute(playlistId)) return@withContext err
             val row = playlistDao.byId(playlistId) ?: return@withContext err
             val apiKey = row.apiKey?.takeIf { it.isNotBlank() } ?: return@withContext err
             val base = repository.get().effectiveBaseUrl(row)
@@ -1058,8 +1062,32 @@ class DispatcharrSyncManager @Inject constructor(
     private val routeChanging = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val routeGen = MutableStateFlow(0L)
 
-    /** False while [s]'s playlist is moving, or once [s] was retired by a move: it then gets no connection. */
-    private fun addressSettled(s: Session): Boolean = !s.retired && s.playlistId !in routeChanging
+    /**
+     * False while [s]'s playlist is moving, or once [s] was retired by a
+     * move, or while its new address is not proven the same server
+     * (StoredSecrets: no session there): it then gets no connection.
+     */
+    private fun addressSettled(s: Session): Boolean {
+        if (s.retired || s.playlistId in routeChanging) return false
+        if (!com.aeriotv.android.core.profiles.StoredSecrets.maySync(profileManager.get().isRouteUnproven(s.playlistId))) {
+            if (unprovenNoted.add(s.playlistId)) {
+                com.aeriotv.android.core.profiles.StoredSecrets.noteRefused(s.playlistId, com.aeriotv.android.core.profiles.StoredSecrets.Path.DispatcharrSync)
+            }
+            return false
+        }
+        unprovenNoted.remove(s.playlistId)
+        return true
+    }
+
+    /** True (logged) when [playlistId]'s address is not proven: Dispatcharr Sync reads nothing there either. */
+    private fun syncRefusedAtUnprovenRoute(playlistId: String): Boolean {
+        if (com.aeriotv.android.core.profiles.StoredSecrets.maySync(profileManager.get().isRouteUnproven(playlistId))) return false
+        com.aeriotv.android.core.profiles.StoredSecrets.noteRefused(playlistId, com.aeriotv.android.core.profiles.StoredSecrets.Path.DispatcharrSync)
+        return true
+    }
+
+    /** Playlists whose refused session was logged once (not on every sync tick). */
+    private val unprovenNoted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * A server address change on [playlistId] (ProfileManager, every path).

@@ -1344,7 +1344,10 @@ class PlaylistViewModel @Inject constructor(
      * guidance (Discord report, Onn 4K, 2026-07-29).
      */
     private fun loadFailureMessage(prefix: String, t: Throwable): String =
-        if (t is RateLimitRetry.RateLimitedFinal) {
+        if (t is com.aeriotv.android.core.profiles.StoredSecrets.Refused) {
+            // Shown as it is: it says what to type (StoredSecrets).
+            t.message.orEmpty()
+        } else if (t is RateLimitRetry.RateLimitedFinal) {
             t.message ?: rateLimitedMessage(t.seconds, t.reason)
         } else if (t.rateLimitSeconds() != null) {
             // A 429 names the rate limit, never "Could not connect: HTTP 429".
@@ -2727,6 +2730,10 @@ class PlaylistViewModel @Inject constructor(
          * stays non-active and never touches the active session state.
          */
         playlistId: String? = null,
+        /** [password] is the saved one the form showed, untouched (StoredSecrets: it goes only to a proven address). */
+        storedPassword: Boolean = false,
+        /** [apiKey] is the saved key the form showed, untouched. */
+        storedApiKey: Boolean = false,
     ) {
         viewModelScope.launch {
             // Fresh save, fresh plan: the previous save's rows must not decide
@@ -2762,6 +2769,8 @@ class PlaylistViewModel @Inject constructor(
                 vodEnabled = vodEnabled,
                 epgRetentionDays = sanitizeGuideDays(epgRetentionDays),
                 customUserAgent = customUserAgent,
+                storedPassword = storedPassword,
+                storedApiKey = storedApiKey,
             )
             // Item 13 (Apple parity): the form edits the playlist's OWN sign-in.
             // With a non-default profile active on this playlist (not held, and

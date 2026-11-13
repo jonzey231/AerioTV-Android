@@ -367,7 +367,9 @@ class TvSetupViewModel @Inject constructor(
             onSuccess = { _phase.value = Phase.SignedIn(pid) },
             onFailure = {
                 Log.w(TAG, "[SETUP] fix login not applied: ${it.javaClass.simpleName}")
-                _phase.value = Phase.Failed(com.aeriotv.android.core.setup.FixLogin.NOT_HERE)
+                // A new server address not proven yet says so (StoredSecrets).
+                val line = (it as? com.aeriotv.android.core.profiles.StoredSecrets.Refused)?.message
+                _phase.value = Phase.Failed(line ?: com.aeriotv.android.core.setup.FixLogin.NOT_HERE)
             },
         )
     }

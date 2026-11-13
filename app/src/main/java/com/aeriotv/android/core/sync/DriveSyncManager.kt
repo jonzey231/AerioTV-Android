@@ -1758,7 +1758,11 @@ class DriveSyncManager @Inject constructor(
                 )
             ) {
                 moved += entry.id
-                profileManager.get().holdSignInsForRouteChange(entry.id, current.urlString, current.lanUrlString, merged.urlString, merged.lanUrlString)
+                profileManager.get().holdSignInsForRouteChange(
+                    entry.id, current.urlString, current.lanUrlString, merged.urlString, merged.lanUrlString,
+                    dispatcharr = merged.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrApiKey.name ||
+                        merged.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrUserPass.name,
+                )
             }
             playlistDao.upsert(merged)
             SyncStamps.settleTouched(SyncStamps.Cat.Playlists, entry.id, stamp)

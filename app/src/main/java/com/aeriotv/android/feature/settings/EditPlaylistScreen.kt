@@ -127,6 +127,11 @@ fun EditPlaylistScreen(
     var apiKey by remember(playlist?.id, ownLoaded) { mutableStateOf(shownSignIn.apiKey.orEmpty()) }
     var username by remember(playlist?.id, ownLoaded) { mutableStateOf(shownSignIn.username.orEmpty()) }
     var password by remember(playlist?.id, ownLoaded) { mutableStateOf(shownSignIn.password.orEmpty()) }
+    // The password and key fields start with the SAVED values. Until the
+    // user edits one it is a stored secret, which goes only to a proven
+    // server address (StoredSecrets, security fix 2026-11-12).
+    var passwordTyped by remember(playlist?.id, ownLoaded) { mutableStateOf(false) }
+    var apiKeyTyped by remember(playlist?.id, ownLoaded) { mutableStateOf(false) }
     // Per-playlist Dispatcharr User-Agent (Apple `customUserAgent`). Blank =
     // the app default; the field's placeholder and helper both show it.
     var userAgent by remember(playlist?.id) { mutableStateOf(playlist?.customUserAgent.orEmpty()) }
@@ -270,6 +275,8 @@ fun EditPlaylistScreen(
                 if (failure == null) onBack()
             },
             playlistId = playlist?.id,
+            storedPassword = !passwordTyped && password.isNotEmpty() && password == shownSignIn.password,
+            storedApiKey = !apiKeyTyped && apiKey.isNotEmpty() && apiKey == shownSignIn.apiKey,
         )
     }
 
@@ -456,7 +463,7 @@ fun EditPlaylistScreen(
                                 SettingsTextField(
                                     label = "Password",
                                     value = password,
-                                    onValueChange = { password = it; clearSaveError() },
+                                    onValueChange = { password = it; passwordTyped = true; clearSaveError() },
                                     helper = "Use your Dispatcharr Dashboard password (System > Users > Account tab), not your Dispatcharr XC password.\n" +
                                         com.aeriotv.android.feature.onboarding.DISPATCHARR_API_KEY_REQUIRED_NOTE,
                                     secure = true,
@@ -469,7 +476,7 @@ fun EditPlaylistScreen(
                                 SettingsTextField(
                                     label = "API Key",
                                     value = apiKey,
-                                    onValueChange = { apiKey = it; clearSaveError() },
+                                    onValueChange = { apiKey = it; apiKeyTyped = true; clearSaveError() },
                                     secure = true,
                                     secureLabel = "API key",
                                     keyboardOptions = aerioTextFieldKeyboardOptions(

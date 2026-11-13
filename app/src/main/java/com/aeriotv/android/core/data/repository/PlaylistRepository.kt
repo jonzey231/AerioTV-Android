@@ -321,6 +321,14 @@ class PlaylistRepository @Inject constructor(
          * 2026-11-10). Ignored for an edit, and when a row already has it.
          */
         val newId: String? = null,
+        /**
+         * [password] is the saved one Edit Playlist showed, not one the user
+         * typed: it goes only to a proven address (StoredSecrets). Every
+         * other caller sends what was typed or handed over, so false.
+         */
+        val storedPassword: Boolean = false,
+        /** [apiKey] is the saved key Edit Playlist showed, not one the user typed. */
+        val storedApiKey: Boolean = false,
     )
 
     /**
@@ -403,6 +411,10 @@ class PlaylistRepository @Inject constructor(
         if (playlist.username.isNullOrBlank() || playlist.password.isNullOrBlank()) {
             return Result.failure(IllegalStateException("Username and password required."))
         }
+        // The saved password only to a proven address (StoredSecrets).
+        if (!com.aeriotv.android.core.profiles.StoredSecrets.check(playlistId, playlist.urlString, com.aeriotv.android.core.profiles.StoredSecrets.Path.RefreshSession)) {
+            return Result.failure(com.aeriotv.android.core.profiles.StoredSecrets.Refused(com.aeriotv.android.core.profiles.StoredSecrets.TYPE_PASSWORD_AT_NEW_ADDRESS))
+        }
         val fresh = dispatcharrAuth.silentRebootstrapApiKey(playlist)
             ?: return Result.failure(IllegalStateException("Refresh failed. Check the URL and credentials."))
         return Result.success(fresh.trim() != previousKey)
@@ -416,6 +428,7 @@ class PlaylistRepository @Inject constructor(
             val pass = row.password?.takeIf { it.isNotBlank() }
             if (user == null || pass == null) throw IllegalStateException("Username and password required.")
             val base = row.urlString.trimEnd('/')
+            if (!com.aeriotv.android.core.profiles.StoredSecrets.check(playlistId, base, com.aeriotv.android.core.profiles.StoredSecrets.Path.RefreshSession)) throw com.aeriotv.android.core.profiles.StoredSecrets.Refused(com.aeriotv.android.core.profiles.StoredSecrets.TYPE_PASSWORD_AT_NEW_ADDRESS)
             val key = try {
                 val jwt = dispatcharrClient.login(base, user, pass)
                 dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
@@ -553,6 +566,10 @@ class PlaylistRepository @Inject constructor(
         // for another (the caller shows Fix Login's existing failure line).
         kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
             val row = dao.byId(playlistId) ?: throw NoSuchElementException("playlist not here")
+            // A sign-in sent from another device is a stored secret: it goes
+            // only to a proven address (StoredSecrets), never to one whose
+            // change is unproven.
+            if (!com.aeriotv.android.core.profiles.StoredSecrets.check(playlistId, row.urlString, com.aeriotv.android.core.profiles.StoredSecrets.Path.FixLogin)) throw com.aeriotv.android.core.profiles.StoredSecrets.Refused(com.aeriotv.android.core.profiles.StoredSecrets.FIX_LOGIN_NEW_ADDRESS)
             requireSameAccount(playlistId, row, verifySentSignIn(row, sent))
         }
         writeSignIn(playlistId, sent, "fix login")
@@ -630,6 +647,8 @@ class PlaylistRepository @Inject constructor(
             // After the write: a changed account drops the old pair there.
             dispatcharrTokenStore.store(playlistId, jwt.access, jwt.refresh)
             com.aeriotv.android.core.network.DispatcharrLoginGate.reset(playlistId)
+            // Typed at the playlist's server URL: that address is the user's (StoredSecrets).
+            profileManager.get().noteTypedSignIn(playlistId, at = base)
             updated
         }
     }
@@ -890,6 +909,8 @@ class PlaylistRepository @Inject constructor(
         // wiped, and storing it before the drop-or-fail decision would leave
         // the NEW account's tokens behind after a failed save.
         var pendingJwt: com.aeriotv.android.core.network.JwtPair? = null
+        // A password or key the user TYPED in this save signed in (StoredSecrets: it proves the address).
+        var typedSignedIn = false
         val resolvedApiKey: String? = when (sourceType) {
             SourceType.DispatcharrUserPass -> {
                 // A playlist ORIGINALLY added with username/password can be
@@ -927,6 +948,19 @@ class PlaylistRepository @Inject constructor(
                     // silent rebootstrap re-mints from the stored credentials,
                     // exactly as it does outside this screen.
                     priorRow.apiKey
+                } else if (
+                    priorRow != null && request.storedPassword &&
+                    !com.aeriotv.android.core.profiles.StoredSecrets.mayUse(priorRow.id, normalisedBase)
+                ) {
+                    // A new address and no typed password (security fix
+                    // 2026-11-12): the password the form showed is the saved
+                    // one, and it goes only to a proven address. The
+                    // playlist's own key may go there (the user chose the
+                    // address); the check below makes it answer there as
+                    // this playlist's account.
+                    com.aeriotv.android.core.profiles.StoredSecrets.noteRefused(priorRow.id, com.aeriotv.android.core.profiles.StoredSecrets.Path.EditPlaylistSignIn)
+                    priorRow.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: throw com.aeriotv.android.core.profiles.StoredSecrets.Refused(com.aeriotv.android.core.profiles.StoredSecrets.TYPE_PASSWORD_AT_NEW_ADDRESS)
                 } else {
                     val user = u ?: throw IllegalArgumentException("Username is required")
                     val pass = p ?: throw IllegalArgumentException("Password is required")
@@ -934,6 +968,7 @@ class PlaylistRepository @Inject constructor(
                     // thing standing between Save and the channel fetch.
                     enterStage(SaveStage.VerifyingCredentials)
                     val jwt = dispatcharrClient.login(normalisedBase, user, pass)
+                    if (!request.storedPassword) typedSignedIn = true
                     // The JWT pair is stashed AFTER the drop decision below, so
                     // the warmup coordinator picks up the refresh token on the
                     // next app foreground and bearer-mode calls don't re-login
@@ -957,10 +992,28 @@ class PlaylistRepository @Inject constructor(
                 resolvedApiKey?.takeIf { it.isNotBlank() }?.let { key ->
                     enterStage(SaveStage.VerifyingCredentials)
                     dispatcharrClient.verifyConnection(normalisedBase, key)
+                    if (suppliedKey != null && key.trim() == suppliedKey && !request.storedApiKey) typedSignedIn = true
                 }
             }
             Log.i(TAG_CAPS, "credentials verified for ${playlistId.take(8)}; dropping the old account's cached identity")
             dropCachedIdentity(priorRow!!)
+        }
+        // A password or key the user typed signed in at this address: the
+        // address is theirs (StoredSecrets), before anything here can hold
+        // the key for another account's answer.
+        if (typedSignedIn && existingId != null && isDispatcharrSource) profileManager.get().noteTypedSignIn(existingId)
+        // Nothing typed, and an address not proven the same server: the
+        // playlist's own saved key goes there (the user saved the address),
+        // and must answer as the account recorded before the change, before
+        // any channel or permission of whoever answers is loaded here.
+        if (priorRow != null && isDispatcharrSource && !typedSignedIn &&
+            !com.aeriotv.android.core.profiles.StoredSecrets.mayUse(priorRow.id, normalisedBase)
+        ) {
+            val own = priorRow.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+            resolvedApiKey?.trim()?.takeIf { it.isNotEmpty() && it == own }?.let { key ->
+                enterStage(SaveStage.VerifyingCredentials)
+                requireOwnAccountAtNewAddress(priorRow.id, normalisedBase, key, suppliedUser ?: priorRow.username)
+            }
         }
         // A new host, scheme, or port on either route: drop what was learned
         // against the old host BEFORE the new JWT pair lands (the drop clears
@@ -1289,7 +1342,8 @@ class PlaylistRepository @Inject constructor(
         val newBase = incoming.url.trimEnd('/')
         if (!hostChanged(before.urlString, newBase, before.lanUrlString, incoming.lanUrl)) return incoming to false
         val profiles = profileManager.get()
-        if (!profiles.holdSignInsForRouteChange(id, before.urlString, before.lanUrlString, newBase, incoming.lanUrl)) return incoming to true
+        val dispatcharr = incoming.sourceType == SourceType.DispatcharrApiKey || incoming.sourceType == SourceType.DispatcharrUserPass
+        if (!profiles.holdSignInsForRouteChange(id, before.urlString, before.lanUrlString, newBase, incoming.lanUrl, dispatcharr)) return incoming to true
         val own = kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { dao.byId(id) } ?: before
         val signIn = com.aeriotv.android.core.profiles.ProfileHostHold.scrub(
             com.aeriotv.android.core.profiles.ProfileHostHold.SignIn(incoming.apiKey, incoming.username, incoming.password),
@@ -1297,6 +1351,28 @@ class PlaylistRepository @Inject constructor(
             profiles.heldSignIns(id),
         )
         return incoming.copy(apiKey = signIn.apiKey, username = signIn.username, password = signIn.password) to true
+    }
+
+    /**
+     * A save to an address not proven the same server with no typed secret
+     * (StoredSecrets): users/me with the playlist's own key [key] at [base]
+     * must answer as the account recorded before the change (same user id
+     * and username), or, with none recorded, as [username]. Anything else,
+     * no answer included, needs the password typed there.
+     */
+    private suspend fun requireOwnAccountAtNewAddress(playlistId: String, base: String, key: String, username: String?) {
+        val refused = com.aeriotv.android.core.profiles.StoredSecrets.Refused(
+            com.aeriotv.android.core.profiles.StoredSecrets.TYPE_PASSWORD_AT_NEW_ADDRESS,
+        )
+        val me = runCatching { dispatcharrClient.fetchMe(base, key, keyCheck = true) }.getOrNull() ?: throw refused
+        val answer = com.aeriotv.android.core.profiles.ProfileHostHold.Identity(me.id, me.username)
+        if (!com.aeriotv.android.core.profiles.StoredSecrets.answersAsOwnAccount(
+                profileManager.get().recordedDefaultIdentity(playlistId), username, answer,
+            )
+        ) {
+            Log.i(TAG_SAVE, "[PROFILE-HOST] save to a new address refused for ${playlistId.take(8)}: another account answers there")
+            throw refused
+        }
     }
 
     /**
@@ -1408,6 +1484,13 @@ class PlaylistRepository @Inject constructor(
             val key = if (request.sourceType == SourceType.DispatcharrUserPass && typedKey == null) {
                 val user = typed.username?.trim()?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Username is required")
                 val pass = typed.password?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Password is required")
+                // The saved password the form showed goes only to a proven address (StoredSecrets).
+                if (request.storedPassword && !com.aeriotv.android.core.profiles.StoredSecrets.check(
+                        playlistId, base, com.aeriotv.android.core.profiles.StoredSecrets.Path.EditPlaylistSignIn,
+                    )
+                ) {
+                    throw com.aeriotv.android.core.profiles.StoredSecrets.Refused(com.aeriotv.android.core.profiles.StoredSecrets.TYPE_PASSWORD_AT_NEW_ADDRESS)
+                }
                 val jwt = dispatcharrClient.login(base, user, pass)
                 dispatcharrClient.fetchCurrentUserApiKey(base, jwt.access)
             } else {
@@ -1550,8 +1633,15 @@ class PlaylistRepository @Inject constructor(
         }
         // The default profile's users/me (another profile's key is ignored
         // there): recorded, or the same-server check after an address change.
-        usedKey?.let { k ->
-            runCatching { profileManager.get().noteDefaultMe(playlist.id, base, k, snapshot.userId, snapshot.username) }
+        val keyHeld = usedKey?.let { k ->
+            runCatching { profileManager.get().noteDefaultMe(playlist.id, base, k, snapshot.userId, snapshot.username) }.getOrDefault(false)
+        } ?: false
+        if (keyHeld) {
+            // Another account answers at the playlist's unproven address
+            // (StoredSecrets): its key is held now, and that account's
+            // permissions are not applied here.
+            Log.w(TAG_CAPS, "probe for ${playlistId.take(8)}: another account answers at the unproven address; its answers are not applied")
+            return false
         }
         // SELF-HEAL: does the stored key actually authenticate as the account
         // whose username this playlist carries?
@@ -1694,6 +1784,17 @@ class PlaylistRepository @Inject constructor(
         val actual = serverUsername.trim().lowercase()
         if (typed.isEmpty() || actual.isEmpty() || typed == actual) return false
 
+        // Only where the server is proven the same (StoredSecrets): at an
+        // unproven or different address the repair would sign in there with
+        // the saved password. The key is held instead (the sign-in form), and
+        // the caller drops this payload, another account's.
+        if (!com.aeriotv.android.core.profiles.StoredSecrets.check(
+                playlist.id, playlist.urlString, com.aeriotv.android.core.profiles.StoredSecrets.Path.IdentityRepair,
+            )
+        ) {
+            runCatching { profileManager.get().holdOwnKeyForUnprovenRoute(playlist.id) }
+            return true
+        }
         if (!identityRepaired.add(playlist.id)) {
             Log.w(
                 TAG_CAPS,

@@ -135,6 +135,9 @@ class DispatcharrWarmupCoordinator @Inject constructor(
     }
 
     private suspend fun warmup(playlist: PlaylistEntity) {
+        // Both phases send a stored secret (the refresh token the old server
+        // minted, the saved password): only to a proven address (StoredSecrets).
+        if (!com.aeriotv.android.core.profiles.StoredSecrets.check(playlist.id, playlist.urlString, com.aeriotv.android.core.profiles.StoredSecrets.Path.LaunchSignIn)) return
         // Phase 1: try refresh. Only meaningful when a refresh token is
         // cached, that happens after a successful login during this same
         // process run, OR a previous warmup that ran login.

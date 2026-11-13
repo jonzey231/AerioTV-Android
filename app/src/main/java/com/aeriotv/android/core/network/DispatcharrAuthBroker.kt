@@ -239,6 +239,12 @@ class DispatcharrAuthBroker @Inject constructor(
             Log.i(TAG, "silentRebootstrap SKIP: playlist ${playlist.id.take(8)} has no creds (API Key mode)")
             return null
         }
+        // The saved password goes only to a proven address (StoredSecrets):
+        // never to a new server address the same-server check has not
+        // passed. The row is read again: the caller's copy can predate the
+        // address change.
+        val target = (dao.byId(playlist.id) ?: playlist).urlString
+        if (!com.aeriotv.android.core.profiles.StoredSecrets.check(playlist.id, target, com.aeriotv.android.core.profiles.StoredSecrets.Path.SilentRelogin)) return null
         // One attempt per identity per 60 s, shared by concurrent callers
         // signing in as the same user; 429 and rejected logins park
         // (DispatcharrLoginGate). A non-default profile re-logs in only with
@@ -267,6 +273,8 @@ class DispatcharrAuthBroker @Inject constructor(
                 Log.i(TAG, "silentRebootstrap SKIP for ${playlist.id.take(8)}: the active profile changed since the call started")
                 return null
             }
+            // The address may have moved while this waited (StoredSecrets).
+            if (!com.aeriotv.android.core.profiles.StoredSecrets.check(row.id, row.urlString, com.aeriotv.android.core.profiles.StoredSecrets.Path.SilentRelogin)) return null
             val pair = client.login(row.urlString, username, password)
             val minted = client.fetchCurrentUserApiKey(row.urlString, pair.access)
             // EXACTLY one request checks the key before anything stores or

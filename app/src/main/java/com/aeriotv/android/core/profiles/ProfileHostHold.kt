@@ -247,6 +247,22 @@ data class RecordedIdentity(
     fun identity(): ProfileHostHold.Identity = ProfileHostHold.Identity(userId, username)
 }
 
+/**
+ * A playlist whose server address changed and is not proven the same server
+ * yet (security fix 2026-11-12, StoredSecrets): [trusted] are the routes it
+ * used before the first change plus every route a same-server check has
+ * proven since; [current] are the routes it uses now. Kept whether or not
+ * the playlist has any profiles.
+ */
+@Serializable
+data class RouteProof(
+    val trusted: Set<String> = emptySet(),
+    val current: Set<String> = emptySet(),
+) {
+    /** The routes in use that nothing has proven yet. */
+    val unproven: Set<String> get() = current - trusted
+}
+
 @Serializable
 data class HostHoldState(
     /** Playlist id -> its hold. */
@@ -266,6 +282,8 @@ data class HostHoldState(
      * their username's row, if any, the way a manual add of a roster user does.
      */
     val pausedAdds: Set<String> = emptySet(),
+    /** Playlist id -> its route proof, while its address is not proven the same server (StoredSecrets). */
+    val unproven: Map<String, RouteProof> = emptyMap(),
 )
 
 /**
@@ -319,12 +337,71 @@ class HostHoldBook(private val backing: Backing) {
     fun recorded(playlistId: String): ProfileHostHold.Identity? =
         state.identities[playlistId]?.identity()
 
+    /** [playlistId]'s route proof while its address is not proven the same server, else null. */
+    fun routeProof(playlistId: String): RouteProof? = state.unproven[playlistId]
+
+    fun isRouteUnproven(playlistId: String): Boolean = playlistId in state.unproven
+
+    fun unprovenPlaylists(): Set<String> = state.unproven.keys
+
+    /**
+     * A route change on [playlistId], before anything goes to the new
+     * address: the routes in use are now [currentRoutes]. A playlist already
+     * waiting keeps the routes trusted before its first change; otherwise
+     * [priorRoutes] are trusted. A change back onto trusted routes only is
+     * proven at once. True when the route is unproven now.
+     */
+    @Synchronized
+    fun markRouteChange(playlistId: String, priorRoutes: Set<String>, currentRoutes: Set<String>): Boolean {
+        val trusted = state.unproven[playlistId]?.trusted ?: priorRoutes
+        val proof = RouteProof(trusted, currentRoutes)
+        if (currentRoutes.isEmpty() || proof.unproven.isEmpty()) {
+            commit(state.copy(unproven = state.unproven - playlistId))
+            return false
+        }
+        commit(state.copy(unproven = state.unproven + (playlistId to proof)))
+        return true
+    }
+
+    /**
+     * The routes [playlistId] uses now (a failed save put the row back, a
+     * second change, a relaunch): an entry whose routes are all trusted is
+     * proven. True when it is still unproven.
+     */
+    @Synchronized
+    fun settleRoutes(playlistId: String, currentRoutes: Set<String>): Boolean {
+        val p = state.unproven[playlistId] ?: return false
+        if (currentRoutes.isEmpty()) return true
+        val next = p.copy(current = currentRoutes)
+        if (next.unproven.isEmpty()) {
+            commit(state.copy(unproven = state.unproven - playlistId))
+            return false
+        }
+        if (next != p) commit(state.copy(unproven = state.unproven + (playlistId to next)))
+        return true
+    }
+
+    /**
+     * The user signed the playlist in with what they typed: at [route] only
+     * (the rejected-key prompt signs in at the server URL; a changed local
+     * URL it never reached stays unproven), or, with [route] null, at every
+     * address an Edit Playlist save just set with that sign-in. True when the
+     * playlist's route is proven now and was not before.
+     */
+    @Synchronized
+    fun markRouteProven(playlistId: String, route: String? = null): Boolean {
+        val p = state.unproven[playlistId] ?: return false
+        val next = if (route == null) null else p.copy(trusted = p.trusted + route).takeIf { it.unproven.isNotEmpty() }
+        commit(state.copy(unproven = if (next == null) state.unproven - playlistId else state.unproven + (playlistId to next)))
+        return next == null
+    }
+
     /**
      * The record as a live answer for [playlistId] now: only with no hold
      * freezing it, and only when it came from a route the playlist still uses.
      */
     fun liveRecord(playlistId: String, currentRoutes: Set<String>): ProfileHostHold.Identity? =
-        if (playlistId in state.holds) null
+        if (playlistId in state.holds || playlistId in state.unproven) null
         else state.identities[playlistId]?.takeIf { it.route in currentRoutes }?.identity()?.takeIf { it.known }
 
     fun tagOf(profileId: String): ProfileHostHold.Identity? = state.tags[profileId]?.identity()?.takeIf { it.known }
@@ -384,7 +461,9 @@ class HostHoldBook(private val backing: Backing) {
      */
     @Synchronized
     fun record(playlistId: String, identity: ProfileHostHold.Identity, route: String = ""): Boolean {
-        if (!identity.known || playlistId in state.holds) return false
+        // Nor while the playlist's own route is unproven: the new server's
+        // answer would become the record and the check would match itself.
+        if (!identity.known || playlistId in state.holds || playlistId in state.unproven) return false
         commit(state.copy(identities = state.identities + (playlistId to RecordedIdentity(identity.userId, identity.username.trim(), route))))
         return true
     }
@@ -408,18 +487,41 @@ class HostHoldBook(private val backing: Backing) {
     @Synchronized
     fun onAnswer(playlistId: String, route: String, currentRoutes: Set<String>, answer: ProfileHostHold.Answer): Outcome {
         val rec = state.holds[playlistId]
-        if (rec == null) {
+        val proof = state.unproven[playlistId]
+        if (rec == null && proof == null) {
             val me = (answer as? ProfileHostHold.Answer.Me)?.identity ?: return Outcome.Ignored
             // An answer from an address the playlist no longer uses is not this playlist's server now.
             if (!me.known || route !in currentRoutes) return Outcome.Ignored
             record(playlistId, me, route)
             return Outcome.Recorded
         }
-        if (route !in currentRoutes || route in rec.trusted) return Outcome.Ignored
-        return when (val v = ProfileHostHold.decide(rec.expected(), answer)) {
-            ProfileHostHold.Verdict.SameServer -> { trust(playlistId, route); Outcome.Proven }
-            is ProfileHostHold.Verdict.NotSame -> Outcome.Failed(v.reason)
+        // The playlist's own route: checked against the identity recorded
+        // before the change (frozen while unproven), never recorded.
+        val own: Outcome? = proof?.takeIf { route in currentRoutes && route !in it.trusted }?.let { p ->
+            when (val v = ProfileHostHold.decide(recorded(playlistId), answer)) {
+                ProfileHostHold.Verdict.SameServer -> { proveRoute(playlistId, p, route, currentRoutes); Outcome.Proven }
+                is ProfileHostHold.Verdict.NotSame -> Outcome.Failed(v.reason)
+            }
         }
+        val held: Outcome? = rec?.takeIf { route in currentRoutes && route !in it.trusted }?.let { r ->
+            when (val v = ProfileHostHold.decide(r.expected(), answer)) {
+                ProfileHostHold.Verdict.SameServer -> { trust(playlistId, route); Outcome.Proven }
+                is ProfileHostHold.Verdict.NotSame -> Outcome.Failed(v.reason)
+            }
+        }
+        return when {
+            own is Outcome.Failed -> own
+            held is Outcome.Failed -> held
+            own != null -> own
+            held != null -> held
+            else -> Outcome.Ignored
+        }
+    }
+
+    /** [route] answered as the recorded user: trusted; the entry goes once every route in use is. */
+    private fun proveRoute(playlistId: String, p: RouteProof, route: String, currentRoutes: Set<String>) {
+        val next = RouteProof(p.trusted + route, currentRoutes)
+        commit(state.copy(unproven = if (next.unproven.isEmpty()) state.unproven - playlistId else state.unproven + (playlistId to next)))
     }
 
     /** True when [playlistId] is held and every route it uses now is trusted: the hold can lift. */
@@ -438,6 +540,7 @@ class HostHoldBook(private val backing: Backing) {
             state.copy(
                 identities = state.identities - playlistId,
                 holds = if (kept == null || kept.profileIds.isEmpty()) state.holds - playlistId else state.holds + (playlistId to kept),
+                unproven = state.unproven - playlistId,
             ),
         )
     }
