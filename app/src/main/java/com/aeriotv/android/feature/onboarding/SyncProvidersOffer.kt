@@ -1,8 +1,6 @@
 package com.aeriotv.android.feature.onboarding
 
 import android.util.Log
-import androidx.compose.foundation.layout.Box
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -10,9 +8,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -27,8 +22,6 @@ import com.aeriotv.android.core.sync.SyncProvidersRules
 import com.aeriotv.android.core.sync.SyncProvidersStore
 import com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
 import com.aeriotv.android.feature.settings.SyncSettingsViewModel
-import com.aeriotv.android.ui.settings.SettingsAlertDialog
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.first
@@ -113,35 +106,33 @@ fun SyncProvidersOfferHost(
 
     val o = offer ?: return
     if (locked) return
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(o) { runCatching { focus.requestFocus() } }
-    SettingsAlertDialog(
+    // Apple's alert: Not now (cancel) left, Turn on right (it takes focus, as before).
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { offer = null },
-        title = { Text("Keep your devices in sync") },
-        text = { Text(SyncProvidersRules.offerText(o.providers)) },
-        confirmButton = {
-            Box(Modifier.focusRequester(focus)) {
-                SettingsDialogTextButton(label = "Turn on", onClick = {
-                    offer = null
-                    scope.launch {
-                        if (SyncProviderId.Dispatcharr in o.providers) vm.enableDispatcharr()
-                        if (SyncProviderId.GoogleDrive in o.providers) {
-                            // Same path as the Welcome Google card: sign in, Drive scope, then setMasterEnabled.
-                            val activity = context.findActivity() ?: return@launch
-                            if (syncVm.signInWithGoogle(activity) == null) return@launch
-                            when (val r = syncVm.requestDriveScope()) {
-                                is DriveSyncManager.RequestResult.Authorized -> syncVm.setMasterEnabled(true)
-                                is DriveSyncManager.RequestResult.NeedsConsent -> consent.launch(
-                                    androidx.activity.result.IntentSenderRequest.Builder(r.intentSender).build(),
-                                )
-                                else -> Unit
-                            }
+        title = "Keep your devices in sync",
+        message = SyncProvidersRules.offerText(o.providers),
+        actions = listOf(
+            com.aeriotv.android.ui.settings.AlertAction("Turn on", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                offer = null
+                scope.launch {
+                    if (SyncProviderId.Dispatcharr in o.providers) vm.enableDispatcharr()
+                    if (SyncProviderId.GoogleDrive in o.providers) {
+                        // Same path as the Welcome Google card: sign in, Drive scope, then setMasterEnabled.
+                        val activity = context.findActivity() ?: return@launch
+                        if (syncVm.signInWithGoogle(activity) == null) return@launch
+                        when (val r = syncVm.requestDriveScope()) {
+                            is DriveSyncManager.RequestResult.Authorized -> syncVm.setMasterEnabled(true)
+                            is DriveSyncManager.RequestResult.NeedsConsent -> consent.launch(
+                                androidx.activity.result.IntentSenderRequest.Builder(r.intentSender).build(),
+                            )
+                            else -> Unit
                         }
                     }
-                })
-            }
-        },
-        dismissButton = { SettingsDialogTextButton(label = "Not now", onClick = { offer = null }) },
+                }
+            },
+            com.aeriotv.android.ui.settings.AlertAction("Not now", com.aeriotv.android.ui.settings.AlertRole.Cancel) { offer = null },
+        ),
+        focusButton = true,
     )
 }
 

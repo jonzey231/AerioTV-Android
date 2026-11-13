@@ -560,146 +560,102 @@ fun SyncSettingsScreen(
         // Kept although Apple pushes without asking: a blank install once
         // overwrote a good Drive backup, so an Android push states what it
         // does. A push merges per item since 2026-11-10 (Logan-approved copy).
-        com.aeriotv.android.ui.scale.AlertDialog(
+        // Apple's alert: Cancel left, Push right.
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pushConfirmOpen = false },
-            title = { Text("Push to Drive?") },
-            text = {
-                Text(
-                    "This merges this device's changes into Google Drive.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Push",
-                    onClick = {
-                        pushConfirmOpen = false
-                        viewModel.runPushOnly()
-                    },
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pushConfirmOpen = false })
-            },
+            title = "Push to Drive?",
+            message = "This merges this device's changes into Google Drive.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Push", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                    pushConfirmOpen = false
+                    viewModel.runPushOnly()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pushConfirmOpen = false },
+            ),
         )
     }
 
     if (dsyncPushConfirmOpen) {
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { dsyncPushConfirmOpen = false },
-            title = { Text("Push to Dispatcharr?") },
-            text = {
-                Text(
-                    "Replaces the shared data on your Dispatcharr server with this device's copy for the categories you sync. " +
-                        "Other devices receive it on their next sync.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(label = "Push", onClick = {
+            title = "Push to Dispatcharr?",
+            message = "Replaces the shared data on your Dispatcharr server with this device's copy for the categories you sync. " +
+                "Other devices receive it on their next sync.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Push", com.aeriotv.android.ui.settings.AlertRole.Primary) {
                     dsyncPushConfirmOpen = false
                     viewModel.runDispatcharrPush()
-                })
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { dsyncPushConfirmOpen = false })
-            },
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { dsyncPushConfirmOpen = false },
+            ),
         )
     }
 
     if (dsyncPullConfirmOpen) {
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { dsyncPullConfirmOpen = false },
-            title = { Text("Pull from Dispatcharr?") },
-            text = {
-                Text("Replaces this device's shared data with the copy on your Dispatcharr server for the categories you sync.")
-            },
-            confirmButton = {
-                SettingsDialogTextButton(label = "Pull", onClick = {
+            title = "Pull from Dispatcharr?",
+            message = "Replaces this device's shared data with the copy on your Dispatcharr server for the categories you sync.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Pull", com.aeriotv.android.ui.settings.AlertRole.Primary) {
                     dsyncPullConfirmOpen = false
                     viewModel.runDispatcharrPull()
-                })
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { dsyncPullConfirmOpen = false })
-            },
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { dsyncPullConfirmOpen = false },
+            ),
         )
     }
 
     if (bothPushConfirmOpen) {
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { bothPushConfirmOpen = false },
-            title = { Text("Push to both?") },
-            text = {
-                Text(
-                    "Replaces the shared data on your Dispatcharr server and in your Google Drive backup with this device's copy for the categories you sync.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(label = "Push", onClick = {
+            title = "Push to both?",
+            message = "Replaces the shared data on your Dispatcharr server and in your Google Drive backup with this device's copy for the categories you sync.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Push", com.aeriotv.android.ui.settings.AlertRole.Primary) {
                     bothPushConfirmOpen = false
                     viewModel.runPushToBoth()
-                })
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { bothPushConfirmOpen = false })
-            },
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { bothPushConfirmOpen = false },
+            ),
         )
     }
 
     if (pullConfirmOpen) {
         // Apple's "Pull from iCloud?" alert with Drive substituted. The pull
         // REPLACES this device's playlists and settings (Settings phase 3).
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pullConfirmOpen = false },
-            title = { Text("Pull from Drive?") },
-            text = {
-                Text(
-                    "This replaces this device's playlists and settings with the copy in Drive. " +
-                        "Playlists on this device that are not in Drive are removed. " +
-                        "If this device has the newest changes, push them up first.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Replace This Device",
-                    onClick = {
-                        pullConfirmOpen = false
-                        viewModel.runPullOnly()
-                    },
-                    destructive = true,
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pullConfirmOpen = false })
-            },
+            title = "Pull from Drive?",
+            message = "This replaces this device's playlists and settings with the copy in Drive. " +
+                "Playlists on this device that are not in Drive are removed. " +
+                "If this device has the newest changes, push them up first.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Replace This Device", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    pullConfirmOpen = false
+                    viewModel.runPullOnly()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pullConfirmOpen = false },
+            ),
         )
     }
 
     if (clearConfirmOpen) {
         // Apple's "Clear iCloud Data?" alert, word for word with Drive in
         // place of iCloud. Clearing leaves sync on, exactly as Apple does.
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { clearConfirmOpen = false },
-            title = { Text("Clear Drive Data?") },
-            text = {
-                Text(
-                    "Wipes synced playlists, preferences, watch progress, and credentials from Drive. " +
-                        "This device's data is preserved. Drive Sync stays enabled, so your local state " +
-                        "will replace whatever was on Drive the next time the app pushes.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Clear",
-                    onClick = {
-                        clearConfirmOpen = false
-                        viewModel.runClearRemote()
-                    },
-                    destructive = true,
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { clearConfirmOpen = false })
-            },
+            title = "Clear Drive Data?",
+            message = "Wipes synced playlists, preferences, watch progress, and credentials from Drive. " +
+                "This device's data is preserved. Drive Sync stays enabled, so your local state " +
+                "will replace whatever was on Drive the next time the app pushes.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Clear", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    clearConfirmOpen = false
+                    viewModel.runClearRemote()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { clearConfirmOpen = false },
+            ),
         )
     }
 
@@ -1280,23 +1236,17 @@ fun SyncCategoriesScreen(
 
     pendingDelete?.let { category ->
         val name = settingsCategoryTitle(category)
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Remove $name from Drive?") },
-            text = { Text("This will remove your $name from Drive. Other devices will keep their local copy.") },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Delete",
-                    onClick = {
-                        pendingDelete = null
-                        viewModel.runClearRemoteCategory(category)
-                    },
-                    destructive = true,
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pendingDelete = null })
-            },
+            title = "Remove $name from Drive?",
+            message = "This will remove your $name from Drive. Other devices will keep their local copy.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    pendingDelete = null
+                    viewModel.runClearRemoteCategory(category)
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
+            ),
         )
     }
 }

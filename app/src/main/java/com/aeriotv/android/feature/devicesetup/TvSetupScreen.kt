@@ -582,24 +582,20 @@ private fun Message(title: String, body: String, primary: Pair<String, () -> Uni
  */
 @Composable
 private fun DuplicatePlaylistDialog(existingName: String, onChoice: (TvSetupViewModel.DuplicateChoice) -> Unit) {
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+    // Apple's own prompt (ReceiveSetupView): centered text, one row of
+    // Cancel, Add Anyway, and Replace (filled), Replace focused.
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) },
-        title = { Text("This playlist already exists") },
-        text = { Text("$existingName uses the same server and account. Replace it with the incoming setup, or add it as a second playlist?") },
-        confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                com.aeriotv.android.ui.settings.SettingsDialogTextButton("Cancel", { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) })
-                com.aeriotv.android.ui.settings.SettingsDialogTextButton("Add Anyway", { onChoice(TvSetupViewModel.DuplicateChoice.AddAnyway) })
-                com.aeriotv.android.ui.settings.SettingsDialogTextButton(
-                    "Replace",
-                    { onChoice(TvSetupViewModel.DuplicateChoice.Replace) },
-                    modifier = Modifier.focusRequester(focus),
-                    emphasized = true,
-                )
-            }
-        },
+        title = "This playlist already exists",
+        message = "$existingName uses the same server and account. Replace it with the incoming setup, or add it as a second playlist?",
+        actions = listOf(
+            com.aeriotv.android.ui.settings.AlertAction("Add Anyway") { onChoice(TvSetupViewModel.DuplicateChoice.AddAnyway) },
+            com.aeriotv.android.ui.settings.AlertAction("Replace", com.aeriotv.android.ui.settings.AlertRole.Primary) { onChoice(TvSetupViewModel.DuplicateChoice.Replace) },
+            com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) },
+        ),
+        centered = true,
+        kind = com.aeriotv.android.ui.settings.AlertLayout.Kind.Row,
+        focusButton = true,
     )
 }
 

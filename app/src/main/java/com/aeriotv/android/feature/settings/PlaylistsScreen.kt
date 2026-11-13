@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import com.aeriotv.android.ui.scale.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -58,7 +57,6 @@ import com.aeriotv.android.core.tv.TvMenuAction
 import com.aeriotv.android.core.tv.rememberTvMenuGuard
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.settings.settingsFormWidth
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsHeaderTextButton
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
@@ -308,29 +306,19 @@ fun PlaylistsScreen(
     }
 
     pendingDelete?.let { pl ->
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete playlist?") },
-            text = {
-                Text(
-                    "This removes \"${pl.name}\" and its credentials from this device. " +
-                        if (pl.id == activeId) "The next playlist on the list will be activated." else "",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Delete",
-                    destructive = true,
-                    onClick = {
-                        val id = pl.id
-                        pendingDelete = null
-                        viewModel.deletePlaylist(id)
-                    },
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pendingDelete = null })
-            },
+            title = "Delete playlist?",
+            message = "This removes \"${pl.name}\" and its credentials from this device. " +
+                if (pl.id == activeId) "The next playlist on the list will be activated." else "",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    val id = pl.id
+                    pendingDelete = null
+                    viewModel.deletePlaylist(id)
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
+            ),
         )
     }
 }

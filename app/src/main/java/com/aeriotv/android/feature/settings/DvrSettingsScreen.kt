@@ -141,40 +141,26 @@ fun DvrSettingsScreen(
         // in-flight on-device capture only when the user picks the second
         // button. Local only: server rows are Dispatcharr's to manage.
         val inProgressCount = if (dvrState.isLocalRecordingActive) 1 else 0
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { showClearConfirmation = false },
-            title = { Text("Delete All Recordings?") },
-            text = {
-                Text(
-                    "Finished recordings will be deleted." +
-                        if (inProgressCount > 0) {
-                            " $inProgressCount in-progress recordings can also be stopped and deleted."
-                        } else "",
-                )
-            },
-            confirmButton = {
-                Column(horizontalAlignment = Alignment.End) {
-                    SettingsDialogTextButton(
-                        label = "Delete Finished",
-                        destructive = true,
-                        onClick = {
-                            showClearConfirmation = false
-                            scope.launch { dvrVm.deleteAllLocalRecordings(includeInProgress = false) }
-                        },
-                    )
-                    if (inProgressCount > 0) {
-                        SettingsDialogTextButton(
-                            label = "Delete All Including In-Progress",
-                            destructive = true,
-                            onClick = {
-                                showClearConfirmation = false
-                                scope.launch { dvrVm.deleteAllLocalRecordings(includeInProgress = true) }
-                            },
-                        )
+            title = "Delete All Recordings?",
+            message = "Finished recordings will be deleted." +
+                if (inProgressCount > 0) {
+                    " $inProgressCount in-progress recordings can also be stopped and deleted."
+                } else "",
+            actions = listOfNotNull(
+                com.aeriotv.android.ui.settings.AlertAction("Delete Finished", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    showClearConfirmation = false
+                    scope.launch { dvrVm.deleteAllLocalRecordings(includeInProgress = false) }
+                },
+                if (inProgressCount > 0) {
+                    com.aeriotv.android.ui.settings.AlertAction("Delete All Including In-Progress", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                        showClearConfirmation = false
+                        scope.launch { dvrVm.deleteAllLocalRecordings(includeInProgress = true) }
                     }
-                    SettingsDialogTextButton(label = "Cancel", onClick = { showClearConfirmation = false })
-                }
-            },
+                } else null,
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { showClearConfirmation = false },
+            ),
         )
     }
 

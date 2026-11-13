@@ -40,14 +40,12 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Schedule
-import com.aeriotv.android.ui.scale.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import com.aeriotv.android.ui.scale.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -546,18 +544,14 @@ fun DvrMediaTabContent(
     }
     pendingDelete?.let { rec ->
         val scheduledNow = rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Scheduled
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingDelete = null },
-            title = {
-                Text(
-                    when {
-                        scheduledNow -> "Cancel Recording"
-                        rec.source == DvrViewModel.Source.Server -> "Delete from Server"
-                        else -> "Delete from Device"
-                    },
-                )
+            title = when {
+                scheduledNow -> "Cancel Recording"
+                rec.source == DvrViewModel.Source.Server -> "Delete from Server"
+                else -> "Delete from Device"
             },
-            text = {
+            content = {
                 Text(
                     when {
                         scheduledNow -> "Cancel the scheduled recording of \"${rec.title}\"?"
@@ -567,13 +561,13 @@ fun DvrMediaTabContent(
                     },
                 )
             },
-            confirmButton = {
-                TextButton(onClick = {
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction(if (scheduledNow) "Cancel Recording" else "Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
                     val target = rec; pendingDelete = null
                     scope.launch { viewModel.deleteRecording(target).onFailure { toast("Delete failed: ${it.message}") } }
-                }) { Text(if (scheduledNow) "Cancel Recording" else "Delete", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Keep") } },
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Keep", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
+            ),
         )
     }
 }

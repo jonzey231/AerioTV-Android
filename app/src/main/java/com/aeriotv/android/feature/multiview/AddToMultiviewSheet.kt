@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
-import com.aeriotv.android.ui.scale.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -917,33 +916,24 @@ fun AddToMultiviewSheet(
     // Cancel drops the add. Composes its own window, so it overlays both the
     // TV Dialog panel and the phone bottom sheet.
     pendingWarnedAdd?.let { commit ->
-        AlertDialog(
+        // Apple's alert stacks Continue (destructive), Don't Show Again, Cancel.
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingWarnedAdd = null },
-            title = { Text("Performance may degrade") },
-            text = {
-                Text(
-                    "Adding more than ${multiviewStore.softLimit} streams may cause " +
-                        "audio drops, buffering, or overheating on some devices.",
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingWarnedAdd = null
-                        commit()
-                    },
-                ) { Text("Continue", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        settingsVm.setMultiviewPerfWarningSuppressed(true)
-                        pendingWarnedAdd = null
-                        commit()
-                    },
-                ) { Text("Don't Show Again") }
-                TextButton(onClick = { pendingWarnedAdd = null }) { Text("Cancel") }
-            },
+            title = "Performance may degrade",
+            message = "Adding more than ${multiviewStore.softLimit} streams may cause " +
+                "audio drops, buffering, or overheating on some devices.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Continue", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    pendingWarnedAdd = null
+                    commit()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Don't Show Again") {
+                    settingsVm.setMultiviewPerfWarningSuppressed(true)
+                    pendingWarnedAdd = null
+                    commit()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingWarnedAdd = null },
+            ),
         )
     }
 }

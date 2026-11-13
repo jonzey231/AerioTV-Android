@@ -1,19 +1,8 @@
 package com.aeriotv.android.feature.main
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.cast.AerioCastSender
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -122,35 +111,16 @@ fun PlayWhereDialogHost(sender: AerioCastSender) {
     }
     val request by PlayWhereRouter.pending.collectAsStateWithLifecycle()
     val r = request ?: return
-    AlertDialog(
+    // Apple's action sheet: Play Here, Play on {receiver}, then Cancel,
+    // stacked, the two plays at equal weight.
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { PlayWhereRouter.cancel() },
-        title = { Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = { PlayWhereRouter.chooseHere(r) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Play Here") }
-                if (r.playOnReceiver != null) {
-                    FilledTonalButton(
-                        onClick = { PlayWhereRouter.chooseReceiver(r) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            "Play on ${r.receiverName}",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = { PlayWhereRouter.cancel() }) { Text("Cancel") }
-        },
+        title = r.title,
+        actions = listOfNotNull(
+            com.aeriotv.android.ui.settings.AlertAction("Play Here") { PlayWhereRouter.chooseHere(r) },
+            r.playOnReceiver?.let { com.aeriotv.android.ui.settings.AlertAction("Play on ${r.receiverName}") { PlayWhereRouter.chooseReceiver(r) } },
+            com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { PlayWhereRouter.cancel() },
+        ),
+        kind = com.aeriotv.android.ui.settings.AlertLayout.Kind.Sheet,
     )
 }

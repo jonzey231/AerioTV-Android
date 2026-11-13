@@ -1,6 +1,5 @@
 package com.aeriotv.android.feature.settings
 
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -8,16 +7,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.core.network.DispatcharrRequestGate
-import com.aeriotv.android.ui.settings.SettingsAlertDialog
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 
 /**
  * "Open Edit Playlist for this playlist" from places with no Settings
@@ -119,8 +113,6 @@ fun ApiKeyRejectedPromptHost(
     // The refused key is a non-default profile's own: only its own sign-in (APP7-1).
     val profileKey = p.profileId != null
     val buttons = KeyRejectedCopy.buttons(isTv, canSignIn, isChild = isChild, profileKey = profileKey)
-    val focus = remember(p) { FocusRequester() }
-    LaunchedEffect(p) { runCatching { focus.requestFocus() } }
     val act: (KeyRejectedCopy.Button) -> Unit = { b ->
         DispatcharrRequestGate.consumePrompt()
         when (b) {
@@ -137,21 +129,25 @@ fun ApiKeyRejectedPromptHost(
             KeyRejectedCopy.Button.NotNow -> Unit
         }
     }
-    SettingsAlertDialog(
+    // Laid out like the Apple alert (owner 2026-11-12): phones stack Sign In
+    // (filled), Edit Playlist, and Not Now full width; TVs stack Update from
+    // Phone, Sign In with Remote, and Not Now. The first is the preferred
+    // action (Apple's preferredAction) and takes focus.
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { DispatcharrRequestGate.consumePrompt() },
-        title = { Text(KeyRejectedCopy.TITLE) },
-        text = { Text(KeyRejectedCopy.body(p.playlistName, p.passwordToo, p.noApiKey, isChild = isChild, canSignIn = canSignIn, profileKey = profileKey)) },
-        confirmButton = {
-            // Emitted straight into the dialog's button row (no inner Row),
-            // in order, so it wraps instead of clipping when they do not fit.
-            buttons.forEachIndexed { i, b ->
-                SettingsDialogTextButton(
-                    KeyRejectedCopy.label(b),
-                    { act(b) },
-                    modifier = if (i == 0) Modifier.focusRequester(focus) else Modifier,
-                    emphasized = i == 0,
-                )
-            }
+        title = KeyRejectedCopy.TITLE,
+        message = KeyRejectedCopy.body(p.playlistName, p.passwordToo, p.noApiKey, isChild = isChild, canSignIn = canSignIn, profileKey = profileKey),
+        actions = buttons.mapIndexed { i, b ->
+            com.aeriotv.android.ui.settings.AlertAction(
+                label = KeyRejectedCopy.label(b),
+                role = when {
+                    b == KeyRejectedCopy.Button.NotNow -> com.aeriotv.android.ui.settings.AlertRole.Cancel
+                    i == 0 -> com.aeriotv.android.ui.settings.AlertRole.Primary
+                    else -> com.aeriotv.android.ui.settings.AlertRole.Default
+                },
+                onClick = { act(b) },
+            )
         },
+        focusButton = true,
     )
 }

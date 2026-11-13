@@ -435,22 +435,23 @@ fun QrRestoreOfferDialog(
         if (vm.alreadyOn() || !vm.serverHasData(signIn)) onClose() else show = true
     }
     if (!show) return
-    com.aeriotv.android.ui.settings.SettingsAlertDialog(
+    // Apple's alert: Not Now (cancel) left, Turn On right.
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { if (!busy) onClose() },
-        title = { Text("Turn on Dispatcharr Sync?") },
-        text = { Text(QR_RESTORE_COPY) },
-        confirmButton = {
-            com.aeriotv.android.ui.settings.SettingsDialogTextButton(
+        title = "Turn on Dispatcharr Sync?",
+        message = QR_RESTORE_COPY,
+        actions = listOf(
+            com.aeriotv.android.ui.settings.AlertAction(
                 label = if (busy) "Turning On" else "Turn On",
+                role = com.aeriotv.android.ui.settings.AlertRole.Primary,
                 onClick = {
-                    if (busy) return@SettingsDialogTextButton
-                    busy = true
-                    scope.launch { vm.turnOn(where = "add playlist QR restore"); onClose() }
+                    if (!busy) {
+                        busy = true
+                        scope.launch { vm.turnOn(where = "add playlist QR restore"); onClose() }
+                    }
                 },
-            )
-        },
-        dismissButton = {
-            com.aeriotv.android.ui.settings.SettingsDialogTextButton(label = "Not Now", onClick = { if (!busy) onClose() })
-        },
+            ),
+            com.aeriotv.android.ui.settings.AlertAction("Not Now", com.aeriotv.android.ui.settings.AlertRole.Cancel) { if (!busy) onClose() },
+        ),
     )
 }

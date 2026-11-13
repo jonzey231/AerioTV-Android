@@ -33,7 +33,6 @@ import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.WarningAmber
-import com.aeriotv.android.ui.scale.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -64,7 +63,6 @@ import com.aeriotv.android.BuildConfig
 import com.aeriotv.android.core.debug.DebugLogger
 import com.aeriotv.android.ui.settings.settingsFormWidth
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.SettingsSubPageHost
@@ -217,79 +215,52 @@ fun DeveloperSettingsScreen(
     }
 
     if (pendingEnable) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingEnable = false },
-            title = { Text("Enable Debug Logging?") },
-            text = {
-                Text(
-                    "AerioTV will write detailed diagnostic logs to a file in the app's " +
-                        "private storage.\n\nLogs include network requests, playback events, " +
-                        "and error details. They never leave the device unless you share the " +
-                        "file from this screen.\n\nLogging has a minor impact on performance " +
-                        "and storage. You can disable it at any time.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Enable Logging",
-                    onClick = {
-                        pendingEnable = false
-                        settingsVm.setDebugLoggingEnabled(true)
-                    },
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pendingEnable = false })
-            },
+            title = "Enable Debug Logging?",
+            message = "AerioTV will write detailed diagnostic logs to a file in the app's " +
+                "private storage.\n\nLogs include network requests, playback events, " +
+                "and error details. They never leave the device unless you share the " +
+                "file from this screen.\n\nLogging has a minor impact on performance " +
+                "and storage. You can disable it at any time.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Enable Logging", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                    pendingEnable = false
+                    settingsVm.setDebugLoggingEnabled(true)
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingEnable = false },
+            ),
         )
     }
 
     if (pendingDisable) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingDisable = false },
-            title = { Text("Disable Debug Logging?") },
-            text = {
-                Text("The existing log file will be kept. You can share or clear it at any time.")
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Disable",
-                    onClick = {
-                        pendingDisable = false
-                        settingsVm.setDebugLoggingEnabled(false)
-                    },
-                    destructive = true,
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Keep Logging", onClick = { pendingDisable = false })
-            },
+            title = "Disable Debug Logging?",
+            message = "The existing log file will be kept. You can share or clear it at any time.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Disable", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    pendingDisable = false
+                    settingsVm.setDebugLoggingEnabled(false)
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Keep Logging", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDisable = false },
+            ),
         )
     }
 
     if (pendingClear) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingClear = false },
-            title = { Text("Delete All Logs?") },
-            text = {
-                Text(
-                    "This permanently deletes the current log and any rotated " +
-                        "archives. This cannot be undone.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Delete All Logs",
-                    onClick = {
-                        pendingClear = false
-                        debugLogger.deleteAllLogs()
-                    },
-                    destructive = true,
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { pendingClear = false })
-            },
+            title = "Delete All Logs?",
+            message = "This permanently deletes the current log and any rotated " +
+                "archives. This cannot be undone.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Delete All Logs", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    pendingClear = false
+                    debugLogger.deleteAllLogs()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingClear = false },
+            ),
         )
     }
 

@@ -56,9 +56,7 @@ import com.aeriotv.android.core.category.CategoryPaletteState
 import com.aeriotv.android.core.category.ProgramCategory
 import com.aeriotv.android.ui.adaptive.LocalTabBarBottomInset
 import com.aeriotv.android.core.preferences.GuideProgramInfoButton
-import com.aeriotv.android.ui.scale.AlertDialog
 import com.aeriotv.android.ui.settings.SettingsActionRow
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsDetailTopBar
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
@@ -560,23 +558,17 @@ fun LiveTvSettingsScreen(
     }
 
     if (confirmClearRecents) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { confirmClearRecents = false },
-            title = { Text("Clear Recently Watched?") },
-            text = { Text("Removes every channel from Recently Watched.") },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Clear",
-                    destructive = true,
-                    onClick = {
-                        confirmClearRecents = false
-                        viewModel.clearRecentChannels()
-                    },
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { confirmClearRecents = false })
-            },
+            title = "Clear Recently Watched?",
+            message = "Removes every channel from Recently Watched.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Clear", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    confirmClearRecents = false
+                    viewModel.clearRecentChannels()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { confirmClearRecents = false },
+            ),
         )
     }
 

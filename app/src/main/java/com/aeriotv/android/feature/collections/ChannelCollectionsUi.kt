@@ -413,44 +413,34 @@ fun AddToCollectionFlow(
             )
         }
     } else {
-        AlertDialog(
+        // Apple's alert: Add at Beginning, Add at End, and Cancel, stacked.
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = onClose,
-            title = { Text("New Collection") },
-            text = {
-                Column {
-                    Text(
-                        "Name the collection and choose where its pill appears " +
-                            "in the Live TV row.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        placeholder = { Text("Name") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp),
-                    )
-                }
+            title = "New Collection",
+            message = "Name the collection and choose where its pill appears " +
+                "in the Live TV row.",
+            content = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    placeholder = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onCreate(newName, channelId, ChannelCollection.PLACEMENT_BEGINNING)
-                        onClose()
-                    },
-                ) { Text("Add at Beginning") }
-                TextButton(
-                    onClick = {
-                        onCreate(newName, channelId, ChannelCollection.PLACEMENT_END)
-                        onClose()
-                    },
-                ) { Text("Add at End") }
-            },
-            dismissButton = {
-                TextButton(onClick = onClose) { Text("Cancel") }
-            },
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Add at Beginning") {
+                    onCreate(newName, channelId, ChannelCollection.PLACEMENT_BEGINNING)
+                    onClose()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Add at End") {
+                    onCreate(newName, channelId, ChannelCollection.PLACEMENT_END)
+                    onClose()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { onClose() },
+            ),
+            // No button takes focus when it opens, as before.
+            focusButton = false,
         )
     }
 }

@@ -7,9 +7,7 @@ import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,16 +38,17 @@ fun ImportSourceDeletePrompt() {
     }
     val s = source ?: return
     val isPhoto = s is ImportSourceCleanup.Source.Photo
-    AlertDialog(
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { ImportSourceCleanup.clear(); logOutcome(false) },
-        text = {
+        title = null,
+        content = {
             Text(
                 if (isPhoto) "Delete this image from Photos? It contains your sign-in code."
                 else "Delete this file? It contains your sign-in code.",
             )
         },
-        confirmButton = {
-            TextButton(onClick = {
+        actions = listOf(
+            com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
                 ImportSourceCleanup.clear()
                 when (s) {
                     is ImportSourceCleanup.Source.Photo -> {
@@ -66,10 +65,8 @@ fun ImportSourceDeletePrompt() {
                         logOutcome(ok)
                     }
                 }
-            }) { Text("Delete") }
-        },
-        dismissButton = {
-            TextButton(onClick = { ImportSourceCleanup.clear(); logOutcome(false) }) { Text("Keep") }
-        },
+            },
+            com.aeriotv.android.ui.settings.AlertAction("Keep", com.aeriotv.android.ui.settings.AlertRole.Cancel) { ImportSourceCleanup.clear(); logOutcome(false) },
+        ),
     )
 }

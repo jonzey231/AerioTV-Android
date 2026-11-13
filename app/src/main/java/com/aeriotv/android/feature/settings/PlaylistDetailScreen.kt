@@ -29,7 +29,6 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Wifi
-import com.aeriotv.android.ui.scale.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -72,7 +71,6 @@ import com.aeriotv.android.core.data.db.entity.isDispatcharrDirectConnect
 import com.aeriotv.android.core.preferences.DispatcharrAccountFacts
 import com.aeriotv.android.feature.playlist.PlaylistViewModel
 import com.aeriotv.android.ui.settings.settingsFormWidth
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.SettingsHeaderTextButton
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
 import java.text.DateFormat
@@ -702,57 +700,37 @@ fun PlaylistDetailScreen(
     }
 
     if (confirmDelete && playlist != null) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete playlist?") },
-            text = {
-                Text(
-                    "This removes \"${playlist.name}\" and its credentials from this " +
-                        "device. If another playlist is saved, it becomes active.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Delete",
-                    destructive = true,
-                    onClick = {
-                        confirmDelete = false
-                        viewModel.deletePlaylist(playlist.id)
-                        onBack()
-                    },
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { confirmDelete = false })
-            },
+            title = "Delete playlist?",
+            message = "This removes \"${playlist.name}\" and its credentials from this " +
+                "device. If another playlist is saved, it becomes active.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    confirmDelete = false
+                    viewModel.deletePlaylist(playlist.id)
+                    onBack()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { confirmDelete = false },
+            ),
         )
     }
 
     if (confirmRefreshAll && playlist != null) {
-        AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { confirmRefreshAll = false },
-            title = { Text("Refresh Everything?") },
-            text = {
-                Text(
-                    "Clears all cached channels, guide data, and On Demand, then " +
-                        "reloads \"${playlist.name}\" from scratch. Use this if " +
-                        "channels or guide data are missing or stale. May take a " +
-                        "few minutes on large playlists.",
-                )
-            },
-            confirmButton = {
-                SettingsDialogTextButton(
-                    label = "Refresh",
-                    destructive = true,
-                    onClick = {
-                        confirmRefreshAll = false
-                        viewModel.refreshEverything()
-                    },
-                )
-            },
-            dismissButton = {
-                SettingsDialogTextButton(label = "Cancel", onClick = { confirmRefreshAll = false })
-            },
+            title = "Refresh Everything?",
+            message = "Clears all cached channels, guide data, and On Demand, then " +
+                "reloads \"${playlist.name}\" from scratch. Use this if " +
+                "channels or guide data are missing or stale. May take a " +
+                "few minutes on large playlists.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Refresh", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    confirmRefreshAll = false
+                    viewModel.refreshEverything()
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { confirmRefreshAll = false },
+            ),
         )
     }
 }

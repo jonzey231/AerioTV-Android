@@ -28,8 +28,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.aeriotv.android.core.sync.SetupSourceChoice
-import com.aeriotv.android.ui.settings.SettingsAlertDialog
-import com.aeriotv.android.ui.settings.SettingsDialogTextButton
 import com.aeriotv.android.ui.settings.settingsRowCard
 
 /**
@@ -49,11 +47,13 @@ fun SetupSourceDialog(
     val now = remember { System.currentTimeMillis() }
     val firstFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { firstFocus.requestFocus() } }
-    SettingsAlertDialog(
+    // Apple's prompt: the two cards, then one equal-width row, Cancel left
+    // and Continue (filled) right; focus starts on the selected card.
+    com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { if (!busy) onCancel() },
         properties = DialogProperties(dismissOnClickOutside = false),
-        title = { Text(SetupSourceChoice.TITLE) },
-        text = {
+        title = SetupSourceChoice.TITLE,
+        content = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SourceCard(
                     title = SetupSourceChoice.DISPATCHARR,
@@ -78,16 +78,13 @@ fun SetupSourceDialog(
                 )
             }
         },
-        confirmButton = {
+        actions = listOf(
             // Never disabled mid-flow (TV focus would fall away); taps are ignored while busy.
-            SettingsDialogTextButton(
-                label = SetupSourceChoice.CONTINUE,
-                onClick = { if (!busy) onContinue(selected) },
-            )
-        },
-        dismissButton = {
-            SettingsDialogTextButton(label = SetupSourceChoice.CANCEL, onClick = { if (!busy) onCancel() })
-        },
+            com.aeriotv.android.ui.settings.AlertAction(SetupSourceChoice.CONTINUE, com.aeriotv.android.ui.settings.AlertRole.Primary) { if (!busy) onContinue(selected) },
+            com.aeriotv.android.ui.settings.AlertAction(SetupSourceChoice.CANCEL, com.aeriotv.android.ui.settings.AlertRole.Cancel) { if (!busy) onCancel() },
+        ),
+        kind = com.aeriotv.android.ui.settings.AlertLayout.Kind.Row,
+        focusButton = false,
     )
 }
 

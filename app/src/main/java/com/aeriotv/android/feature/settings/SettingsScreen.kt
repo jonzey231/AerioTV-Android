@@ -616,28 +616,17 @@ private fun PlaylistsSection(
 
     pendingDelete?.let { pl ->
         // Apple's root-list alert, word for word.
-        com.aeriotv.android.ui.scale.AlertDialog(
+        com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete Playlist?") },
-            text = {
-                Text("This will remove \"${pl.name}\" from the app. Your server data will not be affected.")
-            },
-            confirmButton = {
-                com.aeriotv.android.ui.settings.SettingsDialogTextButton(
-                    label = "Delete",
-                    destructive = true,
-                    onClick = {
-                        pendingDelete = null
-                        onDelete(pl)
-                    },
-                )
-            },
-            dismissButton = {
-                com.aeriotv.android.ui.settings.SettingsDialogTextButton(
-                    label = "Cancel",
-                    onClick = { pendingDelete = null },
-                )
-            },
+            title = "Delete Playlist?",
+            message = "This will remove \"${pl.name}\" from the app. Your server data will not be affected.",
+            actions = listOf(
+                com.aeriotv.android.ui.settings.AlertAction("Delete", com.aeriotv.android.ui.settings.AlertRole.Destructive) {
+                    pendingDelete = null
+                    onDelete(pl)
+                },
+                com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { pendingDelete = null },
+            ),
         )
     }
 }
