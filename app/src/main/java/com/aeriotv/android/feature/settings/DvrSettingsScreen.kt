@@ -20,6 +20,17 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -75,7 +86,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aeriotv.android.feature.dvr.DvrViewModel
-import com.aeriotv.android.ui.settings.SettingsSlider
 import com.aeriotv.android.ui.settings.SettingsPickerOption
 import com.aeriotv.android.ui.settings.SettingsPickerRow
 import com.aeriotv.android.ui.settings.settingsFormWidth
@@ -130,9 +140,6 @@ fun DvrSettingsScreen(
     val usedBytes = dvrState.recordings
         .filter { it.source == DvrViewModel.Source.Local }
         .sumOf { it.fileSizeBytes }
-    val usedFraction = if (capMB > 0)
-        (usedBytes.toDouble() / (capMB.toDouble() * 1024.0 * 1024.0)).toFloat().coerceIn(0f, 1f)
-    else 0f
 
     customBuffer?.let { which ->
         val current = if (which == CustomBuffer.Pre) preRoll else postRoll
@@ -279,18 +286,19 @@ fun DvrSettingsScreen(
             }
 
             if (isTv) item {
-                // Apple TV's storage card (DVRSettingsView tvStorageCard): a
-                // "- 10 GB +" stepper on the Maximum row and the Used gauge
-                // in the same card under it, then the storage disclosure.
+                // Apple TV's storage card (DVRSettingsView tvStorageCard):
+                // Maximum with its Left/Right value control and the Used gauge
+                // in the same card, then the storage disclosure.
                 SettingsSection(
                     header = "Local Storage",
                     footer = "Recordings are stored on this Android TV. If the system runs critically low on space, Android may remove stored app data, including recordings. For must-keep recordings, use a Dispatcharr server destination.",
                 ) {
-                    TvStorageCard(
+                    StorageCapCard(
                         capMB = capMB,
-                        onCapChange = settingsVm::setDvrMaxLocalStorageMB,
-                        usedText = "${formatBytes(context, usedBytes)} of ${formatGb(capMB)}",
-                        usedFraction = usedFraction,
+                        onCommit = settingsVm::setDvrMaxLocalStorageMB,
+                        usedBytes = usedBytes,
+                        formatUsed = { formatBytes(context, it) },
+                        isTv = true,
                     )
                 }
             } else item {
@@ -299,77 +307,13 @@ fun DvrSettingsScreen(
                     header = "Local Storage",
                     footer = null,
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Maximum",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = formatGb(capMB),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.textAccent,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                        // 1 GB - 200 GB, step 1 GB: Apple's range. The shared
-                        // Settings slider owns the D-pad escape on TV.
-                        SettingsSlider(
-                            value = capMB.toFloat(),
-                            onValueChange = { settingsVm.setDvrMaxLocalStorageMB(it.toInt()) },
-                            valueRange = 1024f..204800f,
-                            steps = 198,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Used",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = "${formatBytes(context, usedBytes)} of ${formatGb(capMB)}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        // Apple's usage colors: green, yellow from 80%, red from 95%.
-                        val usageColor = when {
-                            usedFraction >= 0.95f -> androidx.compose.ui.graphics.Color(0xFFFF3B30)
-                            usedFraction >= 0.80f -> androidx.compose.ui.graphics.Color(0xFFFFCC00)
-                            else -> androidx.compose.ui.graphics.Color(0xFF34C759)
-                        }
-                        LinearProgressIndicator(
-                            progress = { usedFraction },
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                            color = usageColor,
-                            trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
-                            gapSize = 0.dp,
-                            drawStopIndicator = {},
-                        )
-                        if (usedFraction >= 0.80f) {
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Filled.Warning,
-                                    contentDescription = null,
-                                    tint = androidx.compose.ui.graphics.Color(0xFFFFCC00),
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.size(6.dp))
-                                Text(
-                                    text = "Storage is running low. Future recordings may not complete if the limit is reached.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onBackground,
-                                )
-                            }
-                        }
-                    }
+                    StorageCapCard(
+                        capMB = capMB,
+                        onCommit = settingsVm::setDvrMaxLocalStorageMB,
+                        usedBytes = usedBytes,
+                        formatUsed = { formatBytes(context, it) },
+                        isTv = false,
+                    )
                 }
             }
 
@@ -488,49 +432,131 @@ private fun Card(
 }
 
 /**
- * Apple TV's Local Storage card (DVRSettingsView tvStorageCard), halved:
- * Maximum with a minus key, the value (28 pt semibold, at least 110 pt
- * wide), and a plus key 24 pt apart; 16 pt below, Used and its amount
- * (22 pt) over a 12 pt gauge, all inside one card with 24 pt padding. The
- * card is one focus stop: D-pad Left and Right step the maximum by 1 GB
- * between 1 and 200 GB, Apple's keys' steps and limits.
+ * Settings > DVR > Local Storage, every platform: Maximum and its value
+ * control, then Used and its bar, in one card (Apple 6660eef; Logan
+ * 2026-11-13: phones and tablets step too, the slider was hard to land on an
+ * exact amount). A tap, click, or D-pad press moves 0.25 GB; held, it
+ * repeats after 0.4 s every 0.1 s, 0.25 GB for 8 repeats, then 1 GB for 12,
+ * then 5 GB (DvrStorageCapRules), 1 to 200 GB.
+ *
+ * A held control changes the value ten times a second, so the value lives
+ * here while it moves: only this card recomposes, and the setting is written
+ * once, [STORAGE_COMMIT_DEBOUNCE_MS] after the last change (or when the card
+ * leaves), not on every step. The setting is device-local: no sync push.
  */
 @Composable
-private fun TvStorageCard(
+private fun StorageCapCard(
     capMB: Int,
-    onCapChange: (Int) -> Unit,
-    usedText: String,
-    usedFraction: Float,
+    onCommit: (Int) -> Unit,
+    usedBytes: Long,
+    formatUsed: (Long) -> String,
+    isTv: Boolean,
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val atMin = capMB <= STORAGE_MIN_MB
-    val atMax = capMB >= STORAGE_MAX_MB
-    fun step(deltaMb: Int): Boolean {
-        val next = (capMB + deltaMb).coerceIn(STORAGE_MIN_MB, STORAGE_MAX_MB)
-        if (next == capMB) return false
-        onCapChange(next)
+    // The value while it moves; null when it matches the stored setting.
+    var draftMB by remember { mutableStateOf<Int?>(null) }
+    val shownMB = draftMB ?: capMB
+    val commit by androidx.compose.runtime.rememberUpdatedState(onCommit)
+    androidx.compose.runtime.LaunchedEffect(draftMB) {
+        val d = draftMB ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(STORAGE_COMMIT_DEBOUNCE_MS)
+        commit(d)
+    }
+    // The stored value caught up with the draft: show the setting again.
+    androidx.compose.runtime.LaunchedEffect(capMB) { if (draftMB == capMB) draftMB = null }
+    val pending by androidx.compose.runtime.rememberUpdatedState(draftMB)
+    val stored by androidx.compose.runtime.rememberUpdatedState(capMB)
+    // Leaving the page within the debounce still saves the last value.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { pending?.let { if (it != stored) commit(it) } }
+    }
+    val scope = rememberCoroutineScope()
+    val hold = remember { StorageCapHold(scope) }
+    hold.current = { draftMB ?: capMB }
+    hold.set = { draftMB = it }
+
+    val usedFraction = (usedBytes.toDouble() / (shownMB.toDouble() * 1024.0 * 1024.0)).toFloat().coerceIn(0f, 1f)
+    val usedText = "${formatUsed(usedBytes)} of ${com.aeriotv.android.core.data.DvrStorageCapRules.label(shownMB)}"
+    // TalkBack: one adjustable control (swipe up or down moves 0.25 GB).
+    val adjustable = Modifier.clearAndSetSemantics {
+        contentDescription = "Maximum"
+        stateDescription = com.aeriotv.android.core.data.DvrStorageCapRules.label(shownMB)
+        progressBarRangeInfo = androidx.compose.ui.semantics.ProgressBarRangeInfo(
+            current = shownMB.toFloat(),
+            range = STORAGE_MIN_MB.toFloat()..STORAGE_MAX_MB.toFloat(),
+            steps = (STORAGE_MAX_MB - STORAGE_MIN_MB) / STORAGE_STEP_MB - 1,
+        )
+        setProgress { target ->
+            val next = com.aeriotv.android.core.data.DvrStorageCapRules.snappedMB(target / 1024.0)
+            if (next != shownMB) draftMB = next
+            true
+        }
+    }
+    if (isTv) {
+        TvStorageCapCard(shownMB, usedText, usedFraction, hold, adjustable)
+    } else {
+        PhoneStorageCapCard(shownMB, usedText, usedFraction, hold, adjustable)
+    }
+}
+
+/**
+ * The hold-to-repeat engine shared by the phone keys and the TV control:
+ * [begin] steps once at once, then after 0.4 s every 0.1 s with the
+ * accelerating step, until [end].
+ */
+private class StorageCapHold(private val scope: kotlinx.coroutines.CoroutineScope) {
+    var current: () -> Int = { STORAGE_MIN_MB }
+    var set: (Int) -> Unit = {}
+    private var job: kotlinx.coroutines.Job? = null
+
+    fun begin(up: Boolean) {
+        job?.cancel()
+        if (!adjust(up, 0)) return
+        job = scope.launch {
+            kotlinx.coroutines.delay(com.aeriotv.android.core.data.DvrStorageCapRules.HOLD_DELAY_MS)
+            var n = 1
+            // Capped (about 40 s) in case a release never arrives.
+            while (n < 400 && adjust(up, n)) {
+                n++
+                kotlinx.coroutines.delay(com.aeriotv.android.core.data.DvrStorageCapRules.REPEAT_MS)
+            }
+        }
+    }
+
+    fun end() {
+        job?.cancel()
+        job = null
+    }
+
+    /** One step; false at the end of the range. */
+    private fun adjust(up: Boolean, n: Int): Boolean {
+        val now = current()
+        val next = com.aeriotv.android.core.data.DvrStorageCapRules.stepped(
+            now, com.aeriotv.android.core.data.DvrStorageCapRules.holdStepMB(n), up,
+        )
+        if (next == now) return false
+        set(next)
         return true
     }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
-            .settingsRowCard(focused)
-            .onKeyEvent { e ->
-                if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onKeyEvent false
-                when (e.key) {
-                    // At an end stop the key is left to the focus system.
-                    androidx.compose.ui.input.key.Key.DirectionLeft -> step(-STORAGE_STEP_MB)
-                    androidx.compose.ui.input.key.Key.DirectionRight -> step(STORAGE_STEP_MB)
-                    else -> false
-                }
-            }
-            .focusable()
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        // As tall as Apple's step keys (TVSettingsPill, about 43 pt).
-        Row(modifier = Modifier.heightIn(min = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+}
+
+/**
+ * Phones and tablets: "Maximum" with "− 10 GB +", the Used line and bar under
+ * it, in the card's row inset. A key is dimmed and inert at its end of the
+ * range. Typography as the other Settings value rows (title left, the value
+ * in the accent).
+ */
+@Composable
+private fun PhoneStorageCapCard(
+    shownMB: Int,
+    usedText: String,
+    usedFraction: Float,
+    hold: StorageCapHold,
+    adjustable: Modifier,
+) {
+    val atMin = shownMB <= STORAGE_MIN_MB
+    val atMax = shownMB >= STORAGE_MAX_MB
+    Column(modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 12.dp)) {
+        Row(modifier = adjustable, verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "Maximum",
                 style = settingsRowTitleStyle(),
@@ -538,27 +564,187 @@ private fun TvStorageCard(
                 fontWeight = settingsRowTitleWeight(),
                 modifier = Modifier.weight(1f),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            StorageStepKey(Icons.Filled.Remove, enabled = !atMin, onPress = { hold.begin(up = false) }, onRelease = { hold.end() })
+            Text(
+                text = com.aeriotv.android.core.data.DvrStorageCapRules.label(shownMB),
+                style = com.aeriotv.android.ui.settings.settingsRowValueStyle(),
+                color = MaterialTheme.colorScheme.textAccent,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.widthIn(min = 76.dp),
+            )
+            StorageStepKey(Icons.Filled.Add, enabled = !atMax, onPress = { hold.begin(up = true) }, onRelease = { hold.end() })
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Used",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = usedText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        LinearProgressIndicator(
+            progress = { usedFraction },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+            color = storageUsageColor(usedFraction),
+            trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+            gapSize = 0.dp,
+            drawStopIndicator = {},
+        )
+        if (usedFraction >= 0.80f) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Filled.Remove,
-                    contentDescription = "Less storage",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (atMin) 0.3f else 1f),
-                    modifier = Modifier.size(14.dp),
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = androidx.compose.ui.graphics.Color(0xFFFFCC00),
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = "Storage is running low. Future recordings may not complete if the limit is reached.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+        }
+    }
+}
+
+/** A phone "−" or "+" key: a tap steps once, a hold repeats until release. */
+@Composable
+private fun StorageStepKey(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean,
+    onPress: () -> Unit,
+    onRelease: () -> Unit,
+) {
+    val press by androidx.compose.runtime.rememberUpdatedState(onPress)
+    val release by androidx.compose.runtime.rememberUpdatedState(onRelease)
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .then(
+                if (!enabled) Modifier else Modifier.pointerInput(Unit) {
+                    detectTapGestures(onPress = {
+                        press()
+                        try { tryAwaitRelease() } finally { release() }
+                    })
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.textAccent.copy(alpha = if (enabled) 1f else 0.3f),
+            modifier = Modifier.size(22.dp),
+        )
+    }
+}
+
+/**
+ * Android TV (Apple's TVStorageCapAdjuster, halved): "Maximum" with the value
+ * between a left and a right chevron in a capsule, the one focus stop in the
+ * card. Left and Right change it and never move focus out of it (Apple
+ * 6660eef: Left had sent focus to the Settings rail); Up and Down still
+ * navigate. Held, the step repeats on the card's own clock, not the remote's
+ * key repeat; a swipe or a press is one step.
+ */
+@Composable
+private fun TvStorageCapCard(
+    shownMB: Int,
+    usedText: String,
+    usedFraction: Float,
+    hold: StorageCapHold,
+    adjustable: Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val atMin = shownMB <= STORAGE_MIN_MB
+    val atMax = shownMB >= STORAGE_MAX_MB
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .settingsRowCard(false)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Maximum",
+                style = settingsRowTitleStyle(),
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = settingsRowTitleWeight(),
+                modifier = Modifier.weight(1f),
+            )
+            val ink = if (focused) MaterialTheme.colorScheme.textAccent else MaterialTheme.colorScheme.onBackground
+            Row(
+                modifier = Modifier
+                    .then(adjustable)
+                    .onFocusChanged {
+                        focused = it.isFocused
+                        if (!it.isFocused) hold.end()
+                    }
+                    .onKeyEvent { e ->
+                        val left = e.key == androidx.compose.ui.input.key.Key.DirectionLeft
+                        val right = e.key == androidx.compose.ui.input.key.Key.DirectionRight
+                        if (!left && !right) return@onKeyEvent false
+                        when (e.type) {
+                            // The remote's own key repeat is ignored: the card keeps the pace.
+                            androidx.compose.ui.input.key.KeyEventType.KeyDown ->
+                                if (e.nativeKeyEvent.repeatCount == 0) hold.begin(up = right)
+                            androidx.compose.ui.input.key.KeyEventType.KeyUp -> hold.end()
+                        }
+                        // A value row keeps focus on Left and Right, at the ends too.
+                        true
+                    }
+                    .focusable()
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(
+                        if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        else com.aeriotv.android.ui.settings.settingsCardFill(),
+                    )
+                    .then(
+                        if (focused) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, androidx.compose.foundation.shape.CircleShape)
+                        else Modifier,
+                    )
+                    // Material's chevron sits in a wider box than the SF
+                    // symbol's frame, so the padding and gaps are trimmed to
+                    // land the glyphs where Apple TV draws them (1080p
+                    // simulator, 6660eef): 103 px from the value's center,
+                    // 28 px inside the capsule's end.
+                    .padding(horizontal = 5.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = null,
+                    tint = ink.copy(alpha = if (atMin) 0.25f else 0.8f),
+                    modifier = Modifier.size(19.dp),
                 )
                 Text(
-                    text = formatGb(capMB),
+                    text = com.aeriotv.android.core.data.DvrStorageCapRules.label(shownMB),
                     fontSize = 14.sp,
                     lineHeight = 17.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground,
+                    color = ink,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.widthIn(min = 55.dp),
+                    modifier = Modifier.widthIn(min = 75.dp),
                 )
                 Icon(
-                    Icons.Filled.Add,
-                    contentDescription = "More storage",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (atMax) 0.3f else 1f),
-                    modifier = Modifier.size(14.dp),
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = ink.copy(alpha = if (atMax) 0.25f else 0.8f),
+                    modifier = Modifier.size(19.dp),
                 )
             }
         }
@@ -576,12 +762,6 @@ private fun TvStorageCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // Apple's usage colors: green, yellow from 80%, red from 95%.
-            val usageColor = when {
-                usedFraction >= 0.95f -> androidx.compose.ui.graphics.Color(0xFFFF3B30)
-                usedFraction >= 0.80f -> androidx.compose.ui.graphics.Color(0xFFFFCC00)
-                else -> androidx.compose.ui.graphics.Color(0xFF34C759)
-            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -589,7 +769,7 @@ private fun TvStorageCard(
                     .clip(RoundedCornerShape(3.dp))
                     .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)),
             ) {
-                Box(Modifier.fillMaxHeight().fillMaxWidth(usedFraction).background(usageColor))
+                Box(Modifier.fillMaxHeight().fillMaxWidth(usedFraction).background(storageUsageColor(usedFraction)))
             }
         }
         if (usedFraction >= 0.80f) {
@@ -611,9 +791,18 @@ private fun TvStorageCard(
     }
 }
 
-private const val STORAGE_STEP_MB = 1024
-private const val STORAGE_MIN_MB = 1024
-private const val STORAGE_MAX_MB = 204_800
+/** Apple's usage colors: green, yellow from 80%, red from 95%. */
+private fun storageUsageColor(fraction: Float): androidx.compose.ui.graphics.Color = when {
+    fraction >= 0.95f -> androidx.compose.ui.graphics.Color(0xFFFF3B30)
+    fraction >= 0.80f -> androidx.compose.ui.graphics.Color(0xFFFFCC00)
+    else -> androidx.compose.ui.graphics.Color(0xFF34C759)
+}
+
+private const val STORAGE_STEP_MB = com.aeriotv.android.core.data.DvrStorageCapRules.STEP_MB
+private const val STORAGE_MIN_MB = com.aeriotv.android.core.data.DvrStorageCapRules.MIN_MB
+private const val STORAGE_MAX_MB = com.aeriotv.android.core.data.DvrStorageCapRules.MAX_MB
+/** The setting is written this long after the last step, once per adjustment. */
+private const val STORAGE_COMMIT_DEBOUNCE_MS = 400L
 
 /** Apple's compact stepper spelling: the value sits between two keys. */
 private fun formatRoll(mins: Int): String = if (mins == 0) "None" else "$mins min"
@@ -657,8 +846,6 @@ private fun CustomBufferDialog(
     )
 }
 
-/** Apple formatGB: whole gigabytes. */
-private fun formatGb(mb: Int): String = String.format(java.util.Locale.US, "%.0f GB", mb / 1024.0)
 
 /** Apple formatBytes: "0 KB" for an empty library rather than "0 B". */
 private fun formatBytes(context: android.content.Context, bytes: Long): String =
