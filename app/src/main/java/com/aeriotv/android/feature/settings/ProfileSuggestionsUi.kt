@@ -2,7 +2,6 @@ package com.aeriotv.android.feature.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -50,6 +49,11 @@ import com.aeriotv.android.ui.settings.settingsRowCard
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.draw.alpha
 
 /**
  * "From your other devices": synced roster users with no profile on this
@@ -294,14 +298,16 @@ internal fun RosterSuggestions(
 
 @Composable
 internal fun RoleBadge(role: ProfileRole) {
+    // Apple's ProfileRoleBadge: the accent label on an 18% accent capsule.
     Text(
         text = role.label,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier
-            .padding(start = 6.dp)
+            .padding(start = 8.dp)
             .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
             .padding(horizontal = 8.dp, vertical = 2.dp),
     )
 }
@@ -589,22 +595,32 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolea
     if (locked) { RoleBadge(ProfileRole.Admin); return }
     var open by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(50)
+    // Apple's ProfileRoleChip: the unfilled ProfilePillStyle, an accent label
+    // and chevron on a 14% accent capsule, 8 from the row.
+    val accent = MaterialTheme.colorScheme.primary
     Row(
         Modifier
-            .padding(start = 6.dp)
+            .padding(start = 8.dp)
             .clip(shape)
             .then(Modifier.dpadFocusRing(shape))
             .clickable(enabled = enabled, role = androidx.compose.ui.semantics.Role.DropdownList) { open = true }
-            .background(MaterialTheme.colorScheme.secondaryContainer)
-            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            .background(accent.copy(alpha = 0.14f))
+            .padding(start = 16.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(role.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+        Text(
+            role.label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = accent,
+            maxLines = 1,
+        )
+        Spacer(Modifier.size(2.dp))
         androidx.compose.material3.Icon(
-            androidx.compose.material.icons.Icons.Filled.ArrowDropDown,
+            androidx.compose.material.icons.Icons.Filled.KeyboardArrowDown,
             contentDescription = "Change role",
-            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.size(18.dp),
+            tint = accent,
+            modifier = Modifier.size(16.dp),
         )
     }
     if (open) {
@@ -620,7 +636,7 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolea
                 }
             },
             confirmButton = {},
-            dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = { open = false }) },
+            dismissButton = { ProfileDialogCapsule(label = "Cancel", onClick = { open = false }, filled = false) },
         )
     }
 }
@@ -635,14 +651,14 @@ internal fun ServerUserCaption(user: DispatcharrUserSummary) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(level.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
         if (user.apiKey.isNullOrBlank()) {
-            Spacer(Modifier.size(8.dp))
+            Spacer(Modifier.size(6.dp))
             androidx.compose.material3.Icon(
                 androidx.compose.material.icons.Icons.Filled.Key,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(13.dp),
             )
-            Spacer(Modifier.size(4.dp))
+            Spacer(Modifier.size(6.dp))
             Text(
                 "Needs a password or API key",
                 style = MaterialTheme.typography.bodySmall,
@@ -658,6 +674,10 @@ internal fun ServerUserCaption(user: DispatcharrUserSummary) {
 @Composable
 internal fun ExpandRow(label: String, expanded: Boolean, enabled: Boolean = true, onToggle: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    // Apple's ProfileExpandRow: inside a profile dialog on phones and tablets
+    // the row has no inset, so its label shares the card's left edge with
+    // the user rows below; TV keeps it for the focus card.
+    val inDialogTouch = LocalInProfileDialog.current && !com.aeriotv.android.ui.settings.rememberIsTvDevice()
     Row(
         Modifier
             .fillMaxWidth()
@@ -665,10 +685,16 @@ internal fun ExpandRow(label: String, expanded: Boolean, enabled: Boolean = true
             .onFocusChanged { focused = it.isFocused }
             .settingsRowCard(focused)
             .clickable(enabled = enabled, onClick = onToggle)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = if (inDialogTouch) 0.dp else 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+        Text(
+            label,
+            style = if (inDialogTouch) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleSmall,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
         androidx.compose.material3.Icon(
             if (expanded) androidx.compose.material.icons.Icons.Filled.ExpandLess else androidx.compose.material.icons.Icons.Filled.ExpandMore,
             contentDescription = null,
@@ -684,15 +710,57 @@ internal fun ExpandableSearch(query: String, onQuery: (String) -> Unit, enabled:
     val fr = remember { androidx.compose.ui.focus.FocusRequester() }
     ExpandRow("Search", open, enabled) { open = !open; if (!open) onQuery("") }
     if (open) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQuery,
-            singleLine = true,
-            placeholder = { Text("Search users") },
-            modifier = Modifier.fillMaxWidth().focusRequester(fr),
-        )
+        if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                placeholder = { Text("Search users") },
+                modifier = Modifier.fillMaxWidth().focusRequester(fr),
+            )
+        } else {
+            ProfileFieldBox(value = query, onValueChange = onQuery, placeholder = "Search users", modifier = Modifier.focusRequester(fr))
+        }
         androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
     }
+}
+
+/**
+ * Apple's profileFieldBox on phones and tablets: a light fill and a hairline
+ * on the dialog card, 10 dp corners and inner padding, body text. The tones
+ * follow the card's text color, so the box shows on a light card too.
+ */
+@Composable
+internal fun ProfileFieldBox(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(10.dp)
+    val ink = MaterialTheme.colorScheme.onSurface
+    val style = MaterialTheme.typography.bodyLarge.copy(color = ink)
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = style,
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+        ),
+        modifier = modifier.fillMaxWidth(),
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(ink.copy(alpha = 0.08f))
+                    .border(1.dp, ink.copy(alpha = 0.12f), shape)
+                    .padding(10.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty()) Text(placeholder, style = style, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                inner()
+            }
+        },
+    )
 }
 
 /**
@@ -733,7 +801,8 @@ internal fun EnableApiAccessRow(
             confirmRevoke = true
         }
     }
-    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 4.dp)) {
+    val touchDialog = LocalInProfileDialog.current && !com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = if (touchDialog) 0.dp else 8.dp, bottom = if (touchDialog) 0.dp else 4.dp)) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -746,11 +815,11 @@ internal fun EnableApiAccessRow(
                     role = androidx.compose.ui.semantics.Role.Switch,
                     onValueChange = { toggle(it) },
                 )
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = if (touchDialog) 0.dp else 8.dp, vertical = if (touchDialog) 10.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text("Enable API access", style = MaterialTheme.typography.bodyMedium)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Enable API access", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     "Lets this user sign in on AerioTV with a key instead of a password",
                     style = MaterialTheme.typography.bodySmall,
@@ -758,8 +827,14 @@ internal fun EnableApiAccessRow(
                 )
             }
             Spacer(Modifier.size(8.dp))
+            // Apple's control: an empty circle, filled with a check when on.
             if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            else androidx.compose.material3.Switch(checked = enabled, onCheckedChange = null, enabled = interactive)
+            else androidx.compose.material3.Icon(
+                if (enabled) androidx.compose.material.icons.Icons.Filled.CheckCircle else androidx.compose.material.icons.Icons.Outlined.Circle,
+                contentDescription = null,
+                tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp).alpha(if (interactive) 1f else 0.45f),
+            )
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }

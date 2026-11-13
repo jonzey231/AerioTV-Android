@@ -21,8 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -1182,11 +1180,13 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         }
     }
     LaunchedEffect(users?.isNotEmpty() == true, serverExpanded) { if (users?.isNotEmpty() == true && serverExpanded && suggested.isEmpty()) focusFirst(firstUser) }
+    val listTv = rememberIsTvDevice()
     ProfileAlertDialog(
         onDismissRequest = onClose,
         title = { Text("Add Profile") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Apple's ProfileDialog: 6 between rows on phones and tablets.
+            Column(verticalArrangement = Arrangement.spacedBy(if (listTv) 8.dp else 6.dp)) {
                 val u = picked
                 if (u == null) RosterSuggestions(playlistId, vm, users, enabled = !busy, onAdded = onClose)
                 if (u == null && suggested.isNotEmpty() && rest?.isNotEmpty() == true) {
@@ -1204,8 +1204,12 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                         !serverExpanded -> {}
                         busy -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         listed?.isEmpty() == true -> Text("No users match.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        listed != null -> LazyColumn(Modifier.heightIn(max = 220.dp)) {
-                            items(listed, key = { it.id }) { user ->
+                        // Every row in the dialog's own scroll, which grows to
+                        // about 80% of the screen (Apple lists them all; a
+                        // 220 dp inner list showed three and a half rows).
+                        listed != null -> Column(verticalArrangement = Arrangement.spacedBy(if (listTv) 0.dp else 6.dp)) {
+                            listed.forEach { user ->
+                                androidx.compose.runtime.key(user.id) {
                                 var rowFocused by remember { mutableStateOf(false) }
                                 Column {
                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1217,13 +1221,22 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                                         // Same focus ring as the Profiles rows.
                                         .settingsRowCard(rowFocused)
                                         .clickable { addUser(user) }
-                                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                                        // Phones and tablets: no inset, so the avatar
+                                        // shares the card's left edge with Search
+                                        // (Apple's ProfileRowButtonStyle in a dialog).
+                                        .padding(vertical = 10.dp, horizontal = if (listTv) 4.dp else 0.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     ProfileAvatar(user.username, 28)
                                     Spacer(Modifier.size(10.dp))
                                     Column(Modifier.weight(1f)) {
-                                        Text(user.username, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            user.username,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
                                         ServerUserCaption(user)
                                     }
                                 }
@@ -1241,6 +1254,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                                         },
                                         onRevoked = { minted.remove(user.id); setUserKey(user.id, null) },
                                     )
+                                }
                                 }
                                 }
                             }
@@ -1266,10 +1280,15 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         confirmButton = {
             val u = picked
             if (u != null) {
-                SettingsDialogTextButton(
+                // Apple's CredentialStep: an Add Profile capsule, dimmed and
+                // inert until it can run, never disabled (TV focus).
+                val ready = !busy && (password.isNotBlank() || apiKey.isNotBlank())
+                ProfileDialogCapsule(
                     label = "Add Profile",
-                    enabled = !busy && (password.isNotBlank() || apiKey.isNotBlank()),
+                    filled = true,
+                    modifier = Modifier.alpha(ProfileDialogRules.submitAlpha(ready, busy)),
                     onClick = {
+                        if (!ready) return@ProfileDialogCapsule
                         busy = true; error = null
                         scope.launch {
                             vm.add(playlistId, u, password.takeIf { it.isNotBlank() }, apiKey.trim().takeIf { it.isNotBlank() }, roleOf(u))
@@ -1279,7 +1298,8 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                 )
             }
         },
-        dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onClose) },
+        // Apple's ProfileDialog Cancel: a capsule, as in the manual form.
+        dismissButton = { ProfileDialogCapsule(label = "Cancel", onClick = onClose, filled = false) },
     )
     childGateFor?.let { g ->
         ChildNeedsAdminPin(playlistId, vm) { ok -> childGateFor = null; if (ok) addUser(g) }
