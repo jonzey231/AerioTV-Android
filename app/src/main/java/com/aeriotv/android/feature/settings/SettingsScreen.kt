@@ -582,8 +582,14 @@ private fun PlaylistsSection(
                 // line ("Tap Edit to reorder") is NOT mirrored: Apple removed
                 // reordering on 2026-09-18 and the hint now names a control
                 // that does not exist on either platform.
+                // iPhone and iPad (measured on Apple's simulators): the hint's
+                // glyphs start 14 dp below the card; Android's sat 3.4 dp below.
                 Row(
-                    modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH()),
+                    modifier = Modifier.padding(
+                        start = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                        end = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                        top = 10.5.dp,
+                    ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
