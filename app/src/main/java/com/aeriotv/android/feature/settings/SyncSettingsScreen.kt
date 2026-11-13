@@ -1,5 +1,8 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.focus.onFocusChanged
 import com.aeriotv.android.ui.settings.settingsPaneTopEdge
 import com.aeriotv.android.ui.scale.subtext
 import android.app.Activity
@@ -332,19 +335,34 @@ fun SyncSettingsScreen(
                         signedIn = signedIn,
                         email = accountEmail,
                     )
-                    // TV: Drive's own sign-in is a standard row in this card,
-                    // right under the account it signs in.
-                    if (tvRows && !signedIn) {
-                        GoogleSignInRow(
-                            onClick = {
-                                if (inFlight) return@GoogleSignInRow
-                                if (!configured) {
-                                    notConfiguredDialogOpen = true
-                                } else {
-                                    triggerSignIn()
-                                }
-                            },
-                        )
+                    // Google's own Sign in with Google button, right under
+                    // the account it signs in (TV and touch alike). It stays
+                    // a button, never a row: Google's branding rules.
+                    if (!signedIn) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                // TV: drawn bare between the row cards, not on one.
+                                .then(if (tvRows) Modifier.layoutId(com.aeriotv.android.ui.settings.SettingsFooterLayoutId) else Modifier)
+                                .padding(
+                                    horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(),
+                                    vertical = if (tvRows) 2.dp else 10.dp,
+                                ),
+                        ) {
+                            GoogleSignInButton(
+                                // Stays enabled even without OAuth config so the
+                                // tap explains why; a tap in flight is ignored
+                                // (the button never changes color for it).
+                                onClick = {
+                                    if (inFlight) return@GoogleSignInButton
+                                    if (!configured) {
+                                        notConfiguredDialogOpen = true
+                                    } else {
+                                        triggerSignIn()
+                                    }
+                                },
+                            )
+                        }
                     }
                     SyncTileToggleRow(
                         icon = Icons.Filled.Cloud,
@@ -468,26 +486,9 @@ fun SyncSettingsScreen(
                             Toast.makeText(context, "Signed out of Drive.", Toast.LENGTH_SHORT).show()
                         },
                     )
-                } else {
-                    SignInWithGoogleButton(
-                        // Stay enabled even without OAuth config so the
-                        // tap surfaces the explanation dialog. inFlight
-                        // only dims the pill; the tap is guarded so the
-                        // button keeps focus while the picker is up.
-                        busy = inFlight,
-                        onClick = {
-                            if (inFlight) return@SignInWithGoogleButton
-                            if (!configured) {
-                                notConfiguredDialogOpen = true
-                            } else {
-                                triggerSignIn()
-                            }
-                        },
-                    )
-                    if (!configured) {
-                        Spacer(Modifier.height(8.dp))
-                        DeveloperConfigHint()
-                    }
+                } else if (!configured) {
+                    // The sign-in button itself sits in the Google Drive card.
+                    DeveloperConfigHint()
                 }
             }
             // Dispatcharr Sync: independent of Drive Sync, both can be on
@@ -813,38 +814,6 @@ private const val DEVELOPER_CONFIG_HINT =
         "Sign in with Google is disabled. Add GOOGLE_DRIVE_WEB_CLIENT_ID to " +
         "local.properties and register the signing-cert SHA-1 in the same Cloud project."
 
-/**
- * Android TV's Sign in with Google: a standard Settings row in the Drive
- * card. Google's four-color G stays untinted on Google's dark button surface
- * (#131314), in the row's icon tile; the label is Google's own wording.
- */
-@Composable
-private fun GoogleSignInRow(onClick: () -> Unit) {
-    SettingsRowContainer(onClick = onClick, traceTitle = "Sign in with Google") {
-        Box(
-            modifier = Modifier
-                .size(com.aeriotv.android.ui.settings.TvSettingsMetrics.iconTileBox)
-                .clip(RoundedCornerShape(com.aeriotv.android.ui.settings.TvSettingsMetrics.iconTileCorner))
-                .background(Color(0xFF131314)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter = androidx.compose.ui.res.painterResource(id = com.aeriotv.android.R.drawable.ic_google_g),
-                contentDescription = null,
-                tint = Color.Unspecified,
-                modifier = Modifier.size(13.dp),
-            )
-        }
-        Spacer(Modifier.width(syncTileGap()))
-        SyncRowText(
-            title = "Sign in with Google",
-            subtitle = null,
-            titleColor = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
 @Composable
 private fun DeveloperConfigHint() {
     Text(
@@ -920,7 +889,7 @@ private fun AccountRow(signedIn: Boolean, email: String) {
 }
 
 /**
- * Full-width Sign-Out CTA - pairs visually with [SignInWithGoogleButton]
+ * Full-width Sign-Out CTA on touch (TV draws Sign Out as a row)
  * (same rounded-pill height and stretch). Renders below the account card
  * when signed in so the destructive action has space to breathe.
  */
@@ -950,61 +919,74 @@ private fun SignOutButton(busy: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * Google-branded Sign in button. We render a Compose approximation that
- * follows Google's brand guidelines (white background, 1px outline, Google G
- * mark on the left, "Sign in with Google" label). Avoids embedding a raster
- * since the brand asset has strict size/colour rules and the rendering here
- * stays consistent across light/dark themes.
+ * Google's Sign in with Google button, as its branding guidelines define it
+ * (developers.google.com/identity/branding-guidelines), on every device:
+ * - the dark theme exactly: fill #131314, a 1 dp #8E918F stroke inside the
+ *   edge, text #E3E3E3, never recolored by AerioTV's accent;
+ * - Google's full-color G, unmodified, straight on the #131314 fill;
+ * - the text "Sign in with Google", medium, 14/20;
+ * - the pill shape, 12 dp before the G, 10 dp after it, 12 dp after the
+ *   text, 40 dp tall at its natural width (never stretched).
+ * Google Sans is not bundled with Android or this app; the guidelines name no
+ * fallback, and Google's own Android SignInButton draws its label in the
+ * system font, so this uses the system sans-serif (Roboto) in medium.
+ * On TV, focus draws AerioTV's ring around the button, outside it, and the
+ * button's own colors never change; on touch a press shows the standard
+ * ripple.
  */
 @Composable
-private fun SignInWithGoogleButton(busy: Boolean, onClick: () -> Unit) {
-    val enabled = !busy
-    // Google ships two officially-permitted button styles: light (white BG /
-    // dark text) and dark (#131314 BG / white text). Both must use the
-    // full four-color G mark - the only freedom callers have is which
-    // background variant they pick. The dark variant lands much better
-    // against AerioTV's navy app surface than the white pill the previous
-    // cut used, while staying compliant with Google's brand guidelines.
-    // Tokens:
-    //  - background #131314 (Google's "Dark" button surface)
-    //  - 1dp outline #8E918F (Google's "Dark" 1dp stroke)
-    //  - text #E3E3E3 (Google's "Dark" foreground)
-    val bg = if (enabled) Color(0xFF131314) else Color(0xFF131314).copy(alpha = 0.55f)
-    val stroke = Color(0xFF8E918F).copy(alpha = if (enabled) 1f else 0.55f)
-    val fg = if (enabled) Color(0xFFE3E3E3) else Color(0xFFE3E3E3).copy(alpha = 0.55f)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(50))
-            .background(bg)
-            .border(1.dp, stroke, RoundedCornerShape(50))
-            // Brand pill stays untouched at rest; the white ring only draws under D-pad focus.
-            .dpadFocusRing(RoundedCornerShape(50))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
+private fun GoogleSignInButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val tv = rememberIsTvDevice()
+    var focused by remember { mutableStateOf(false) }
+    val pill = RoundedCornerShape(50)
+    Box(
+        modifier = modifier
+            .then(
+                if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, pill) else Modifier,
+            )
+            // Room for the ring, always reserved so focus never moves the button.
+            .padding(3.dp),
     ) {
-        Icon(
-            painter = androidx.compose.ui.res.painterResource(
-                id = com.aeriotv.android.R.drawable.ic_google_g,
-            ),
-            contentDescription = null,
-            // Tint.Unspecified preserves the four-color brand mark; tinting
-            // would flatten it to a single colour which Google disallows.
-            tint = Color.Unspecified,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.size(12.dp))
-        Text(
-            text = "Sign in with Google",
-            color = fg,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Medium,
-        )
+        Row(
+            modifier = Modifier
+                .height(40.dp)
+                .clip(pill)
+                .background(GoogleButtonFill)
+                .border(1.dp, GoogleButtonStroke, pill)
+                .onFocusChanged { focused = it.isFocused }
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    // TV: no focus or press tint on Google's colors.
+                    indication = if (tv) null else androidx.compose.material3.ripple(),
+                    onClick = onClick,
+                )
+                .padding(start = 12.dp, end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(id = com.aeriotv.android.R.drawable.ic_google_g),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Sign in with Google",
+                color = GoogleButtonText,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                letterSpacing = 0.25.sp,
+                maxLines = 1,
+            )
+        }
     }
 }
+
+/** Google's dark-theme button colors (branding guidelines). */
+private val GoogleButtonFill = Color(0xFF131314)
+private val GoogleButtonStroke = Color(0xFF8E918F)
+private val GoogleButtonText = Color(0xFFE3E3E3)
 
 // Phase 61b: removed the inline GoogleGMark approximation - the button now
 // renders the official four-color brand mark from res/drawable/ic_google_g.xml.
