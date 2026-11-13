@@ -224,7 +224,7 @@ fun DeveloperSettingsScreen(
                 "file from this screen.\n\nLogging has a minor impact on performance " +
                 "and storage. You can disable it at any time.",
             actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Enable Logging", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                com.aeriotv.android.ui.settings.AlertAction("Enable Logging") {
                     pendingEnable = false
                     settingsVm.setDebugLoggingEnabled(true)
                 },

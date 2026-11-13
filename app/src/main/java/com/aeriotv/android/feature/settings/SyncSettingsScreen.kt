@@ -560,13 +560,13 @@ fun SyncSettingsScreen(
         // Kept although Apple pushes without asking: a blank install once
         // overwrote a good Drive backup, so an Android push states what it
         // does. A push merges per item since 2026-11-10 (Logan-approved copy).
-        // Apple's alert: Cancel left, Push right.
+        // Apple's alert: Cancel left, Push right, neither preferred (no filled button).
         com.aeriotv.android.ui.settings.AlertPrompt(
             onDismissRequest = { pushConfirmOpen = false },
             title = "Push to Drive?",
             message = "This merges this device's changes into Google Drive.",
             actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Push", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                com.aeriotv.android.ui.settings.AlertAction("Push") {
                     pushConfirmOpen = false
                     viewModel.runPushOnly()
                 },
@@ -582,7 +582,7 @@ fun SyncSettingsScreen(
             message = "Replaces the shared data on your Dispatcharr server with this device's copy for the categories you sync. " +
                 "Other devices receive it on their next sync.",
             actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Push", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                com.aeriotv.android.ui.settings.AlertAction("Push") {
                     dsyncPushConfirmOpen = false
                     viewModel.runDispatcharrPush()
                 },
@@ -597,7 +597,7 @@ fun SyncSettingsScreen(
             title = "Pull from Dispatcharr?",
             message = "Replaces this device's shared data with the copy on your Dispatcharr server for the categories you sync.",
             actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Pull", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                com.aeriotv.android.ui.settings.AlertAction("Pull") {
                     dsyncPullConfirmOpen = false
                     viewModel.runDispatcharrPull()
                 },
@@ -612,7 +612,7 @@ fun SyncSettingsScreen(
             title = "Push to both?",
             message = "Replaces the shared data on your Dispatcharr server and in your Google Drive backup with this device's copy for the categories you sync.",
             actions = listOf(
-                com.aeriotv.android.ui.settings.AlertAction("Push", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+                com.aeriotv.android.ui.settings.AlertAction("Push") {
                     bothPushConfirmOpen = false
                     viewModel.runPushToBoth()
                 },

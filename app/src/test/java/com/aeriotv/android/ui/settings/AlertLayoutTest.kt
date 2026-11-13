@@ -48,12 +48,21 @@ class AlertLayoutTest {
         assertEquals(listOf("Sign In", "Edit Playlist", "Not Now"), order(phone, AlertLayout.Arrangement.Stacked))
         val tv = listOf(A("Update from Phone", AlertRole.Primary), A("Sign In with Remote", AlertRole.Default), A("Not Now", AlertRole.Cancel))
         assertEquals(listOf("Update from Phone", "Sign In with Remote", "Not Now"), order(tv, AlertLayout.Arrangement.Stacked))
-        // A two-button alert on TV: the action first, Cancel last.
-        val push = listOf(A("Cancel", AlertRole.Cancel), A("Push", AlertRole.Primary))
+        // A two-button alert on TV: the action first, Cancel last (no preferred action: nothing filled).
+        val push = listOf(A("Cancel", AlertRole.Cancel), A("Push", AlertRole.Default))
         assertEquals(listOf("Push", "Cancel"), order(push, AlertLayout.Arrangement.Stacked))
         // Declared order otherwise (Multiview: Continue, Don't Show Again, Cancel).
         val mv = listOf(A("Continue", AlertRole.Destructive), A("Don't Show Again", AlertRole.Default), A("Cancel", AlertRole.Cancel))
         assertEquals(listOf("Continue", "Don't Show Again", "Cancel"), order(mv, AlertLayout.Arrangement.Stacked))
+    }
+
+    @Test fun noPreferredActionMeansNoFilledButton() {
+        // Apple alerts without a preferred action (Push, Turn On, Enable Logging): every button neutral.
+        assertEquals(AlertLayout.Style.Tonal, AlertLayout.style(AlertRole.Default))
+        assertEquals(AlertLayout.Style.Tonal, AlertLayout.style(AlertRole.Cancel))
+        // TV focus still lands on the action, not Cancel.
+        val push = listOf(A("Push", AlertRole.Default), A("Cancel", AlertRole.Cancel))
+        assertEquals(0, AlertLayout.defaultFocus(push) { it.role })
     }
 
     @Test fun thePrimaryTakesFocus() {

@@ -39,7 +39,12 @@ import androidx.compose.ui.window.DialogProperties
 
 /** What an alert button does, as Apple's alert action roles name it. */
 enum class AlertRole {
-    /** The preferred action: a filled button, first in a stack, default focus on TV. */
+    /**
+     * Apple's preferred action (preferredAction, or the filled button of
+     * Apple's own prompt): a filled button, first in a stack, default focus on
+     * TV. An Apple alert with no preferred action has no Primary here either,
+     * so it shows no filled button (owner 2026-11-12).
+     */
     Primary,
 
     /** Any other action: a tonal button. */

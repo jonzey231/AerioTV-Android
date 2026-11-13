@@ -435,7 +435,7 @@ fun QrRestoreOfferDialog(
         if (vm.alreadyOn() || !vm.serverHasData(signIn)) onClose() else show = true
     }
     if (!show) return
-    // Apple's alert: Not Now (cancel) left, Turn On right.
+    // Apple's alert: Not Now (cancel) left, Turn On right, no preferred action (no filled button).
     com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { if (!busy) onClose() },
         title = "Turn on Dispatcharr Sync?",
@@ -443,7 +443,6 @@ fun QrRestoreOfferDialog(
         actions = listOf(
             com.aeriotv.android.ui.settings.AlertAction(
                 label = if (busy) "Turning On" else "Turn On",
-                role = com.aeriotv.android.ui.settings.AlertRole.Primary,
                 onClick = {
                     if (!busy) {
                         busy = true

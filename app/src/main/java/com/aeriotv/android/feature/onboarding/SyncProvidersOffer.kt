@@ -106,13 +106,14 @@ fun SyncProvidersOfferHost(
 
     val o = offer ?: return
     if (locked) return
-    // Apple's alert: Not now (cancel) left, Turn on right (it takes focus, as before).
+    // Apple's alert: Not now (cancel) left, Turn on right, no preferred
+    // action (no filled button); Turn on still takes focus, as before.
     com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { offer = null },
         title = "Keep your devices in sync",
         message = SyncProvidersRules.offerText(o.providers),
         actions = listOf(
-            com.aeriotv.android.ui.settings.AlertAction("Turn on", com.aeriotv.android.ui.settings.AlertRole.Primary) {
+            com.aeriotv.android.ui.settings.AlertAction("Turn on") {
                 offer = null
                 scope.launch {
                     if (SyncProviderId.Dispatcharr in o.providers) vm.enableDispatcharr()
