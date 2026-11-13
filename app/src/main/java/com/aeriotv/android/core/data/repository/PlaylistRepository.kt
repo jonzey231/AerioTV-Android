@@ -3694,10 +3694,6 @@ class PlaylistRepository @Inject constructor(
     ) {
         val now = System.currentTimeMillis()
         val history = epgHistoryWindow(playlistId, now)
-        val entities = withContext(layeringDispatcher) {
-            programmes.map { it.toCacheEntity(playlistId, now) }
-                .insideHistory(history, { it.channelId }, { it.endMillis })
-        }
         DeletedPlaylists.ensureAlive(playlistId, "EPG cache")
         // Catch-up (task #135): MERGE the feed instead of replacing the whole
         // cache, so already-aired rows survive refreshes and accumulate into a
@@ -3705,12 +3701,35 @@ class PlaylistRepository @Inject constructor(
         // (default 7 days). The old behaviour (full replace + drop everything
         // ended over an hour ago) erased exactly the programmes the catch-up
         // "Watch" action needs.
-        epgProgrammeDao.mergeForPlaylist(
-            playlistId,
-            entities,
-            now,
-            replaceCoveredWindow = authoritative,
-        )
+        //
+        // Batched like the channel snapshot (Apple 6ae3fdd: about 10k rows per
+        // batch): the whole window used to become one list of cache rows,
+        // filtered into a second, and bound into one insert, so the save's
+        // peak grew with the guide (150k programmes on a large lineup). Now
+        // only one batch of rows exists at a time, whole channels per batch
+        // (the merge's per-channel delete must see all of a channel's rows),
+        // inside ONE transaction so a reader never sees a half-merged guide.
+        val started = android.os.SystemClock.elapsedRealtime()
+        val batches = EpgSaveBatches.byChannel(programmes) { it.channelId }
+        database.withTransaction {
+            for (batch in batches) {
+                val entities = batch.map { it.toCacheEntity(playlistId, now) }
+                    .insideHistory(history, { it.channelId }, { it.endMillis })
+                epgProgrammeDao.mergeForPlaylist(
+                    playlistId,
+                    entities,
+                    now,
+                    replaceCoveredWindow = authoritative,
+                )
+            }
+        }
+        if (batches.size > 1) {
+            Log.i(
+                "PlaylistRepo",
+                "[EPG] cache save: ${programmes.size} programmes in ${batches.size} batches, " +
+                    "${android.os.SystemClock.elapsedRealtime() - started} ms",
+            )
+        }
         // E-6: prune at most once per cycle. Upstream layering calls this once
         // PER SOURCE on purpose (so a kill mid-phase loses at most one feed),
         // and every one of those calls used to run a full-table retention
