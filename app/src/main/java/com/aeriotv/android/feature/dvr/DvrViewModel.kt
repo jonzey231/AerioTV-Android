@@ -151,6 +151,8 @@ class DvrViewModel @Inject constructor(
         val backdropUrl: String? = null,
         /** Dispatcharr "interrupted": a partial file. tvOS badges only this, never a user stop. */
         val partial: Boolean = false,
+        /** Why an on-device recording failed (Apple's wording), shown in its details. */
+        val failureReason: String? = null,
         val subTitle: String? = null,
         /** The guide programme's own airing (tvOS Program Info "Airs"); the recording window is startMillis/endMillis. */
         val programStartMillis: Long? = null,
@@ -1532,6 +1534,7 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
         playbackUrl = playable,
         savedOnDevice = playlistId == null,
         partial = this.status.lowercase() == InterruptedCapture.INTERRUPTED,
+        failureReason = failureReason.takeIf { status == DvrViewModel.Recording.Status.Failed },
     )
 }
 

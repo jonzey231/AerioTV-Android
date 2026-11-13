@@ -40,7 +40,7 @@ import com.aeriotv.android.core.data.db.entity.WatchProgressEntity
         VodSweepStateEntity::class,
         VodSweepLaneEntity::class,
     ],
-    version = 40,
+    version = 41,
     exportSchema = false,
 )
 abstract class AerioDatabase : RoomDatabase() {

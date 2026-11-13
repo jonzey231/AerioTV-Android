@@ -24,13 +24,13 @@ class InterruptedCaptureTest {
         assertEquals(InterruptedCapture.Outcome.Interrupted(5L, start), out)
     }
 
-    @Test fun anEmptyFileAndAMissingFileKeepNothing() {
+    @Test fun anEmptyFileAndAMissingFileAreFailedWithTheirReasons() {
         assertEquals(
-            InterruptedCapture.Outcome.Discard(InterruptedCapture.NOTHING_WRITTEN),
+            InterruptedCapture.Outcome.Failed("No data was written"),
             InterruptedCapture.outcome(fileBytes = 0L, lastWriteAt = start + 5_000L, startedAt = start, now = now),
         )
         assertEquals(
-            InterruptedCapture.Outcome.Discard(InterruptedCapture.FILE_NOT_FOUND),
+            InterruptedCapture.Outcome.Failed("The recording file was not found"),
             InterruptedCapture.outcome(fileBytes = null, lastWriteAt = null, startedAt = start, now = now),
         )
     }
@@ -38,8 +38,17 @@ class InterruptedCaptureTest {
     @Test fun noOutcomeLeavesTheRowRecording() {
         for (bytes in listOf<Long?>(null, 0L, 1L, 10_000_000L)) {
             val out = InterruptedCapture.outcome(bytes, start + 1_000L, start, now)
-            assertTrue(out is InterruptedCapture.Outcome.Interrupted || out is InterruptedCapture.Outcome.Discard)
+            assertTrue(out is InterruptedCapture.Outcome.Interrupted || out is InterruptedCapture.Outcome.Failed)
             if (out is InterruptedCapture.Outcome.Interrupted) assertTrue(out.bytes > 0L && out.endedAt >= start)
         }
+    }
+
+    @Test fun aFailedRowKeepsAppleWordingAndItsColumnMigrates() {
+        assertEquals("failed", InterruptedCapture.FAILED)
+        assertEquals("Could not determine recordings directory", InterruptedCapture.NO_RECORDINGS_FOLDER)
+        assertEquals(
+            listOf("ALTER TABLE `local_recording` ADD COLUMN `failureReason` TEXT"),
+            com.aeriotv.android.core.di.DatabaseModule.MIGRATION_40_41_SQL,
+        )
     }
 }

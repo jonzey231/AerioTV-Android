@@ -242,7 +242,15 @@ fun DvrMediaTabContent(
     val recordings = remember(state.recordings) { state.recordings.filterNot { it.savedOnDevice } }
     val recordingNow = remember(recordings, now) { recordings.filter { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Recording }.sortedByDescending { it.startMillis } }
     val scheduled = remember(recordings, now) { recordings.filter { it.effectiveStatus(now) == DvrViewModel.Recording.Status.Scheduled }.sortedBy { it.startMillis } }
-    val completed = remember(recordings, now) { recordings.filter { val s = it.effectiveStatus(now); s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped } }
+    // An on-device recording that captured nothing is listed as Failed
+    // (Logan 2026-11-13: "Otherwise the user just thinks it is missing").
+    val completed = remember(recordings, now) {
+        recordings.filter {
+            val s = it.effectiveStatus(now)
+            s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped ||
+                (s == DvrViewModel.Recording.Status.Failed && it.source == DvrViewModel.Source.Local)
+        }
+    }
     val continueWatching = remember(recordingNow, completed, recent) {
         recordingNow + completed.filter { val p = progressOf(it); p > 0f && p < 0.97f }.sortedByDescending { it.startMillis }
     }
@@ -340,7 +348,8 @@ fun DvrMediaTabContent(
                 fileSizeBytes = rec.fileSizeBytes,
                 format = if (ext.equals("m3u8", true)) "HLS" else ext,
                 location = if (rec.source == DvrViewModel.Source.Local) "This Device" else (playlistState.playlist?.name?.takeIf { it.isNotBlank() } ?: "Dispatcharr"),
-                status = statusLabel,
+                // Apple shows a failed recording's reason with its status.
+                status = rec.failureReason?.let { "$statusLabel: $it" } ?: statusLabel,
                 videoCodec = rec.videoCodec, resolution = rec.resolution, frameRate = rec.frameRate,
                 videoBitrateKbps = rec.videoBitrateKbps, audioCodec = rec.audioCodec, audioChannels = rec.audioChannels,
             ),
@@ -631,6 +640,14 @@ fun DvrPosterCard(
                     Text("REC", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color(0xFFFF4757))
                 }
             }
+            if (rec.effectiveStatus(now) == DvrViewModel.Recording.Status.Failed) {
+                // Apple's status wording and red (MyRecordingsView statusInfo).
+                Text(
+                    "Failed", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color(0xFFFF4757),
+                    modifier = Modifier.align(Alignment.TopStart).padding(5.dp).clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 5.dp, vertical = 3.dp),
+                )
+            }
             if (progress > 0f) {
                 Box(modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.Black.copy(alpha = 0.45f))) {
                     Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(progress).background(MaterialTheme.colorScheme.primary))
@@ -687,7 +704,8 @@ fun DvrHeroCard(
                         HeroRound(Icons.Filled.Sensors, "Jump to Live", onSecondary)
                     }
                     if (canManage) HeroRound(Icons.Filled.Stop, "Stop Recording", onStop)
-                } else {
+                } else if (rec.effectiveStatus(now) != DvrViewModel.Recording.Status.Failed) {
+                    // A failed recording has nothing to play.
                     HeroPill(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, onPrimary)
                     if (progress > 0f) HeroRound(Icons.Filled.Replay, "Play from Beginning", onSecondary)
                 }
@@ -796,7 +814,8 @@ private fun TvDvrPage(
                 if (canManageDvr || rec.source != DvrViewModel.Source.Server) {
                     add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Stop Recording", Icons.Filled.Stop, id = "Stop") { onStop(rec) })
                 }
-            } else {
+            } else if (rec.effectiveStatus(now) != DvrViewModel.Recording.Status.Failed) {
+                // A failed recording has nothing to play.
                 add(com.aeriotv.android.feature.movies.tv.TvHeroButton(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, id = "Primary") { armHero(); onPlay(rec) })
                 if (progress > 0f) add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Play from Beginning", Icons.Filled.Replay, id = "FromStart") { armHero(); onPlayFromStart(rec) })
             }
@@ -835,6 +854,8 @@ private fun TvDvrPage(
             badge = when (s) {
                 DvrViewModel.Recording.Status.Recording -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("REC", red, dot = true)
                 DvrViewModel.Recording.Status.Scheduled -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge(day, Color.Black.copy(alpha = 0.6f), icon = Icons.Outlined.Schedule)
+                // Apple's status wording and red (MyRecordingsView statusInfo).
+                DvrViewModel.Recording.Status.Failed -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Failed", red.copy(alpha = 0.85f))
                 else -> if (rec.partial) com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Partial", Color(0xFFFF9F43).copy(alpha = 0.85f)) else null
             },
             onClick = onClick, modifier = modifier, longPressActions = menuActions(rec),

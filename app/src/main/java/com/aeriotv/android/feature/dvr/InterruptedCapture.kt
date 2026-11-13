@@ -11,21 +11,24 @@ import com.aeriotv.android.core.data.db.dao.LocalRecordingDao
  * capture starts, so a process death mid-capture (a force stop, a crash, the
  * system reclaiming the app, an update) leaves it marked recording. It
  * becomes finished: interrupted, keeping what its file captured, with the
- * file's last write as its end. A capture that wrote nothing leaves no row,
- * as a normal stop with nothing captured never kept one.
+ * file's last write as its end; failed, with Apple's reason, when it
+ * captured nothing (Logan 2026-11-13: a removed row "just" looks missing).
  */
 internal object InterruptedCapture {
     const val RECORDING = "recording"
     const val INTERRUPTED = "interrupted"
+    const val FAILED = "failed"
 
+    // Apple's failureReason wording (RecordingCoordinator, InterruptedCapture).
     const val NOTHING_WRITTEN = "No data was written"
     const val FILE_NOT_FOUND = "The recording file was not found"
+    const val NO_RECORDINGS_FOLDER = "Could not determine recordings directory"
 
     sealed interface Outcome {
         /** Keep the row, finished: [bytes] captured, ending at [endedAt]. */
         data class Interrupted(val bytes: Long, val endedAt: Long) : Outcome
-        /** Nothing to keep: the row (and any empty file) goes. */
-        data class Discard(val reason: String) : Outcome
+        /** Keep the row as failed, with [reason]: nothing was captured. */
+        data class Failed(val reason: String) : Outcome
     }
 
     /**
@@ -34,8 +37,8 @@ internal object InterruptedCapture {
      * Apple). The end is never before [startedAt].
      */
     fun outcome(fileBytes: Long?, lastWriteAt: Long?, startedAt: Long, now: Long): Outcome = when {
-        fileBytes == null -> Outcome.Discard(FILE_NOT_FOUND)
-        fileBytes <= 0L -> Outcome.Discard(NOTHING_WRITTEN)
+        fileBytes == null -> Outcome.Failed(FILE_NOT_FOUND)
+        fileBytes <= 0L -> Outcome.Failed(NOTHING_WRITTEN)
         else -> Outcome.Interrupted(fileBytes, maxOf(startedAt, lastWriteAt ?: now))
     }
 }
@@ -74,10 +77,13 @@ internal object LocalRecordingRecovery {
                 dao.update(row.copy(status = InterruptedCapture.INTERRUPTED, byteSize = out.bytes, endedAt = out.endedAt))
                 Log.i(TAG, "[DVR] on-device recording ${row.id} had no capture running ($reason): now interrupted, kept ${out.bytes} bytes, ${(out.endedAt - row.startedAt) / 1000} s captured")
             }
-            is InterruptedCapture.Outcome.Discard -> {
-                LocalRecordingFiles.delete(context, row.filePath)
-                dao.delete(row.id)
-                Log.i(TAG, "[DVR] on-device recording ${row.id} had no capture running ($reason): removed, ${out.reason}")
+            is InterruptedCapture.Outcome.Failed -> {
+                // The row stays, failed, so the recording is not simply gone
+                // from the list; an empty file (a MediaStore item left
+                // pending) holds nothing to keep.
+                if (probe.bytes != null) LocalRecordingFiles.delete(context, row.filePath)
+                dao.update(row.copy(status = InterruptedCapture.FAILED, byteSize = 0L, failureReason = out.reason))
+                Log.i(TAG, "[DVR] on-device recording ${row.id} had no capture running ($reason): now failed, ${out.reason}")
             }
         }
         return true

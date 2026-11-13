@@ -48,6 +48,12 @@ data class LocalRecordingEntity(
     // "interrupted" (no capture was left behind it; InterruptedCapture) | "failed"
     val status: String,
     val playlistId: String? = null,
+    /**
+     * Why a "failed" recording captured nothing, in Apple's wording
+     * (RecordingCoordinator failureReason), e.g. "No data was written".
+     * Null otherwise (DB v41).
+     */
+    val failureReason: String? = null,
     /** Profiles (DB v37): "" = default profile (every pre-v37 row). */
     @ColumnInfo(defaultValue = "")
     val profileScope: String = ProfileScope.current(),

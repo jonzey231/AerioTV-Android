@@ -211,6 +211,23 @@ class LocalRecordingService : Service() {
                     openSink("", fileName)
                 } ?: run {
                     Log.w(TAG, "App default folder unwritable - aborting")
+                    // Listed as failed, as on Apple, rather than not at all.
+                    runCatching {
+                        val now = System.currentTimeMillis()
+                        localRecordingDao.insert(
+                            LocalRecordingEntity(
+                                channelName = channelName.ifBlank { title },
+                                title = title,
+                                filePath = "",
+                                startedAt = now,
+                                endedAt = now + durationMs,
+                                byteSize = 0L,
+                                status = InterruptedCapture.FAILED,
+                                playlistId = recPlaylistId,
+                                failureReason = InterruptedCapture.NO_RECORDINGS_FOLDER,
+                            ),
+                        )
+                    }.onFailure { Log.w(TAG, "Couldn't write the failed recording's row", it) }
                     stopSelf()
                     return@launch
                 }
@@ -310,10 +327,19 @@ class LocalRecordingService : Service() {
                             ).let { if (deleted == true) it.copy(playlistId = null, profileScope = "") else it }
                             if (rowId == null) localRecordingDao.insert(finished) else localRecordingDao.update(finished)
                         }
-                    } else if (rowId != null) {
-                        // Nothing kept (an empty capture, or its playlist was
-                        // deleted with its recordings): no row, as before.
-                        localRecordingDao.delete(rowId)
+                    } else if (deleted == false) {
+                        // Its playlist was deleted with its recordings: no row.
+                        if (rowId != null) localRecordingDao.delete(rowId)
+                    } else if (rowId == null || current != null) {
+                        // It captured nothing: a failed row with Apple's
+                        // reason, so it is not simply missing from the list
+                        // (Logan 2026-11-13).
+                        val failed = (current ?: startRow).copy(
+                            status = InterruptedCapture.FAILED,
+                            byteSize = 0L,
+                            failureReason = InterruptedCapture.NOTHING_WRITTEN,
+                        ).let { if (deleted == true) it.copy(playlistId = null, profileScope = "") else it }
+                        if (rowId == null) localRecordingDao.insert(failed) else localRecordingDao.update(failed)
                     }
                 }
             }.onFailure { Log.w(TAG, "Couldn't persist local recording row", it) }
