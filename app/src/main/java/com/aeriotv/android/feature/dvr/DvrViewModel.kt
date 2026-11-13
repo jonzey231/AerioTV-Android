@@ -153,6 +153,12 @@ class DvrViewModel @Inject constructor(
         val partial: Boolean = false,
         /** Why an on-device recording failed (Apple's wording), shown in its details. */
         val failureReason: String? = null,
+        /**
+         * A finished on-device recording whose file is not there (removed
+         * outside the app): badged "Missing", "File missing" in its
+         * details, no Play, still deletable (Apple 743bd6b).
+         */
+        val fileMissing: Boolean = false,
         val subTitle: String? = null,
         /** The guide programme's own airing (tvOS Program Info "Airs"); the recording window is startMillis/endMillis. */
         val programStartMillis: Long? = null,
@@ -531,7 +537,17 @@ class DvrViewModel @Inject constructor(
                     active != null && r.status == InterruptedCapture.RECORDING && r.startedAt >= active.startedAt
                 }
             }.collect { rows ->
-                val mapped = rows.map { it.toRecording() }
+                // Each finished row's file is checked where it is stored
+                // (MediaStore, a picked folder, or a path).
+                val mapped = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    rows.map { r ->
+                        r.toRecording(
+                            fileMissing = com.aeriotv.android.core.data.LocalRecordingRules.isMissing(r.status, r.filePath) { p ->
+                                com.aeriotv.android.core.data.LocalRecordingFiles.probe(appContext, p).bytes != null
+                            },
+                        )
+                    }
+                }
                 _state.update { st ->
                     // Keep the synthetic in-progress row: it is not in Room
                     // yet, and this observer would otherwise drop it on any
@@ -1498,7 +1514,7 @@ private fun resolveArtUrl(url: String, baseUrl: String): String {
     return base + (if (trimmed.startsWith("/")) trimmed else "/$trimmed")
 }
 
-private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
+private fun LocalRecordingEntity.toRecording(fileMissing: Boolean = false): DvrViewModel.Recording {
     val status = when (this.status.lowercase()) {
         // A capture cut short keeps what it captured and plays, like a
         // server recording Dispatcharr marks interrupted.
@@ -1514,7 +1530,8 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
     // happily resolves file:// against the filesystem when SAF isn't involved.
     val isPlayable = status == DvrViewModel.Recording.Status.Completed ||
         status == DvrViewModel.Recording.Status.Stopped
-    val playable = if (isPlayable && filePath.isNotBlank()) {
+    // A file that is gone has nothing to play (shown as missing).
+    val playable = if (isPlayable && filePath.isNotBlank() && !fileMissing) {
         // A recording saved to the public Downloads (MediaStore) or a SAF
         // custom folder is stored as a content:// URI; a path from the
         // app-private dir needs wrapping in file://. ExoPlayer's
@@ -1535,6 +1552,7 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
         savedOnDevice = playlistId == null,
         partial = this.status.lowercase() == InterruptedCapture.INTERRUPTED,
         failureReason = failureReason.takeIf { status == DvrViewModel.Recording.Status.Failed },
+        fileMissing = fileMissing,
     )
 }
 

@@ -365,7 +365,8 @@ fun DvrMediaTabContent(
             add(com.aeriotv.android.core.tv.TvMenuAction("Program Info") { showInfo(rec) })
             if (s == DvrViewModel.Recording.Status.Completed || s == DvrViewModel.Recording.Status.Stopped) {
                 // Apple parity: same label and action as the card's primary button.
-                add(com.aeriotv.android.core.tv.TvMenuAction(if (progressOf(rec) > 0f) "Resume" else "Play") { play(rec) })
+                // Not for a file that is gone (shown as missing; Delete from Device stays).
+                if (!rec.fileMissing) add(com.aeriotv.android.core.tv.TvMenuAction(if (progressOf(rec) > 0f) "Resume" else "Play") { play(rec) })
                 if (isServer) {
                     add(com.aeriotv.android.core.tv.TvMenuAction("Watch from Beginning") { playFromStart(rec) })
                     // Save to Device is a read (GET the file), never gated.
@@ -600,6 +601,9 @@ fun DvrMediaTabContent(
     }
 }
 
+/** SwiftUI's Color.gray (rgb 142, 142, 147), the Missing badge's fill. */
+private val DvrMissingGrey = Color(0xFF8E8E93)
+
 private fun metaLine(rec: Rec, now: Long): String {
     val day = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(rec.startMillis))
     val s = rec.effectiveStatus(now)
@@ -646,6 +650,13 @@ fun DvrPosterCard(
                     "Failed", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color(0xFFFF4757),
                     modifier = Modifier.align(Alignment.TopStart).padding(5.dp).clip(RoundedCornerShape(4.dp))
                         .background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 5.dp, vertical = 3.dp),
+                )
+            } else if (rec.fileMissing) {
+                // Apple 743bd6b: "Missing", white on grey at 85%.
+                Text(
+                    "Missing", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color.White,
+                    modifier = Modifier.align(Alignment.TopStart).padding(5.dp).clip(RoundedCornerShape(4.dp))
+                        .background(DvrMissingGrey.copy(alpha = 0.85f)).padding(horizontal = 5.dp, vertical = 3.dp),
                 )
             }
             if (progress > 0f) {
@@ -695,7 +706,8 @@ fun DvrHeroCard(
             }
             Text(rec.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, lineHeight = 26.sp, color = MaterialTheme.colorScheme.onBackground, maxLines = 2, overflow = TextOverflow.Ellipsis)
             rec.subTitle?.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            val meta = listOfNotNull(channelName.takeIf { it.isNotBlank() }, metaLine(rec, now)).joinToString(" · ")
+            // On this device, but its file is gone: say so (Delete from Device stays).
+            val meta = listOfNotNull(channelName.takeIf { it.isNotBlank() }, metaLine(rec, now), "File missing".takeIf { rec.fileMissing }).joinToString(" · ")
             Text(meta, fontSize = 13.sp.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 4.dp)) {
                 if (recording) {
@@ -704,8 +716,8 @@ fun DvrHeroCard(
                         HeroRound(Icons.Filled.Sensors, "Jump to Live", onSecondary)
                     }
                     if (canManage) HeroRound(Icons.Filled.Stop, "Stop Recording", onStop)
-                } else if (rec.effectiveStatus(now) != DvrViewModel.Recording.Status.Failed) {
-                    // A failed recording has nothing to play.
+                } else if (rec.effectiveStatus(now) != DvrViewModel.Recording.Status.Failed && !rec.fileMissing) {
+                    // A failed recording, or one whose file is gone, has nothing to play.
                     HeroPill(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, onPrimary)
                     if (progress > 0f) HeroRound(Icons.Filled.Replay, "Play from Beginning", onSecondary)
                 }
@@ -804,7 +816,11 @@ private fun TvDvrPage(
         val se = if ((rec.season ?: 0) > 0) "S${rec.season} E${rec.episode ?: 0}" else null
         // tvOS DVRHero metaParts: channel, "Sep 5 1:36 AM to 2:00 AM", S/E or duration.
         val dateRange = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(Date(rec.startMillis)) + " " + timeRange(rec)
-        val meta = listOfNotNull(channelName(rec).takeIf { it.isNotBlank() }, dateRange, se ?: durationLabel(rec))
+        val meta = listOfNotNull(
+            channelName(rec).takeIf { it.isNotBlank() }, dateRange, se ?: durationLabel(rec),
+            // On this device, but its file is gone: say so (Delete from Device stays).
+            "File missing".takeIf { rec.fileMissing },
+        )
         val buttons = buildList {
             if (recording) {
                 if (canPlay) {
@@ -814,8 +830,8 @@ private fun TvDvrPage(
                 if (canManageDvr || rec.source != DvrViewModel.Source.Server) {
                     add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Stop Recording", Icons.Filled.Stop, id = "Stop") { onStop(rec) })
                 }
-            } else if (rec.effectiveStatus(now) != DvrViewModel.Recording.Status.Failed) {
-                // A failed recording has nothing to play.
+            } else if (rec.effectiveStatus(now) != DvrViewModel.Recording.Status.Failed && !rec.fileMissing) {
+                // A failed recording, or one whose file is gone, has nothing to play.
                 add(com.aeriotv.android.feature.movies.tv.TvHeroButton(if (progress > 0f) "Resume" else "Play", Icons.Filled.PlayArrow, primary = true, id = "Primary") { armHero(); onPlay(rec) })
                 if (progress > 0f) add(com.aeriotv.android.feature.movies.tv.TvHeroButton("Play from Beginning", Icons.Filled.Replay, id = "FromStart") { armHero(); onPlayFromStart(rec) })
             }
@@ -856,7 +872,12 @@ private fun TvDvrPage(
                 DvrViewModel.Recording.Status.Scheduled -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge(day, Color.Black.copy(alpha = 0.6f), icon = Icons.Outlined.Schedule)
                 // Apple's status wording and red (MyRecordingsView statusInfo).
                 DvrViewModel.Recording.Status.Failed -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Failed", red.copy(alpha = 0.85f))
-                else -> if (rec.partial) com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Partial", Color(0xFFFF9F43).copy(alpha = 0.85f)) else null
+                else -> when {
+                    // Apple 743bd6b: "Missing" on grey at 85%, before Partial.
+                    rec.fileMissing -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Missing", DvrMissingGrey.copy(alpha = 0.85f))
+                    rec.partial -> com.aeriotv.android.feature.movies.tv.TvRecordingBadge("Partial", Color(0xFFFF9F43).copy(alpha = 0.85f))
+                    else -> null
+                }
             },
             onClick = onClick, modifier = modifier, longPressActions = menuActions(rec),
         )

@@ -174,6 +174,11 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
                     this@AerioTVApplication, aerioDatabase.localRecordingDao(), "launch", launchedAt,
                 )
                 if (n > 0) android.util.Log.i("LocalRecordingService", "[DVR] launch: $n on-device recording(s) had no capture running")
+                // Then every recording file with no row gets one, so none is
+                // left on the device with no way to play or delete it.
+                com.aeriotv.android.core.data.LocalRecordingAdoption.adopt(
+                    this@AerioTVApplication, aerioDatabase.localRecordingDao(),
+                )
             }
         }
         // Crash capture FIRST, and independent of the Debug Logging toggle: a

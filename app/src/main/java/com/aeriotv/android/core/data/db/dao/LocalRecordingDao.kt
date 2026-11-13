@@ -31,6 +31,10 @@ interface LocalRecordingDao {
     @androidx.room.Update
     suspend fun update(entity: LocalRecordingEntity): Int
 
+    /** Every row's file location, any profile (LocalRecordingAdoption). */
+    @Query("SELECT filePath FROM local_recording")
+    suspend fun allFilePaths(): List<String>
+
     /** Rows still marked recording, any profile (InterruptedCapture). */
     @Query("SELECT * FROM local_recording WHERE status = 'recording'")
     suspend fun recordingRows(): List<LocalRecordingEntity>
