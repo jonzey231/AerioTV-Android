@@ -1,5 +1,16 @@
 package com.aeriotv.android.feature.settings
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxHeight
+import com.aeriotv.android.ui.settings.settingsRowTitleStyle
+import com.aeriotv.android.ui.settings.settingsRowTitleWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Bolt
 import com.aeriotv.android.ui.scale.subtext
 import com.aeriotv.android.ui.theme.textAccent
@@ -264,12 +275,26 @@ fun DvrSettingsScreen(
                 }
             }
 
-            item {
+            if (isTv) item {
+                // Apple TV's storage card (DVRSettingsView tvStorageCard): a
+                // "- 10 GB +" stepper on the Maximum row and the Used gauge
+                // in the same card under it, then the storage disclosure.
+                SettingsSection(
+                    header = "Local Storage",
+                    footer = "Recordings are stored on this Android TV. If the system runs critically low on space, Android may remove stored app data, including recordings. For must-keep recordings, use a Dispatcharr server destination.",
+                ) {
+                    TvStorageCard(
+                        capMB = capMB,
+                        onCapChange = settingsVm::setDvrMaxLocalStorageMB,
+                        usedText = "${formatBytes(context, usedBytes)} of ${formatGb(capMB)}",
+                        usedFraction = usedFraction,
+                    )
+                }
+            } else item {
                 // No footer: Apple's iOS Local Storage section has none.
-                // Apple TV adds a storage disclosure under the card.
                 Card(
                     header = "Local Storage",
-                    footer = if (isTv) "Recordings are stored on this Android TV. If the system runs critically low on space, Android may remove stored app data, including recordings. For must-keep recordings, use a Dispatcharr server destination." else null,
+                    footer = null,
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -458,6 +483,134 @@ private fun Card(
         }
     }
 }
+
+/**
+ * Apple TV's Local Storage card (DVRSettingsView tvStorageCard), halved:
+ * Maximum with a minus key, the value (28 pt semibold, at least 110 pt
+ * wide), and a plus key 24 pt apart; 16 pt below, Used and its amount
+ * (22 pt) over a 12 pt gauge, all inside one card with 24 pt padding. The
+ * card is one focus stop: D-pad Left and Right step the maximum by 1 GB
+ * between 1 and 200 GB, Apple's keys' steps and limits.
+ */
+@Composable
+private fun TvStorageCard(
+    capMB: Int,
+    onCapChange: (Int) -> Unit,
+    usedText: String,
+    usedFraction: Float,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val atMin = capMB <= STORAGE_MIN_MB
+    val atMax = capMB >= STORAGE_MAX_MB
+    fun step(deltaMb: Int): Boolean {
+        val next = (capMB + deltaMb).coerceIn(STORAGE_MIN_MB, STORAGE_MAX_MB)
+        if (next == capMB) return false
+        onCapChange(next)
+        return true
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .settingsRowCard(focused)
+            .onKeyEvent { e ->
+                if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onKeyEvent false
+                when (e.key) {
+                    // At an end stop the key is left to the focus system.
+                    androidx.compose.ui.input.key.Key.DirectionLeft -> step(-STORAGE_STEP_MB)
+                    androidx.compose.ui.input.key.Key.DirectionRight -> step(STORAGE_STEP_MB)
+                    else -> false
+                }
+            }
+            .focusable()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // As tall as Apple's step keys (TVSettingsPill, about 43 pt).
+        Row(modifier = Modifier.heightIn(min = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Maximum",
+                style = settingsRowTitleStyle(),
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = settingsRowTitleWeight(),
+                modifier = Modifier.weight(1f),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Remove,
+                    contentDescription = "Less storage",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (atMin) 0.3f else 1f),
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = formatGb(capMB),
+                    fontSize = 14.sp,
+                    lineHeight = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.widthIn(min = 55.dp),
+                )
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "More storage",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (atMax) 0.3f else 1f),
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Used",
+                    style = com.aeriotv.android.ui.settings.settingsRowSubtitleStyle().subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = usedText,
+                    style = com.aeriotv.android.ui.settings.settingsRowSubtitleStyle().subtext(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Apple's usage colors: green, yellow from 80%, red from 95%.
+            val usageColor = when {
+                usedFraction >= 0.95f -> androidx.compose.ui.graphics.Color(0xFFFF3B30)
+                usedFraction >= 0.80f -> androidx.compose.ui.graphics.Color(0xFFFFCC00)
+                else -> androidx.compose.ui.graphics.Color(0xFF34C759)
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)),
+            ) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(usedFraction).background(usageColor))
+            }
+        }
+        if (usedFraction >= 0.80f) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = androidx.compose.ui.graphics.Color(0xFFFFCC00),
+                    modifier = Modifier.size(11.dp),
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = "Storage is running low. Future recordings may not complete if the limit is reached.",
+                    style = com.aeriotv.android.ui.settings.settingsRowSubtitleStyle(),
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+        }
+    }
+}
+
+private const val STORAGE_STEP_MB = 1024
+private const val STORAGE_MIN_MB = 1024
+private const val STORAGE_MAX_MB = 204_800
 
 /** Apple's compact stepper spelling: the value sits between two keys. */
 private fun formatRoll(mins: Int): String = if (mins == 0) "None" else "$mins min"
