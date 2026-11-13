@@ -1484,46 +1484,43 @@ class PlaylistRepository @Inject constructor(
         // while a gated surface (DVR / On Demand) can fire its own within the
         // same second; without this the server saw two identical probes and the
         // log printed two "probe OK" lines. Late callers join the running pass
-        // instead of starting a second one.
-        val pending = CompletableDeferred<Boolean>()
-        val running = inFlightCapabilityProbes.putIfAbsent(playlistId, pending)
-        if (running != null) return running.await()
+        // instead of starting a second one. A probe asked for from inside the
+        // pass itself gets false at once (see [SingleFlight]).
+        return inFlightCapabilityProbes.single(
+            playlistId,
+            reentered = {
+                Log.w(TAG_PERMS, "probe asked from inside its own pass trigger=$trigger; the running pass answers")
+                false
+            },
+        ) { capabilityProbePass(playlistId, force, trigger) }
+    }
+
+    private suspend fun capabilityProbePass(playlistId: String, force: Boolean, trigger: String): Boolean {
         // Back-to-back passes (Streamer 2026-10-27 14:25:42: "playlist refresh"
         // at .068 and "cold launch" at .779, two probe OK and two PermsRefresh
         // lines): a pass that SUCCEEDED within [PROBE_COALESCE_MS] already
         // answered, so a later trigger reuses it instead of re-reading.
         val okAt = lastCapabilityProbeOkAt[playlistId] ?: 0L
         if (System.currentTimeMillis() - okAt < PROBE_COALESCE_MS) {
-            inFlightCapabilityProbes.remove(playlistId, pending)
-            pending.complete(true)
             Log.i(TAG_PERMS, "probe coalesced trigger=$trigger (last pass ${System.currentTimeMillis() - okAt}ms ago)")
             return true
         }
-        return try {
-            val before = dao.byId(playlistId)
-            val oldLevel = before?.permsLevelLabel() ?: "unknown"
-            val willProbe = before != null && before.isDispatcharrDirectConnect() &&
-                (force || before.capabilitiesNeedProbe())
-            if (willProbe) lastCapabilityProbeAt[playlistId] = System.currentTimeMillis()
-            val result = probeCapabilitiesUncoalesced(playlistId, force)
-            if (willProbe && result) lastCapabilityProbeOkAt[playlistId] = System.currentTimeMillis()
-            if (willProbe) {
-                val newLevel = dao.byId(playlistId)?.permsLevelLabel() ?: "unknown"
-                Log.i(
-                    TAG_PERMS,
-                    "level $oldLevel -> $newLevel trigger=$trigger" +
-                        if (result) "" else " (refresh failed, kept last good)",
-                )
-            }
-            pending.complete(result)
-            result
-        } catch (t: Throwable) {
-            // Includes cancellation: joiners must never hang on a dropped pass.
-            pending.complete(false)
-            throw t
-        } finally {
-            inFlightCapabilityProbes.remove(playlistId, pending)
+        val before = dao.byId(playlistId)
+        val oldLevel = before?.permsLevelLabel() ?: "unknown"
+        val willProbe = before != null && before.isDispatcharrDirectConnect() &&
+            (force || before.capabilitiesNeedProbe())
+        if (willProbe) lastCapabilityProbeAt[playlistId] = System.currentTimeMillis()
+        val result = probeCapabilitiesUncoalesced(playlistId, force)
+        if (willProbe && result) lastCapabilityProbeOkAt[playlistId] = System.currentTimeMillis()
+        if (willProbe) {
+            val newLevel = dao.byId(playlistId)?.permsLevelLabel() ?: "unknown"
+            Log.i(
+                TAG_PERMS,
+                "level $oldLevel -> $newLevel trigger=$trigger" +
+                    if (result) "" else " (refresh failed, kept last good)",
+            )
         }
+        return result
     }
 
     private suspend fun probeCapabilitiesUncoalesced(playlistId: String, force: Boolean): Boolean {
@@ -1731,8 +1728,17 @@ class PlaylistRepository @Inject constructor(
         // identity. The Movies / TV Shows and DVR caches key on the api_key
         // as well, so the fresh key misses them and they rebuild on their
         // own.
-        runCatching { dao.byId(playlist.id)?.let { refresh(it) } }
-            .onFailure { Log.w(TAG_CAPS, "post-repair channel reload failed", it) }
+        //
+        // Launched, never awaited here (stuck save 2026-11-12): the reload
+        // probes permissions first, and run inline that probe joined this
+        // very pass, which was waiting on the reload, so the Edit Playlist
+        // save that started the pass never finished. Launched outside the
+        // pass, its probe joins this pass and goes on once it ends, the way
+        // the Apple app reloads after a repair.
+        layeringScope.launch(DeletedPlaylists.started(playlist.id)) {
+            runCatching { dao.byId(playlist.id)?.let { refresh(it) } }
+                .onFailure { Log.w(TAG_CAPS, "post-repair channel reload failed", it) }
+        }
         return true
     }
 
@@ -1760,8 +1766,7 @@ class PlaylistRepository @Inject constructor(
         return dao.byId(playlist.id)?.canSwitchStream() ?: false
     }
 
-    private val inFlightCapabilityProbes =
-        ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private val inFlightCapabilityProbes = SingleFlight<String>()
 
     /**
      * Probe every Dispatcharr playlist.

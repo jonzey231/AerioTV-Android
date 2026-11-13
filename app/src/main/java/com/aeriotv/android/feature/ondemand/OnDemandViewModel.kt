@@ -95,6 +95,7 @@ class OnDemandViewModel @Inject constructor(
     private val settleGate: AppSettleGate,
     private val catalogStore: VodCatalogStore,
     private val keyRecheck: com.aeriotv.android.core.network.DispatcharrKeyRecheck,
+    private val profileManager: com.aeriotv.android.core.profiles.ProfileManager,
 ) : ViewModel() {
 
     data class UiState(
@@ -1121,6 +1122,7 @@ class OnDemandViewModel @Inject constructor(
                 .collect { id ->
                     val prev = previousId
                     previousId = id
+                    activeIdNow = id
                     if (first) { first = false; return@collect }
                     // Same playlist id re-emitted = a profile switch
                     // (ProfileScope.token). The library on screen stays
@@ -1139,6 +1141,36 @@ class OnDemandViewModel @Inject constructor(
                     initialLoadsStarted = false
                     startInitialLoads()
                 }
+        }
+        // A server address change on the active playlist (Edit Playlist, a
+        // Drive pull, a sync merge): a running sweep walks the address it
+        // read when it started, so it stops when the change starts, a sweep
+        // asked for during the change waits (startMovieSweep), and both start
+        // at the current address once the change lands.
+        viewModelScope.launch {
+            profileManager.routeChanges.collect { change ->
+                val activeId = activeIdNow
+                val running = RouteStoppedSweeps.Sweeps(
+                    movies = movieSweepJob?.isActive == true,
+                    series = seriesSweepJob?.isActive == true,
+                )
+                val id8 = change.playlistId.take(8)
+                if (!change.landed) {
+                    val stop = routeStops.onStart(change.playlistId, activeId, running)
+                    if (stop.movies) movieSweepJob?.cancel()
+                    if (stop.series) seriesSweepJob?.cancel()
+                    if (stop.any) {
+                        Log.i(TAG, "[VOD] server address changing on $id8: stopped the sweep for the old address (movies=${stop.movies} series=${stop.series})")
+                    }
+                } else {
+                    val start = routeStops.onLanded(change.playlistId, activeId, running)
+                    if (start.any) {
+                        Log.i(TAG, "[VOD] server address change landed on $id8: sweeping again (movies=${start.movies} series=${start.series})")
+                    }
+                    if (start.movies) startMovieSweep(background = true)
+                    if (start.series) startSeriesSweep(background = true)
+                }
+            }
         }
         // Per-half capability changes on the SAME playlist (a re-probe after the
         // admin flips vod_movies_enabled / vod_series_enabled). Each half is
@@ -1691,6 +1723,18 @@ class OnDemandViewModel @Inject constructor(
 
     private var movieSweepJob: kotlinx.coroutines.Job? = null
     private var seriesSweepJob: kotlinx.coroutines.Job? = null
+    /** Sweeps a server address change stopped or held, started when it lands. */
+    private val routeStops = RouteStoppedSweeps()
+    /** The active playlist id as the switch collector last saw it (Main only). */
+    private var activeIdNow: String? = null
+
+    /** True when this sweep waits: the active playlist's address is changing. */
+    private fun sweepWaitsForRoute(movies: Boolean): Boolean {
+        val id = activeIdNow
+        if (!routeStops.holdStart(id, id != null && profileManager.isRouteChanging(id), movies)) return false
+        Log.i(TAG, "[VOD] ${if (movies) "movie" else "series"} sweep waits: the server address of ${id?.take(8)} is changing")
+        return true
+    }
 
     /** Foreground sweep (pull to refresh, playlist switch, Refresh Everything). */
     fun refresh() { keyRecheck.userRefresh(); startMovieSweep(background = false) }
@@ -1702,6 +1746,7 @@ class OnDemandViewModel @Inject constructor(
     private var seriesSweepIsBackground = false
 
     private fun startMovieSweep(background: Boolean) {
+        if (sweepWaitsForRoute(movies = true)) return
         if (movieSweepJob?.isActive == true) {
             if (background || !movieSweepIsBackground) {
                 Log.i(TAG, "[VOD] movie sweep already running; ignoring refresh(background=$background)")
@@ -1844,6 +1889,7 @@ class OnDemandViewModel @Inject constructor(
     fun refreshSeries() { keyRecheck.userRefresh(); startSeriesSweep(background = false) }
 
     private fun startSeriesSweep(background: Boolean) {
+        if (sweepWaitsForRoute(movies = false)) return
         if (seriesSweepJob?.isActive == true) {
             if (background || !seriesSweepIsBackground) {
                 Log.i(TAG, "[VOD] series sweep already running; ignoring refreshSeries(background=$background)")

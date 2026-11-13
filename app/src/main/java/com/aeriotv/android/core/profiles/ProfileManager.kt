@@ -1857,6 +1857,30 @@ class ProfileManager @Inject constructor(
     @Volatile var onRouteChange: ((playlistId: String, landed: Boolean) -> Unit)? = null
     private val routeChangeStarted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
+    /** A server address change on a playlist starts or lands, as [onRouteChange] sees it. */
+    data class RouteChange(val playlistId: String, val landed: Boolean)
+
+    /**
+     * The same starts and landings as [onRouteChange], for On Demand: a
+     * running catalog sweep walks the address it read when it started, so it
+     * stops when a change starts and starts again once the change lands.
+     * Emitted with tryEmit only, so it is as safe as [onRouteChange] inside
+     * the Drive pull's transaction.
+     */
+    private val _routeChanges = kotlinx.coroutines.flow.MutableSharedFlow<RouteChange>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    val routeChanges: kotlinx.coroutines.flow.SharedFlow<RouteChange> = _routeChanges
+
+    /** True from the start of a server address change on [playlistId] until it lands. */
+    fun isRouteChanging(playlistId: String): Boolean = routeChangeStarted.contains(playlistId)
+
+    private fun routeChange(playlistId: String, landed: Boolean) {
+        runCatching { onRouteChange?.invoke(playlistId, landed) }
+        _routeChanges.tryEmit(RouteChange(playlistId, landed))
+    }
+
     /** Playlists whose live profile a hold left for the default one; their screen reloads once the change lands. */
     private val leftLive = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val checks = HashMap<String, kotlinx.coroutines.Job>()
@@ -1933,7 +1957,7 @@ class ProfileManager @Inject constructor(
         // Dispatcharr Sync drops its saved copy of the old server's record for
         // every profile here, whether or not any profile is held (item 6).
         routeChangeStarted += playlistId
-        runCatching { onRouteChange?.invoke(playlistId, false) }
+        routeChange(playlistId, landed = false)
         val ids = ProfileHostHold.toHold(store.forPlaylist(playlistId))
         if (ids.isEmpty() && hostHolds.hold(playlistId) == null) return false
         return placeHold(playlistId, ids, ProfileHostHold.routes(oldBase, oldLan), hostHolds.recorded(playlistId), ProfileHostHold.routes(newBase, newLan))
@@ -2023,7 +2047,7 @@ class ProfileManager @Inject constructor(
      * default one. Then the same-server check runs.
      */
     fun routeChangeSettled(playlistId: String, reloadUi: Boolean) {
-        if (routeChangeStarted.remove(playlistId)) runCatching { onRouteChange?.invoke(playlistId, true) }
+        if (routeChangeStarted.remove(playlistId)) routeChange(playlistId, landed = true)
         if (leftLive.remove(playlistId) && reloadUi) {
             scope.launch { reloads.send(Reload(playlistId, switchGen.get(), fromSwitch = false)) }
         }
