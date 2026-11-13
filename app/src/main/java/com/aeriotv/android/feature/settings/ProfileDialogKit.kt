@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -108,7 +109,7 @@ object ProfileDialogRules {
      * beside Cancel, below the scrolling form, so both stay on screen (Apple
      * parity, owner 2026-11-12); phones and tablets keep it in the form.
      */
-    fun formSubmitInButtonRow(isTv: Boolean): Boolean = isTv
+    fun formSubmitInButtonRow(isTv: Boolean): Boolean = true
 
     /** A button-row submit that cannot run yet (fields empty, or busy) is dimmed, never disabled (TV focus), like Apple's. */
     const val INERT_ALPHA = 0.45f
@@ -475,5 +476,41 @@ internal fun ProfileActionStackDialog(
                 ProfileActionButton(label = "Cancel", onClick = onCancel)
             }
         }
+    }
+}
+
+/**
+ * Add Profile's buttons (Apple parity): capsules, right-aligned by the
+ * dialog. [filled] is the main action (Add Profile); the other is tonal on
+ * phones and tablets, outlined on TV. The focus ring follows the capsule.
+ */
+@Composable
+internal fun ProfileDialogCapsule(label: String, onClick: () -> Unit, filled: Boolean, modifier: Modifier = Modifier) {
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(50)
+    val primary = androidx.compose.material3.MaterialTheme.colorScheme.primary
+    val bg = when {
+        filled -> primary
+        isTv -> androidx.compose.ui.graphics.Color.Transparent
+        else -> primary.copy(alpha = 0.14f)
+    }
+    Box(
+        modifier = modifier
+            .heightIn(min = 40.dp)
+            .dpadFocusRing(shape, onFilled = filled)
+            .clip(shape)
+            .background(bg)
+            .then(if (!filled && isTv) androidx.compose.ui.Modifier.border(1.dp, primary.copy(alpha = 0.7f), shape) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.material3.Text(
+            label,
+            style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = if (filled) androidx.compose.material3.MaterialTheme.colorScheme.onPrimary else primary,
+            maxLines = 1,
+        )
     }
 }

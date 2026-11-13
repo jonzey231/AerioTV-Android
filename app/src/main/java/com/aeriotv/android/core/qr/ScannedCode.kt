@@ -24,6 +24,41 @@ import kotlinx.serialization.json.intOrNull
 object ScannedCode {
     const val INVALID_MESSAGE = "This is not a Dispatcharr user code or an AerioTV setup code."
     const val NO_QR_IN_IMAGE = "No QR code found in that image."
+
+    // ---- Add Profile (Apple f4cf2e9): the user's Dispatcharr QR in API Key mode ----
+
+    /** The camera prompt in Add Profile. */
+    const val ADD_PROFILE_PROMPT = "Point the camera at a Dispatcharr user QR code."
+    /** An AerioTV setup code scanned in Add Profile. */
+    const val SETUP_CODE_IN_ADD_PROFILE = "This is an AerioTV setup code. Scan a Dispatcharr user QR code."
+    /** Another server's user code scanned in Add Profile. */
+    const val OTHER_SERVER_MESSAGE = "This user code is for a different Dispatcharr server."
+
+    /** The lowercased host of a server address ("" or unparseable: null). */
+    fun host(raw: String?): String? {
+        var s = raw?.trim().orEmpty()
+        if (s.isEmpty()) return null
+        if (!s.startsWith("http://", ignoreCase = true) && !s.startsWith("https://", ignoreCase = true)) s = "http://$s"
+        return runCatching { java.net.URI(s).host }.getOrNull()?.lowercase()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Why Add Profile refuses [r], or null to take it: a user code fills the
+     * API Key field when its server is this playlist's ([playlistUrls], its
+     * server and local URLs). A code names its server by host, so the same
+     * server over another scheme or port counts; a code without a server
+     * address, or a playlist without one, is taken as is, since Add Profile
+     * checks the key with the server anyway.
+     */
+    fun addProfileProblem(r: Result, playlistUrls: List<String?>): String? = when (r) {
+        is Result.UserKey -> {
+            val code = host(r.baseUrl)
+            val mine = playlistUrls.mapNotNull { host(it) }.toSet()
+            if (code == null || mine.isEmpty() || code in mine) null else OTHER_SERVER_MESSAGE
+        }
+        is Result.SetupLink -> SETUP_CODE_IN_ADD_PROFILE
+        Result.Invalid -> INVALID_MESSAGE
+    }
     const val USER_KEY_TYPE = "user_api_key"
     const val USER_KEY_VERSION = 1
 

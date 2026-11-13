@@ -337,6 +337,8 @@ internal fun RosterCredentialDialog(
                 val context = androidx.compose.ui.platform.LocalContext.current
                 com.aeriotv.android.feature.qrscan.QrScanActions(
                     enabled = !busy,
+                    // Inside Add Profile: never "Show User QR Code" (Apple f4cf2e9).
+                    showUserQr = false,
                     onResult = { r ->
                         when (r) {
                             is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {

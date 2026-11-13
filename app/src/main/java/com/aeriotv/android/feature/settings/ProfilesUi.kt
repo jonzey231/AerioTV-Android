@@ -133,6 +133,8 @@ class ProfilesViewModel @Inject constructor(
             manager.baseIsServerAdmin(playlistId), manager.activeIsAdmin(playlistId), manager.activeRole(playlistId),
         )
     suspend fun addCandidates(playlistId: String) = manager.addCandidates(playlistId)
+    suspend fun addStartsManual(playlistId: String) = manager.addStartsManual(playlistId)
+    suspend fun playlistUrls(playlistId: String) = manager.playlistUrls(playlistId)
     suspend fun addManual(playlistId: String, username: String, password: String?, apiKey: String?, role: com.aeriotv.android.core.profiles.ProfileRole? = null) =
         if (apiKey != null) manager.addProfileByApiKey(playlistId, apiKey, role)
         else manager.addProfileManual(playlistId, username, password, null, role)
@@ -1079,8 +1081,15 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
     // The profiles this dialog added: the only ones its PIN step's Cancel undoes.
     val addedHere = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     fun added(p: DispatcharrProfile) { addedHere += p.id; if (vm.needsPinAfterAdd(playlistId, p.id)) pinAfterAdd = true else onClose() }
+    // Which form opens is known before anything shows, so one dialog window
+    // opens in its final shape (Android TV showed two in a row).
+    var decided by remember { mutableStateOf(false) }
+    val serverUrls by androidx.compose.runtime.produceState<List<String?>>(emptyList(), playlistId) { value = vm.playlistUrls(playlistId) }
     LaunchedEffect(playlistId) {
         vm.notePickerOpened(playlistId, "addProfile")
+        manual = runCatching { vm.addStartsManual(playlistId) }.getOrDefault(false)
+        decided = true
+        if (manual) return@LaunchedEffect
         vm.addCandidates(playlistId).fold(
             { c ->
                 when (c) {
@@ -1095,6 +1104,7 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
         PinAfterAdd(playlistId, vm, addedHere.toList()) { onClose() }
         return
     }
+    if (!decided) return
     if (manual) {
         // One column; on TV the card may grow to about 90% of the screen and
         // the parts sit closer, and Add Profile sits beside Cancel in the
@@ -1114,14 +1124,15 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(gap)) {
                     // Suggestions sit right above the form: set apart by a divider and a heading.
                     RosterSuggestions(playlistId, vm, users = null, onAdded = onClose, formFollows = true)
-                    // Standard and Child side by side, still radios.
-                    RolePicker(playlistId, vm, role) { role = it }
+                    // Phones and tablets stack Standard and Child (Apple); TV keeps them side by side.
+                    RolePicker(playlistId, vm, role, vertical = !isTv) { role = it }
                     com.aeriotv.android.feature.onboarding.components.ManualProfileForm(
                         onAdd = { u, pw, key ->
                             vm.addManual(playlistId, u, pw, key, role).fold({ added(it); null }, { it.message ?: "Could not add profile" })
                         },
                         spacing = gap,
                         submit = rowSubmit,
+                        qrServerUrls = serverUrls,
                     )
                 }
                 }
@@ -1129,15 +1140,15 @@ internal fun AddProfileDialog(playlistId: String, vm: ProfilesViewModel, onClose
             confirmButton = {
                 rowSubmit?.let { s ->
                     // Dimmed and inert until it can run, never disabled (TV focus).
-                    SettingsDialogTextButton(
+                    ProfileDialogCapsule(
                         label = "Add Profile",
                         onClick = { s.submit() },
-                        emphasized = true,
+                        filled = true,
                         modifier = Modifier.alpha(ProfileDialogRules.submitAlpha(s.ready, s.busy)),
                     )
                 }
             },
-            dismissButton = { SettingsDialogTextButton(label = "Cancel", onClick = onClose) },
+            dismissButton = { ProfileDialogCapsule(label = "Cancel", onClick = onClose, filled = false) },
         )
         return
     }
@@ -1337,15 +1348,17 @@ internal fun RolePicker(playlistId: String, vm: ProfilesViewModel, selected: com
                 com.aeriotv.android.core.profiles.ProfileRole.optionsFor(serverAdmin = null).forEach { r -> choice(r, Modifier.fillMaxWidth()) }
             }
         } else {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                com.aeriotv.android.core.profiles.ProfileRole.optionsFor(serverAdmin = null).forEach { r -> choice(r, Modifier.weight(1f)) }
+            // Each choice hugs its radio and label, so its focus ring does too.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                com.aeriotv.android.core.profiles.ProfileRole.optionsFor(serverAdmin = null).forEach { r -> choice(r, Modifier) }
             }
         }
+        // On the same left edge as "Role".
         if (!descriptionPerChoice) Text(
             roleDescription(selected),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+            modifier = Modifier.padding(top = 2.dp),
         )
     }
     if (gate) {

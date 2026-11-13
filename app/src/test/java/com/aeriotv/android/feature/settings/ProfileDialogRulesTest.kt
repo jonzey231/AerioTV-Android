@@ -107,11 +107,11 @@ class ProfileDialogRulesTest {
         assertTrue(478.5f <= 540 * ProfileDialogRules.maxHeightFraction(isTv = true, form = true))
     }
 
-    @Test fun onTvAddProfileSitsBesideCancelInTheButtonRow() {
+    @Test fun addProfileSitsBesideCancelInTheButtonRowEverywhere() {
         // TV: the submit leaves the scrolling form for the pinned button row.
         assertTrue(ProfileDialogRules.formSubmitInButtonRow(isTv = true))
-        // Phones and tablets keep it in the form.
-        assertFalse(ProfileDialogRules.formSubmitInButtonRow(isTv = false))
+        // Phones and tablets too (iPhone: Cancel and Add Profile capsules, right-aligned).
+        assertTrue(ProfileDialogRules.formSubmitInButtonRow(isTv = false))
     }
 
     @Test fun aButtonRowSubmitIsDimmedUntilItCanRun() {

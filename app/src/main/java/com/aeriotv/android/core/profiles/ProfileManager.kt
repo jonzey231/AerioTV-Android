@@ -826,6 +826,19 @@ class ProfileManager @Inject constructor(
      * anyone else, or a 403 from GET /api/accounts/users/, gets the manual
      * form (username, then password or API key, validated by signing in).
      */
+    /**
+     * Whether Add Profile opens on the manual form, known without the
+     * network (the base and active profile's levels), so the dialog opens
+     * once in its final shape instead of switching windows (the TV's double
+     * pop-up). A 403 on the users list can still turn an admin to manual.
+     */
+    suspend fun addStartsManual(playlistId: String): Boolean =
+        RoleRules.addPath(baseIsServerAdmin(playlistId) && activeIsAdmin(playlistId), usersListForbidden = false) == RoleRules.AddPath.Manual
+
+    /** The playlist's server and local URLs (a scanned user code must be for this server). */
+    suspend fun playlistUrls(playlistId: String): List<String?> =
+        playlistDao.rawById(playlistId)?.let { listOf(it.urlString, it.lanUrlString) } ?: emptyList()
+
     suspend fun addCandidates(playlistId: String): Result<AddCandidates> = runCatching {
         check(canAdd(playlistId)) { "Only an Admin or Standard profile can add profiles." }
         val serverAdmin = baseIsServerAdmin(playlistId) && activeIsAdmin(playlistId)

@@ -893,7 +893,8 @@ internal fun IconTextField(
                 okSuppressed = trailingFocused,
             ),
         singleLine = true,
-        placeholder = { Text(placeholder, style = androidx.compose.material3.LocalTextStyle.current.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+        // One line like the field itself: a long hint ends in an ellipsis instead of growing the field.
+        placeholder = { Text(placeholder, style = androidx.compose.material3.LocalTextStyle.current.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
         leadingIcon = {
             Icon(
                 imageVector = leading,
@@ -956,7 +957,7 @@ private fun CompactIconTextField(
                 singleLine = true,
                 visualTransformation = visualTransformation,
                 interactionSource = interaction,
-                placeholder = { Text(placeholder, style = androidx.compose.material3.LocalTextStyle.current.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                placeholder = { Text(placeholder, style = androidx.compose.material3.LocalTextStyle.current.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 leadingIcon = {
                     Icon(
                         imageVector = leading,
@@ -1015,7 +1016,20 @@ internal fun SegmentedAuthControl(
     selected: DispatcharrAuthMode,
     onSelect: (DispatcharrAuthMode) -> Unit,
     enabled: Boolean,
+    /**
+     * Add Profile (Apple parity): two capsules sized to their labels, the
+     * selected one filled, so "Username & Password" fits on one line in a
+     * dialog. The connect form keeps the full-width track.
+     */
+    capsules: Boolean = false,
 ) {
+    if (capsules) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            AuthModeCapsule("Username & Password", selected == DispatcharrAuthMode.UsernamePassword, enabled) { onSelect(DispatcharrAuthMode.UsernamePassword) }
+            AuthModeCapsule("API Key", selected == DispatcharrAuthMode.ApiKey, enabled) { onSelect(DispatcharrAuthMode.ApiKey) }
+        }
+        return
+    }
     val cornerRadius = 22.dp
     Row(
         modifier = Modifier
@@ -1043,6 +1057,29 @@ internal fun SegmentedAuthControl(
             enabled = enabled,
             modifier = Modifier.weight(1f),
             onClick = { onSelect(DispatcharrAuthMode.ApiKey) },
+        )
+    }
+}
+
+@Composable
+private fun AuthModeCapsule(label: String, isSelected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = Modifier
+            .dpadFocusRing(shape, washTint = MaterialTheme.colorScheme.primary, onFilled = isSelected)
+            .clip(shape)
+            .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = if (com.aeriotv.android.feature.settings.LocalTvCompactForm.current) 6.dp else 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

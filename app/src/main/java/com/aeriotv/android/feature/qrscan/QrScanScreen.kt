@@ -109,6 +109,10 @@ fun QrScanActions(
     linksOnly: Boolean = false,
     /** Bump to open the camera from outside (the onboarding Scan a QR code card). */
     scanTrigger: Int = 0,
+    /** "Show User QR Code" with the controls; Add Profile never offers it (Apple f4cf2e9). */
+    showUserQr: Boolean = true,
+    /** With [linksOnly]: a full-width outlined "Scan QR code" capsule above the links (Add Profile). */
+    scanCapsule: Boolean = false,
 ) {
     if (rememberIsTvDevice()) return
     val context = LocalContext.current
@@ -155,6 +159,16 @@ fun QrScanActions(
         if (scanTrigger > 0) { error = null; scanning = true }
     }
     if (linksOnly) Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (scanCapsule) OutlinedButton(
+            onClick = { error = null; scanning = true },
+            enabled = enabled && !busy,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.size(8.dp))
+            Text("Scan QR code")
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             androidx.compose.material3.TextButton(
                 onClick = { error = null; picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -167,7 +181,7 @@ fun QrScanActions(
             ) { Text("Import file", style = MaterialTheme.typography.bodyMedium) }
             if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        if (showUserQr) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
             ShowUserQrButton(linksOnly = true, enabled = enabled && !busy)
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -202,7 +216,7 @@ fun QrScanActions(
             Spacer(Modifier.size(8.dp))
             Text("Import file")
         }
-        ShowUserQrButton(linksOnly = false, enabled = enabled && !busy)
+        if (showUserQr) ShowUserQrButton(linksOnly = false, enabled = enabled && !busy)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
     if (scanning) {

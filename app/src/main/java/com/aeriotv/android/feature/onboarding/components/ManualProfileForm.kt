@@ -71,8 +71,15 @@ object ManualProfileFormRules {
 fun ManualProfileForm(
     onAdd: suspend (username: String, password: String?, apiKey: String?) -> String?,
     modifier: Modifier = Modifier,
-    /** Scan / Photos / Import file buttons above the fields (Settings); onboarding has its own card. */
+    /**
+     * Add Profile in Settings (Apple f4cf2e9): in API Key mode, a "Scan QR
+     * code" capsule and the Photos and Import file links under the key
+     * field (phones and tablets). A code fills the key and does not submit.
+     * Onboarding has its own card.
+     */
     showQr: Boolean = true,
+    /** The playlist's server and local URLs: a scanned user code must be for this server (by host). */
+    qrServerUrls: List<String?> = emptyList(),
     /** Onboarding: a small "Use an API key instead" link in place of the segmented control. */
     modeAsLink: Boolean = false,
     /** Drawn between the fields and the Add button (onboarding Role choice). */
@@ -93,36 +100,10 @@ fun ManualProfileForm(
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val isPassword = mode == DispatcharrAuthMode.UsernamePassword
-    var scannedUser by remember { mutableStateOf<String?>(null) }
-    val context = androidx.compose.ui.platform.LocalContext.current
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(spacing)) {
-        val selectMode: (DispatcharrAuthMode) -> Unit = { mode = it; username = ""; secret = ""; error = null; scannedUser = null }
-        if (!modeAsLink) SegmentedAuthControl(selected = mode, onSelect = selectMode, enabled = !busy)
-        // Dispatcharr user QR (phones and tablets): the key signs in the same
-        // way as a pasted key. The username in the code is display only.
-        if (showQr) com.aeriotv.android.feature.qrscan.QrScanActions(
-            enabled = !busy,
-            onResult = { r ->
-                when (r) {
-                    is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey -> {
-                        mode = DispatcharrAuthMode.ApiKey; username = ""; secret = r.apiKey
-                        scannedUser = r.username; error = null
-                        if (!busy) {
-                            busy = true
-                            scope.launch {
-                                error = onAdd("", null, r.apiKey)
-                                busy = false
-                                if (error == null) { secret = ""; scannedUser = null }
-                            }
-                        }
-                    }
-                    is com.aeriotv.android.core.qr.ScannedCode.Result.SetupLink ->
-                        com.aeriotv.android.feature.qrscan.openSetupLink(context, r.link)
-                    com.aeriotv.android.core.qr.ScannedCode.Result.Invalid -> Unit
-                }
-            },
-        )
-        scannedUser?.let { Text("Signed in as $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+        val selectMode: (DispatcharrAuthMode) -> Unit = { mode = it; username = ""; secret = ""; error = null }
+        // Two capsules sized to their labels, so "Username & Password" stays on one line (Apple parity).
+        if (!modeAsLink) SegmentedAuthControl(selected = mode, onSelect = selectMode, enabled = !busy, capsules = true)
         if (!modeAsLink) Text(
             if (isPassword) "Sign in as that Dispatcharr user once." else "The API key identifies the Dispatcharr user.",
             style = MaterialTheme.typography.bodySmall,
@@ -165,6 +146,19 @@ fun ManualProfileForm(
                 )
             }
             }
+            // The user's Dispatcharr QR (Users page, "Scan API Key"): fills the
+            // key above; Add Profile still adds it. Phones and tablets only.
+            if (showQr) com.aeriotv.android.feature.qrscan.QrScanActions(
+                enabled = !busy,
+                linksOnly = true,
+                scanCapsule = true,
+                showUserQr = false,
+                prompt = com.aeriotv.android.core.qr.ScannedCode.ADD_PROFILE_PROMPT,
+                accept = { com.aeriotv.android.core.qr.ScannedCode.addProfileProblem(it, qrServerUrls) },
+                onResult = { r ->
+                    if (r is com.aeriotv.android.core.qr.ScannedCode.Result.UserKey) { secret = r.apiKey; error = null }
+                },
+            )
         }
         if (modeAsLink) {
             androidx.compose.material3.TextButton(
