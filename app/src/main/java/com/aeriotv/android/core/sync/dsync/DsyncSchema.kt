@@ -540,6 +540,65 @@ object DsyncPayloads {
         return remote.isEmpty() && local.isNotEmpty()
     }
 
+    /**
+     * A pushed category's `updatedAt` (Unix seconds; section 4.13, owner
+     * 2026-11-13, Apple dce5791). The tmdbKey category carries the key's own
+     * edit time ([tmdbEditedAt]: when it was set or cleared on this device, or
+     * the stamp of the copy it was applied from), so an older edit sent late
+     * never outranks a newer edit made on another device. The push time stands
+     * in only while that edit time is unknown (0). Every other category, and
+     * the bucket's own `updatedAt`, keep the push time.
+     */
+    fun categoryStamp(key: DsyncKey, pushedAt: Long, tmdbEditedAt: Long): Long =
+        if (key == DsyncKey.TmdbKey && tmdbEditedAt > 0) tmdbEditedAt else pushedAt
+
+    /**
+     * tmdbKey: the server copy is the very one this device last consumed:
+     * the same stamp, the same device, and the same key while the saved copy
+     * still holds it ([consumedData]; a copy whose key could not be kept at
+     * rest compares by stamp and device). The stamp is the key's edit time,
+     * so a copy sent later can carry an older stamp than one consumed before;
+     * that copy is not the consumed one and is weighed by edit time.
+     */
+    fun tmdbSameAsConsumed(
+        remoteAt: Long,
+        remoteDevice: String,
+        remoteData: JsonObject,
+        consumedAt: Long,
+        consumedDevice: String,
+        consumedData: JsonObject?,
+    ): Boolean {
+        if (remoteAt != consumedAt || remoteDevice != consumedDevice) return false
+        val held = consumedData ?: return true
+        if (!held.containsKey("apiKey")) return true
+        return decodeTMDBKey(held) == decodeTMDBKey(remoteData)
+    }
+
+    /**
+     * tmdbKey on a pull: every copy other than the one last consumed goes to
+     * apply, which weighs it by edit time ([tmdbKeepsLocal]: keep and resend
+     * a newer local edit, or take the server's key with its stamp). Never
+     * skipped as not newer than a stamp seen before, and never held back by
+     * an unsent change's queue time.
+     */
+    fun tmdbPullApplies(
+        remoteAt: Long,
+        remoteDevice: String,
+        remoteData: JsonObject,
+        consumedAt: Long,
+        consumedDevice: String,
+        consumedData: JsonObject?,
+    ): Boolean = !tmdbSameAsConsumed(remoteAt, remoteDevice, remoteData, consumedAt, consumedDevice, consumedData)
+
+    /**
+     * tmdbKey, just before a PUT, when the server copy is not the one this
+     * device last consumed: true sends this device's key; false takes the
+     * server's (its edit is newer). Decided by edit time like a pull
+     * ([tmdbKeepsLocal]), never by the time the change was queued.
+     */
+    fun tmdbSendsLocal(local: String, remote: String, localEditedAt: Long, remoteAt: Long): Boolean =
+        local == remote || tmdbKeepsLocal(local, remote, localEditedAt, remoteAt)
+
     /** Change detection for the TMDB key: a SHA-256 digest (lowercase hex), never the key itself. */
     fun tmdbDigest(key: String): String =
         MessageDigest.getInstance("SHA-256").digest(key.trim().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
