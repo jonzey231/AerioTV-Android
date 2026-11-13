@@ -64,6 +64,16 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
                 auth?.let { request.headers["Authorization"] = it }
                 Log.i(TAG, "[AUTH] ${request.method.value} $path: sent with the re-issued key")
             }
+        // A deleted playlist's request (its key, or its host when no other
+        // playlist uses it) is never sent. An explicit sign-in check (the Add
+        // Playlist form's) still goes: the save that follows lifts it.
+        val revokedKey = requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
+        if (!bypassKeyGate) {
+            PlaylistRevocation.refusal(built.toString(), revokedKey)?.let { id ->
+                Log.i(TAG, "[AUTH] skipped ${request.method.value} $path: its playlist was deleted on this device")
+                throw PlaylistRevocation.Refused(id)
+            }
+        }
         if (!bypassKeyGate) {
             val key = requestApiKey(request.headers["X-API-Key"], request.headers["Authorization"])
             if (key != null && DispatcharrRequestGate.isKeyDeleted(key)) {
@@ -84,6 +94,13 @@ internal val DispatcharrGatePlugin = createClientPlugin("DispatcharrGate") {
             }
         }
         val call = proceed(request)
+        // An answer that arrives after its playlist was deleted is dropped.
+        if (!bypassKeyGate) {
+            PlaylistRevocation.refusal(built.toString(), revokedKey)?.let { id ->
+                Log.i(TAG, "[AUTH] dropped the answer to ${request.method.value} $path: its playlist was deleted meanwhile")
+                throw PlaylistRevocation.Refused(id)
+            }
+        }
         if (call.response.status.value == 429 && !isTokenEndpoint) {
             val retryAfterRaw = call.response.headers["Retry-After"]
             val secs = DispatcharrRequestGate.parseRetryAfter(retryAfterRaw)

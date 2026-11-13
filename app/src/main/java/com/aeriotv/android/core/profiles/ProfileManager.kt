@@ -2307,6 +2307,15 @@ class ProfileManager @Inject constructor(
     /** True when a profile here still signs in with [key]. */
     fun usesKey(key: String): Boolean = store.profiles.value.any { it.apiKey?.trim() == key.trim() }
 
+    /** [playlistId]'s profiles' API keys (in memory; a delete's synchronous cutoff reads them). */
+    fun profileKeys(playlistId: String): List<String> =
+        store.forPlaylist(playlistId).mapNotNull { it.apiKey?.trim()?.takeIf { k -> k.isNotEmpty() } }
+
+    /** Every other playlist's profiles' API keys: a delete leaves these usable. */
+    fun profileKeysOutside(playlistId: String): Set<String> =
+        store.profiles.value.filter { it.playlistId != playlistId }
+            .mapNotNullTo(HashSet()) { it.apiKey?.trim()?.takeIf { k -> k.isNotEmpty() } }
+
     /** Close any player route left open (the playlist it plays from was deleted). */
     fun requestClosePlayer() { closePlayer.trySend(Unit) }
 

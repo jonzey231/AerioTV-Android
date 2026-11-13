@@ -17,9 +17,22 @@ object HeldRouteGate {
     /** [url] is on an address the active profile is held at. */
     fun refuses(url: String): Boolean = com.aeriotv.android.core.profiles.ProfileScope.isSealedRoute(url)
 
-    /** OkHttp: throws [Refused] before a request to a held address goes out. */
+    /**
+     * OkHttp: throws [Refused] before a request to a held address goes out.
+     * A deleted playlist's request is refused too, and its answer dropped
+     * when it arrives after the delete ([PlaylistRevocation]).
+     */
     val interceptor = okhttp3.Interceptor { chain ->
-        if (refuses(chain.request().url.toString())) throw Refused()
-        chain.proceed(chain.request())
+        val request = chain.request()
+        val url = request.url.toString()
+        if (refuses(url)) throw Refused()
+        val key = requestApiKey(request.header("X-API-Key"), request.header("Authorization"))
+        PlaylistRevocation.check(url, key)
+        val response = chain.proceed(request)
+        PlaylistRevocation.refusal(url, key)?.let { id ->
+            response.close()
+            throw PlaylistRevocation.Refused(id)
+        }
+        response
     }
 }

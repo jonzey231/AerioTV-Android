@@ -240,6 +240,7 @@ object DispatcharrRequestGate {
 
     fun forgetDeleted(key: String?) {
         key?.trim()?.takeIf { it.isNotEmpty() }?.let { deleted -= keyHash(it) }
+        PlaylistRevocation.liftKey(key)
     }
 
     fun isKeyDeleted(key: String): Boolean = key.isNotBlank() && keyHash(key) in deleted

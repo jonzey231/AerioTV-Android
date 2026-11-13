@@ -117,6 +117,17 @@ object StreamGate {
         throw StreamRouteHeldException()
     }
 
+    /**
+     * A deleted playlist's stream (its key, Xtream Codes or M3U URL, or host)
+     * is never opened, and one whose answer arrives after the delete is
+     * dropped (PlaylistRevocation, playlist delete cutoff).
+     */
+    fun refuseDeleted(url: String, key: String?) {
+        val id = com.aeriotv.android.core.network.PlaylistRevocation.refusal(url, key) ?: return
+        log("[PLAYLIST] stream open refused: its playlist was deleted on this device")
+        throw com.aeriotv.android.core.network.PlaylistRevocation.Refused(id)
+    }
+
     /** Seconds left on [url]'s server pause, 0 when streams may open. */
     fun pausedSeconds(url: String): Long = DispatcharrRequestGate.pausedSeconds(DispatcharrRequestGate.serverKey(url))
 
@@ -164,6 +175,7 @@ object StreamGate {
         // (replaced by a re-sign-in, or held). A held key stops the open here,
         // before any request goes out: no keyless retry. StreamAuth.
         val builtKey = StreamAuth.keyOf { chain.request().header(it) }
+        refuseDeleted(url, builtKey)
         val rewrite = StreamAuth.rewriteFor(builtKey)
         if (rewrite == StreamAuth.Rewrite.Held) throw StreamKeyRejectedException()
         val request = withKey(chain.request(), rewrite)
@@ -175,6 +187,10 @@ object StreamGate {
                 resp.close()
                 throw e
             }
+        }
+        com.aeriotv.android.core.network.PlaylistRevocation.refusal(url, builtKey)?.let { id ->
+            resp.close()
+            throw com.aeriotv.android.core.network.PlaylistRevocation.Refused(id)
         }
         if (resp.code == 401) {
             val sentKey = StreamAuth.keyOf { request.header(it) }
@@ -255,6 +271,7 @@ object StreamGate {
             com.aeriotv.android.core.network.DispatcharrLaunchGate.awaitBlocking()
             val url = dataSpec.uri.toString()
             refuseHeldRoute(url)
+            refuseDeleted(url, builtKey ?: StreamAuth.keyOf(dataSpec.httpRequestHeaders))
             val spec = when (val rewrite = StreamAuth.rewriteFor(builtKey)) {
                 StreamAuth.Rewrite.Keep -> dataSpec
                 StreamAuth.Rewrite.Held -> throw StreamKeyRejectedException()
@@ -262,7 +279,13 @@ object StreamGate {
             }
             beforeOpen(url)
             return try {
-                upstream.open(spec)
+                upstream.open(spec).also {
+                    // Opened just as its playlist was deleted: dropped.
+                    com.aeriotv.android.core.network.PlaylistRevocation.refusal(url, builtKey)?.let { id ->
+                        runCatching { upstream.close() }
+                        throw com.aeriotv.android.core.network.PlaylistRevocation.Refused(id)
+                    }
+                }
             } catch (e: HttpDataSource.InvalidResponseCodeException) {
                 val retryAfter = e.headerFields.entries
                     .firstOrNull { it.key?.equals("Retry-After", ignoreCase = true) == true }
