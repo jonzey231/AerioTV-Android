@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -733,6 +734,19 @@ internal fun SteppedSliderRow(
     // custom dialog) to the nearest ladder stop for display; the pref
     // itself is only rewritten when the user moves the slider.
     val idx = values.indices.minByOrNull { abs(values[it] - selected) } ?: 0
+    if (rememberIsTvDevice()) {
+        // Apple TV draws every stepped row as one pill per stop
+        // (tvSteppedSegmentsRow), its footer under the card.
+        TvSegmentsRow(
+            label = label,
+            value = values[idx].toFloat(),
+            onValueChange = { v -> v.toInt().let { if (it != selected) onSelect(it) } },
+            modifier = Modifier.fillMaxWidth(),
+            segments = values.map { it.toFloat() to format(it) },
+        )
+        if (footer != null) SettingsSectionFooter(footer)
+        return
+    }
     SettingsSliderRow(
         label = label,
         valueText = format(values[idx]),
