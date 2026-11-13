@@ -46,6 +46,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.LocalMovies
+import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material.icons.filled.FiberSmartRecord
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Cast
@@ -2923,10 +2928,11 @@ private fun TvTopTabBar(
     androidx.compose.ui.layout.Layout(
         modifier = Modifier
             .fillMaxWidth()
-            // Apple TV: the 34 dp capsule's top at y 23 dp (tvOS 46 pt). The
-            // bar keeps its 70 dp overall height, so the content under it
-            // (laid out from the bar's measured height) does not move.
-            .padding(top = 23.dp, bottom = 13.dp)
+            // Apple TV: the 32.5 dp capsule's top at y 23.75 dp (measured on
+            // the Apple TV, atv4/p01). The bar keeps its 70 dp overall
+            // height, so the content under it (laid out from the bar's
+            // measured height) does not move.
+            .padding(top = 23.75.dp, bottom = 13.75.dp)
             // AFTER the padding, so these bounds are the drawn content's.
             .onGloballyPositioned { onDrawnBottomChanged(it.boundsInRoot().bottom) },
         content = {
@@ -2965,9 +2971,11 @@ private fun TvTopTabBar(
                     // (measured on Apple TV: rgb 23, 34, 50 on 10, 22, 40).
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.05f))
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
-                // Apple TV spaces its pills about 20 pt apart (halved).
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    // Apple TV, measured on atv4/p01 (4 px per dp): its
+                    // 25 dp pills sit 3.75 dp inside the capsule top and
+                    // bottom and 4 dp from its ends, about 2 dp apart.
+                    .padding(horizontal = 4.dp, vertical = 3.75.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 tabs.forEach { tab ->
@@ -3112,6 +3120,52 @@ private fun TvBarCircleButton(
     )
 }
 
+/**
+ * A TV tab's glyph: Apple TV's filled SF Symbol's closest filled Material
+ * twin, in a box sized so its drawn ink matches Apple's (measured on the
+ * Apple TV, atv4/p01, in dp): antenna.radiowaves.left.and.right 15.5 x 13.25,
+ * record.circle 14.5, film 14.75 x 16, tv.fill 18 x 14.25, gear 15 x 14.75.
+ * [inkMargin] is the empty space on each side of the ink inside the box.
+ */
+private class TvTabGlyph(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val box: androidx.compose.ui.unit.Dp,
+    val inkMargin: androidx.compose.ui.unit.Dp,
+)
+
+/**
+ * tv.fill: Material's own "tv" has an outlined screen in every style, so this
+ * is its outline with the screen filled and the stand set apart below it, as
+ * Apple's symbol draws them.
+ */
+private val TvFillGlyph: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    androidx.compose.ui.graphics.vector.ImageVector.Builder(
+        name = "TvFill",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).addPath(
+        pathData = androidx.compose.ui.graphics.vector.PathParser()
+            .parsePathString(
+                "M3,3h18c1.1,0 2,0.9 2,2v10c0,1.1 -0.9,2 -2,2H3c-1.1,0 -2,-0.9 -2,-2V5c0,-1.1 0.9,-2 2,-2z" +
+                    "M7.75,19h8.5c0.41,0 0.75,0.34 0.75,0.75s-0.34,0.75 -0.75,0.75h-8.5c-0.41,0 -0.75,-0.34 -0.75,-0.75s0.34,-0.75 0.75,-0.75z",
+            ).toNodes(),
+        fill = androidx.compose.ui.graphics.SolidColor(Color.Black),
+    ).build()
+}
+
+private fun tvTabGlyph(tab: AppTab): TvTabGlyph = when (tab) {
+    // CellTower: arcs either side of a mast, as antenna.radiowaves.
+    AppTab.LiveTV -> TvTabGlyph(Icons.Filled.CellTower, 18.dp, 1.6.dp)
+    AppTab.DVR -> TvTabGlyph(Icons.Filled.RadioButtonChecked, 17.5.dp, 1.45.dp)
+    // LocalMovies: the upright film strip, as SF film.
+    AppTab.Movies -> TvTabGlyph(Icons.Filled.LocalMovies, 21.5.dp, 3.5.dp)
+    AppTab.TVShows -> TvTabGlyph(TvFillGlyph, 19.6.dp, 0.8.dp)
+    AppTab.Settings -> TvTabGlyph(Icons.Filled.Settings, 19.dp, 2.dp)
+    else -> TvTabGlyph(tab.iconSelected, 18.dp, 1.5.dp)
+}
+
 @Composable
 private fun TvTab(
     tab: AppTab,
@@ -3120,6 +3174,7 @@ private fun TvTab(
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val glyph = tvTabGlyph(tab)
     // SELECTED owns the solid fill; FOCUS is the white ring (the app-wide
     // guide-pill convention). The old scheme gave focused-not-selected a
     // solid fill brighter than the selected tab, so re-entering the bar lit
@@ -3172,26 +3227,28 @@ private fun TvTab(
             .clip(CircleShape)
             .background(background)
             .focusable()
-            // Trimmed (13->10 h / 20->18 icon) to narrow the whole centered nav
-            // bar so its right edge clears the enlarged corner mini-player.
-            // Vertical 8 = the old 6 plus the 2dp ring the platter replaced.
-            // tvOS system tab bar pill, measured and halved: 44 pt tall,
-            // 24 pt sides, a 30 pt glyph 14 pt from an 18 pt-cap label.
-            .height(22.dp)
-            .padding(horizontal = 12.dp),
+            // Apple TV's pill, measured on atv4/p01: 25 dp tall, the glyph's
+            // ink 16.25 dp from the pill's left end and 6.25 dp from the
+            // label's, the label's ink 18 dp from the right end. Material
+            // glyphs fill their box differently from SF Symbols, so each
+            // tab's box is sized for Apple's drawn glyph and the padding
+            // keeps the ink where Apple's is.
+            .height(25.dp)
+            .padding(start = 16.25.dp - glyph.inkMargin, end = 17.5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.75.dp - glyph.inkMargin),
     ) {
         Icon(
-            imageVector = if (selected) tab.iconSelected else tab.iconUnselected,
+            imageVector = glyph.icon,
             contentDescription = null,
             tint = foreground,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.requiredSize(glyph.box),
         )
         Text(
             text = tab.label,
             color = foreground,
-            fontSize = 12.5.sp,
+            // Apple TV's label: cap height 9.25 dp (atv4/p01).
+            fontSize = 13.sp,
             // tvOS draws the label in a heavy weight with no extra tracking.
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.sp,
