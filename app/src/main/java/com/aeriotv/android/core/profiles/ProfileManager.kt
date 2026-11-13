@@ -2317,7 +2317,10 @@ class ProfileManager @Inject constructor(
                     // re-login with no key and parks this profile's slot.
                     val proof = client.probeApiKeyOnce(base, minted)
                     com.aeriotv.android.core.network.reloginOutcome(minted, proof).also {
-                        if (proof is com.aeriotv.android.core.network.DispatcharrClient.KeyProbe.Accepted) com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(it)
+                        if (proof is com.aeriotv.android.core.network.DispatcharrClient.KeyProbe.Accepted) {
+                            com.aeriotv.android.core.network.DispatcharrRequestGate.clearKey(it)
+                            DispatcharrLoginGate.noteKeyVerified("$playlistId:$profileId", it)
+                        }
                     }
                 } catch (e: DispatcharrError.InvalidCredentials) {
                     throw e

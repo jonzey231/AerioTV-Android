@@ -79,14 +79,15 @@ class DispatcharrAuthBroker @Inject constructor(
             return com.aeriotv.android.core.playback.StreamAuth.Outcome.NotKey
         }
         val hasPassword = !row.password.isNullOrBlank() && !row.username.isNullOrBlank()
-        val fresh = runCatching { silentRebootstrapApiKey(row) }
+        val fresh = runCatching { silentRebootstrapApiKey(row, refusedKey = key) }
             .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             .getOrNull()
             ?.trim()
         // The re-login's own key came back and is the one just refused: nobody
         // gets it again for the window, and it is held below (2026-11-12).
-        if (fresh != null && fresh == key) DispatcharrLoginGate.noteKeyRefused(loginSlot(row))
-        if (fresh != null && fresh != key && !DispatcharrRequestGate.isKeyRejected(fresh)) {
+        val verified = fresh != null && DispatcharrLoginGate.keyVerified(loginSlot(row), fresh)
+        if (fresh != null && fresh == key && !verified) DispatcharrLoginGate.noteKeyRefused(loginSlot(row))
+        if (fresh != null && (fresh != key || verified) && !DispatcharrRequestGate.isKeyRejected(fresh)) {
             Log.i(TAG, "[AUTH] stream 401 for ${row.id.take(8)}: re-signed in; the stream retries with the new key")
             return com.aeriotv.android.core.playback.StreamAuth.Outcome.Retry(fresh)
         }
@@ -168,11 +169,12 @@ class DispatcharrAuthBroker @Inject constructor(
                     currentKeyIfReplaced = { currentKeyIfReplaced(playlistId, initialKey) },
                     probe = { key -> client.probeApiKey(playlist.urlString, key) },
                     persistModeIfChanged = { mode -> persistAuthModeIfChanged(playlist, mode) },
-                    relogin = { silentRebootstrapApiKey(playlist) },
+                    relogin = { silentRebootstrapApiKey(playlist, refusedKey = initialKey) },
                     loginRejected = { DispatcharrLoginGate.isRejected(loginSlot(playlist)) },
                     accountHasNoKey = { DispatcharrLoginGate.accountHasNoKey(loginSlot(playlist)) },
                     keyRefused = { DispatcharrLoginGate.foundRefusedKey(loginSlot(playlist)) },
                     noteKeyRefused = { DispatcharrLoginGate.noteKeyRefused(loginSlot(playlist)) },
+                    keyVerified = { key -> DispatcharrLoginGate.keyVerified(loginSlot(playlist), key) },
                     hold = { key, passwordToo, noApiKey -> gateRejectedKey(playlist, key, passwordToo, noApiKey) },
                     invalidate = { invalidateRow(playlistId) },
                     log = { warn, line -> if (warn) Log.w(TAG, line) else Log.i(TAG, line) },
@@ -226,7 +228,11 @@ class DispatcharrAuthBroker @Inject constructor(
      * is a static method on DispatcharrAPI, not gated behind the retry
      * wrapper).
      */
-    suspend fun silentRebootstrapApiKey(playlist: PlaylistEntity): String? {
+    suspend fun silentRebootstrapApiKey(
+        playlist: PlaylistEntity,
+        /** The key the caller just had refused: a shared result with this same key is not handed back (DispatcharrLoginGate rule 8). */
+        refusedKey: String? = null,
+    ): String? {
         val username = playlist.username?.takeIf { it.isNotBlank() }
         val password = playlist.password?.takeIf { it.isNotBlank() }
         if (username == null || password == null) {
@@ -237,7 +243,7 @@ class DispatcharrAuthBroker @Inject constructor(
         // signing in as the same user; 429 and rejected logins park
         // (DispatcharrLoginGate). A non-default profile re-logs in only with
         // its own stored password, never the playlist's.
-        return DispatcharrLoginGate.silentRelogin(loginSlot(playlist)) {
+        return DispatcharrLoginGate.silentRelogin(loginSlot(playlist), refusedKey) {
             rebootstrapOnce(playlist, username, password)
         }
     }
@@ -270,7 +276,11 @@ class DispatcharrAuthBroker @Inject constructor(
             // key, the caller holds the old key). No answer is not a refusal.
             val proof = client.probeApiKeyOnce(row.urlString, minted)
             val newKey = reloginOutcome(minted, proof)
-            if (proof is DispatcharrClient.KeyProbe.Accepted) DispatcharrRequestGate.clearKey(newKey)
+            if (proof is DispatcharrClient.KeyProbe.Accepted) {
+                DispatcharrRequestGate.clearKey(newKey)
+                // It passed its check: if it is refused later, the server rotated it (a fresh re-login, not a park).
+                DispatcharrLoginGate.noteKeyVerified(loginSlot(row), newKey)
+            }
             tokenStore.store(row.id, pair.access, pair.refresh)
             // The startup login runs this too (one login per launch): an
             // unchanged key writes nothing, so a launch never looks like a
@@ -378,6 +388,8 @@ internal class KeyRecoveryOps<T>(
     val keyRefused: () -> Boolean,
     /** A handed-out key came back refused: park the identity, nobody gets it again for the window. */
     val noteKeyRefused: () -> Unit,
+    /** [key] is the identity's last re-login result and passed its check when issued. */
+    val keyVerified: (String) -> Boolean = { false },
     /** Hold [key] for this playlist and identity ([DispatcharrRequestGate.markKeyRejected]). */
     val hold: (key: String, passwordToo: Boolean, noApiKey: Boolean) -> Unit,
     val invalidate: () -> Unit,
@@ -433,9 +445,11 @@ internal suspend fun <T> recoverFromUnauthorized(
     val keyRejected = probe is DispatcharrClient.KeyProbe.Rejected
     ops.log(false, "401 on apiKey call for $tag (key probe: ${probe::class.simpleName}); attempting silent rebootstrap")
     var freshKey = ops.relogin()?.trim()?.takeIf { it.isNotEmpty() }
-    if (freshKey != null && keyRejected && freshKey == initialKey.trim()) {
-        // The re-login's own key came back (shared within the minute) and is
-        // the one just refused: nobody gets it again for the window; held below.
+    if (freshKey != null && keyRejected && freshKey == initialKey.trim() && !ops.keyVerified(freshKey)) {
+        // The re-login's key came back and is the one just refused, and it
+        // never passed a check: nobody gets it again for the window; held
+        // below. (A key that passed its check and was rotated since gets a
+        // fresh re-login inside the gate instead: DispatcharrLoginGate rule 8.)
         ops.noteKeyRefused()
         freshKey = null
     }

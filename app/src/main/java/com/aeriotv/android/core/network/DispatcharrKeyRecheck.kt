@@ -113,7 +113,7 @@ class DispatcharrKeyRecheck @Inject constructor(
             // key, so the key itself is probed instead (2026-11-12, security).
             val row = if (r.passwordToo) dao.byId(r.playlistId) else null
             if (row != null && row.apiKey?.trim() == r.key.trim()) {
-                val fresh = broker.silentRebootstrapApiKey(row)?.trim()?.takeIf { it.isNotEmpty() }
+                val fresh = broker.silentRebootstrapApiKey(row, refusedKey = r.key)?.trim()?.takeIf { it.isNotEmpty() }
                 // The re-login's key was checked before it came back (one
                 // request); a key the server refused comes back as none and
                 // the hold stays. The held key itself coming back proves

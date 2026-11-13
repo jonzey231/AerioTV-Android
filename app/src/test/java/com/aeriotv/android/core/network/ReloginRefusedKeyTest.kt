@@ -1,5 +1,6 @@
 package com.aeriotv.android.core.network
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -82,7 +83,7 @@ class ReloginRefusedKeyTest {
     }
 
     /** The silent re-login as rebootstrapOnce runs it: login, read the key, ONE check, then store. */
-    private suspend fun relogin(): String? = DispatcharrLoginGate.silentRelogin("P1") {
+    private suspend fun relogin(refusedKey: String? = null): String? = DispatcharrLoginGate.silentRelogin("P1", refusedKey) {
         logins++
         val key = minted
         checks++
@@ -92,7 +93,10 @@ class ReloginRefusedKeyTest {
         } else {
             DispatcharrClient.KeyProbe.Accepted(AUTH_MODE_BOTH)
         }
-        reloginOutcome(key, proof).also { if (it != stored) stored = it }
+        reloginOutcome(key, proof).also {
+            if (proof is DispatcharrClient.KeyProbe.Accepted) DispatcharrLoginGate.noteKeyVerified("P1", it)
+            if (it != stored) stored = it
+        }
     }
 
     private val ops = KeyRecoveryOps(
@@ -100,11 +104,12 @@ class ReloginRefusedKeyTest {
         currentKeyIfReplaced = { currentKeyAfterSwap(used, stored, DispatcharrRequestGate::isKeyRejected) },
         probe = { key -> probe(key) },
         persistModeIfChanged = { null },
-        relogin = { relogin() },
+        relogin = { relogin(refusedKey = used) },
         loginRejected = { DispatcharrLoginGate.isRejected("P1") },
         accountHasNoKey = { DispatcharrLoginGate.accountHasNoKey("P1") },
         keyRefused = { DispatcharrLoginGate.foundRefusedKey("P1") },
         noteKeyRefused = { DispatcharrLoginGate.noteKeyRefused("P1") },
+        keyVerified = { key -> DispatcharrLoginGate.keyVerified("P1", key) },
         hold = { key, passwordToo, noApiKey -> DispatcharrRequestGate.markKeyRejected("P1", key, "Home", passwordToo, noApiKey = noApiKey) },
         invalidate = {},
         log = { _, _ -> },
@@ -163,20 +168,63 @@ class ReloginRefusedKeyTest {
         assertEquals(2, logins)
     }
 
-    @Test fun aSharedKeyRefusedLaterIsNeverHandedOutAgain() = runBlocking {
+    @Test fun aSharedKeyRefusedLaterGetsOneFreshReloginThenParks() = runBlocking {
         // The re-login's key passed its check and is shared inside the minute.
         assertEquals("minted-key", relogin())
         assertEquals("minted-key", DispatcharrLoginGate.silentRelogin("P1") { "never" })
-        // Then the server refuses it: a caller's 401 with it marks the slot.
+        // Then the server refuses it (rotated): one fresh re-login, whose key
+        // (the same one, still refused) fails its check and parks the slot.
         refusedKeys += "minted-key"
         assertTrue(after401("minted-key").exceptionOrNull() is DispatcharrError.KeyRejected)
+        assertEquals(2, logins)
         assertTrue(DispatcharrLoginGate.foundRefusedKey("P1"))
         assertNull(DispatcharrLoginGate.silentRelogin("P1") { "never" })
         assertTrue("held: nothing sends it", DispatcharrRequestGate.isKeyRejected("minted-key"))
-        assertEquals(1, logins)
         // The user's own sign-in clears it.
         DispatcharrLoginGate.reset("P1")
         assertFalse(DispatcharrLoginGate.foundRefusedKey("P1"))
+    }
+
+    @Test fun aKeyThatWorkedThenRotatedGetsAFreshReloginNotAHold() = runBlocking {
+        // Measured on the Streamer: K1 refused, the re-login mints K2, which passes its check.
+        stored = "K1"; refusedKeys += "K1"; minted = "K2"
+        assertEquals("channels", call().getOrThrow())
+        assertEquals("K2", stored)
+        // 49 s later the server rotates K2: a 401 on K2, and the account now reports K3.
+        now += 49_000
+        refusedKeys += "K2"; minted = "K3"
+        assertEquals("channels", call().getOrThrow())
+        // A fresh re-login minted K3 (checked once): no prompt, no hold.
+        assertEquals(2, logins)
+        assertEquals("K3", stored)
+        assertFalse(DispatcharrRequestGate.isKeyRejected("K2"))
+        assertFalse(DispatcharrRequestGate.isKeyRejected("K3"))
+        assertNull(DispatcharrRequestGate.prompt.value)
+        assertFalse(DispatcharrLoginGate.foundRefusedKey("P1"))
+    }
+
+    @Test fun rotationsWhileAReloginIsInFlightShareIt() = runBlocking {
+        // The first 401 on K2 starts a re-login; two more 401s on K2 arrive while it runs.
+        val release = CompletableDeferred<Unit>()
+        var attempts = 0
+        val first = async { DispatcharrLoginGate.silentRelogin("P1", refusedKey = "K2") { attempts++; release.await(); "K3" } }
+        yield()
+        val others = List(2) { async { DispatcharrLoginGate.silentRelogin("P1", refusedKey = "K2") { attempts++; "K4" } } }
+        yield()
+        release.complete(Unit)
+        assertEquals("K3", first.await())
+        // They share the one re-login's key (different from the one they had refused).
+        assertEquals(listOf("K3", "K3"), others.map { it.await() })
+        assertEquals(1, attempts)
+    }
+
+    @Test fun theShareRule() {
+        // A different key, or no refused key: share.
+        assertEquals(DispatcharrLoginGate.Share.Share, DispatcharrLoginGate.shareRule("K3", lastKeyVerified = true, refusedKey = "K2"))
+        assertEquals(DispatcharrLoginGate.Share.Share, DispatcharrLoginGate.shareRule("K3", lastKeyVerified = false, refusedKey = null))
+        // The refused key itself: it passed its check, so it was rotated since (fresh); it never succeeded (park).
+        assertEquals(DispatcharrLoginGate.Share.Fresh, DispatcharrLoginGate.shareRule("K2", lastKeyVerified = true, refusedKey = "K2"))
+        assertEquals(DispatcharrLoginGate.Share.Park, DispatcharrLoginGate.shareRule("K2", lastKeyVerified = false, refusedKey = "K2"))
     }
 
     @Test fun aBurstOfFifteen401sSendsTwoRefusedRequestsInTotal() = runBlocking {
