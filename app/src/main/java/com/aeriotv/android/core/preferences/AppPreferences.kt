@@ -194,10 +194,18 @@ class AppPreferences @Inject constructor(
         moved
     }
 
+    /**
+     * Off the main thread: a setting saved from the UI ran this on main after
+     * every write (it reads every synced setting and the last-seen map), 2 to
+     * 4 ms a write on the phone emulator (15 ms the first time). The writer
+     * still waits for it, so the change time is stamped before it returns.
+     */
     private suspend fun noteLocalChange() {
-        runCatching {
-            val changed = com.aeriotv.android.core.sync.SyncStamps.notePrefValues(syncedFlat())
-            if (changed.isNotEmpty()) android.util.Log.i("AppPreferences", "[SYNC] setting changed here: ${changed.joinToString(",")} (change time stamped)")
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val changed = com.aeriotv.android.core.sync.SyncStamps.notePrefValues(syncedFlat())
+                if (changed.isNotEmpty()) android.util.Log.i("AppPreferences", "[SYNC] setting changed here: ${changed.joinToString(",")} (change time stamped)")
+            }
         }
     }
 
