@@ -8,8 +8,11 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * One row per local recording file. Populated by [LocalRecordingService] on
- * stream completion (or cancellation). Mirrors iOS Recording (Models.swift:680)
+ * One row per local recording file. Written by [LocalRecordingService] when a
+ * capture starts (status "recording") and finished when it ends; a row left
+ * recording by a process death is finished at the next launch
+ * (InterruptedCapture). Save to Device copies are written when they complete.
+ * Mirrors iOS Recording (Models.swift:680)
  * but only the local-destination fields, server-side recordings stay on
  * Dispatcharr and are queried fresh via the API.
  *
@@ -41,7 +44,9 @@ data class LocalRecordingEntity(
     val startedAt: Long,
     val endedAt: Long,
     val byteSize: Long,
-    val status: String, // "completed" | "stopped" | "failed"
+    // "recording" (written when a capture starts) | "completed" | "stopped" |
+    // "interrupted" (no capture was left behind it; InterruptedCapture) | "failed"
+    val status: String,
     val playlistId: String? = null,
     /** Profiles (DB v37): "" = default profile (every pre-v37 row). */
     @ColumnInfo(defaultValue = "")

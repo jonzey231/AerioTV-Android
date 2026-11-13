@@ -18,6 +18,46 @@ object LocalRecordingFiles {
         else -> Kind.Path
     }
 
+    /** A recording file's size and last write; [bytes] null when the file is not there. */
+    data class Probe(val bytes: Long?, val lastWriteAt: Long?)
+
+    /**
+     * Size and last write of a recording's file, whichever kind its path is.
+     * A content:// file is measured through its descriptor, which also works
+     * for a MediaStore item still pending after the app was killed mid-write.
+     */
+    fun probe(context: Context, path: String): Probe = runCatching {
+        when (kind(path)) {
+            Kind.ContentUri -> context.contentResolver
+                .openFileDescriptor(android.net.Uri.parse(path), "r")
+                ?.use { pfd ->
+                    val st = android.system.Os.fstat(pfd.fileDescriptor)
+                    Probe(st.st_size, st.st_mtime * 1000L)
+                } ?: Probe(null, null)
+            Kind.FileUri, Kind.Path -> {
+                val file = java.io.File(if (kind(path) == Kind.FileUri) android.net.Uri.parse(path).path.orEmpty() else path)
+                if (file.exists()) Probe(file.length(), file.lastModified().takeIf { it > 0L }) else Probe(null, null)
+            }
+        }
+    }.getOrElse { Probe(null, null) }
+
+    /**
+     * Make a MediaStore recording visible in Downloads (clear IS_PENDING), as
+     * a normal finish does; a capture cut short by a process death was left
+     * pending, and pending items are hidden and eventually reaped. A no-op
+     * for SAF documents and plain files.
+     */
+    fun publish(context: Context, path: String) {
+        if (kind(path) != Kind.ContentUri) return
+        val uri = android.net.Uri.parse(path)
+        if (uri.authority != android.provider.MediaStore.AUTHORITY) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        runCatching {
+            val done = android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0) }
+            context.contentResolver.update(uri, done, null, null)
+        }
+    }
+
     /**
      * Delete a recording's bytes, whichever kind its path is ([kind]): a
      * SAF document through DocumentsContract, a MediaStore item through the

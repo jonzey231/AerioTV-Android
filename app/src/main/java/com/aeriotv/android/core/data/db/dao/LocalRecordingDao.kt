@@ -23,6 +23,18 @@ interface LocalRecordingDao {
     @Query("DELETE FROM local_recording WHERE id = :id")
     suspend fun delete(id: Long)
 
+    /** A row by id, any profile; null when it is gone. */
+    @Query("SELECT * FROM local_recording WHERE id = :id")
+    suspend fun byId(id: Long): LocalRecordingEntity?
+
+    /** Rewrite an existing row; 0 when it was removed meanwhile (never re-creates it). */
+    @androidx.room.Update
+    suspend fun update(entity: LocalRecordingEntity): Int
+
+    /** Rows still marked recording, any profile (InterruptedCapture). */
+    @Query("SELECT * FROM local_recording WHERE status = 'recording'")
+    suspend fun recordingRows(): List<LocalRecordingEntity>
+
     @Query("SELECT * FROM local_recording WHERE profileScope = :scope")
     suspend fun allOnceIn(scope: String): List<LocalRecordingEntity>
 

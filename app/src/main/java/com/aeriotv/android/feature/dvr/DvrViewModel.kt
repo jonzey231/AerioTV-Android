@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
@@ -519,7 +520,15 @@ class DvrViewModel @Inject constructor(
                 }
         }
         viewModelScope.launch {
-            localRecordingDao.observeAll().collect { rows ->
+            // The running capture's own row (written at start, marked
+            // recording) is listed by the synthetic in-progress row above;
+            // a row left recording by an earlier process is listed as is
+            // until the launch sweep finishes it (InterruptedCapture).
+            localRecordingDao.observeAll().combine(LocalRecordingService.activeRecording) { rows, active ->
+                rows.filterNot { r ->
+                    active != null && r.status == InterruptedCapture.RECORDING && r.startedAt >= active.startedAt
+                }
+            }.collect { rows ->
                 val mapped = rows.map { it.toRecording() }
                 _state.update { st ->
                     // Keep the synthetic in-progress row: it is not in Room
@@ -1065,14 +1074,31 @@ class DvrViewModel @Inject constructor(
     }
 
     /**
+     * Stop an on-device recording: the running capture stops (its row is
+     * finished with what it captured). A row still marked recording with no
+     * capture behind it (the app was killed mid-capture) is finished now,
+     * interrupted, keeping its file (Apple parity: Stop used to do nothing).
+     */
+    private suspend fun stopLocalRecording(recording: Recording): Result<Unit> = runCatching {
+        val rowId = recording.id.removePrefix("local-").toLongOrNull()
+        when {
+            recording.id == LOCAL_IN_PROGRESS_ID || (rowId != null && LocalRecordingService.isCapturingRow(rowId)) ->
+                LocalRecordingService.stop(appContext)
+            rowId != null -> {
+                Log.i(TAG, "[DVR] Stop: no capture running for on-device recording $rowId")
+                LocalRecordingRecovery.finish(appContext, localRecordingDao, rowId, "stop")
+            }
+            else -> throw IllegalStateException("Invalid local recording id: ${recording.id}")
+        }
+    }
+
+    /**
      * Stop an in-progress server recording early. The partial file stays on
      * disk, caller pairs with deleteRecording when the partial isn't wanted.
      * Mirrors iOS contextMenu "Stop Recording" (MyRecordingsView line 332-336).
      */
     suspend fun stopRecording(recording: Recording): Result<Unit> {
-        if (recording.source != Source.Server) {
-            return Result.failure(IllegalStateException("Stop Recording is server-only."))
-        }
+        if (recording.source == Source.Local) return stopLocalRecording(recording)
         val playlist = playlistRepository.activePlaylist()
             ?: return Result.failure(IllegalStateException("No playlist loaded."))
         if (playlist.apiKey.isNullOrBlank()) {
@@ -1472,9 +1498,12 @@ private fun resolveArtUrl(url: String, baseUrl: String): String {
 
 private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
     val status = when (this.status.lowercase()) {
-        "completed" -> DvrViewModel.Recording.Status.Completed
+        // A capture cut short keeps what it captured and plays, like a
+        // server recording Dispatcharr marks interrupted.
+        "completed", InterruptedCapture.INTERRUPTED -> DvrViewModel.Recording.Status.Completed
         "stopped" -> DvrViewModel.Recording.Status.Stopped
         "failed", "error" -> DvrViewModel.Recording.Status.Failed
+        InterruptedCapture.RECORDING -> DvrViewModel.Recording.Status.Recording
         else -> DvrViewModel.Recording.Status.Unknown
     }
     // file:// URI for libmpv. Path may contain spaces / unicode (the recording
@@ -1502,6 +1531,7 @@ private fun LocalRecordingEntity.toRecording(): DvrViewModel.Recording {
         fileSizeBytes = byteSize,
         playbackUrl = playable,
         savedOnDevice = playlistId == null,
+        partial = this.status.lowercase() == InterruptedCapture.INTERRUPTED,
     )
 }
 

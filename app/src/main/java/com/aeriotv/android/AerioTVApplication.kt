@@ -147,6 +147,7 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
     }
 
     override fun onCreate() {
+        val launchedAt = System.currentTimeMillis()
         // Launch order: the Drive credentials pull before the first Dispatcharr request.
         com.aeriotv.android.core.network.DispatcharrLaunchGate.arm()
         super.onCreate()
@@ -162,6 +163,19 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
         // Drive backup update: finish categories that waited for the VOD catalog.
         driveSync.startIdUpdateRetry()
         appScope.launch { driveSync.launchCredentialsPull() }
+        // No capture survives a relaunch: an on-device recording row still
+        // marked recording from an earlier process is finished now,
+        // interrupted, keeping what its file captured (InterruptedCapture).
+        // Only rows that started before this process did, so a capture this
+        // process starts meanwhile is never touched.
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P || getProcessName() == packageName) {
+            appScope.launch {
+                val n = com.aeriotv.android.feature.dvr.LocalRecordingRecovery.sweep(
+                    this@AerioTVApplication, aerioDatabase.localRecordingDao(), "launch", launchedAt,
+                )
+                if (n > 0) android.util.Log.i("LocalRecordingService", "[DVR] launch: $n on-device recording(s) had no capture running")
+            }
+        }
         // Crash capture FIRST, and independent of the Debug Logging toggle: a
         // user whose app dies seconds after launch cannot turn logging on in
         // time, so the report has to be collected without being asked for.

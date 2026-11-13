@@ -217,6 +217,25 @@ class LocalRecordingService : Service() {
             val startedAt = System.currentTimeMillis()
             val deadline = startedAt + durationMs
             Log.i(TAG, "Recording -> ${sink.displayPath} until ${Date(deadline)}")
+            // The row is written NOW, marked recording (Apple parity): a
+            // process death mid-capture used to lose the recording, because
+            // the row only existed once the file finalized. A row left
+            // recording is finished at the next launch (InterruptedCapture),
+            // keeping what the file captured.
+            val startRow = LocalRecordingEntity(
+                channelName = channelName.ifBlank { title },
+                title = title,
+                filePath = sink.displayPath,
+                startedAt = startedAt,
+                endedAt = deadline,
+                byteSize = 0L,
+                status = InterruptedCapture.RECORDING,
+                playlistId = recPlaylistId,
+            )
+            val rowId = runCatching { localRecordingDao.insert(startRow) }
+                .onFailure { Log.w(TAG, "Couldn't write the recording's row at start", it) }
+                .getOrNull()
+            capturingRowId = rowId
             var status = "failed"
             var bytesWritten = 0L
             runCatching {
@@ -266,25 +285,39 @@ class LocalRecordingService : Service() {
             val deleted = deletedOutcome(recPlaylistId)
             if (bytesWritten > 0L && deleted != false) sink.finalize() else sink.discard()
             val finalBytes = sink.resolveBytes() ?: bytesWritten
-            if (finalBytes > 0L && deleted != false) {
-                // Not cancellable: a stop (the user's, or a playlist delete)
-                // cancels this job, and the row of what it captured must
-                // still be written.
-                runCatching {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { localRecordingDao.insert(
-                        LocalRecordingEntity(
-                            channelName = channelName.ifBlank { title },
-                            title = title,
-                            filePath = sink.displayPath,
-                            startedAt = startedAt,
-                            endedAt = System.currentTimeMillis(),
-                            byteSize = finalBytes,
-                            status = status,
-                            playlistId = if (deleted == true) null else recPlaylistId,
-                        ).let { if (deleted == true) it.copy(profileScope = "") else it },
-                    ) }
-                }.onFailure { Log.w(TAG, "Couldn't persist local recording row", it) }
-            }
+            // Not cancellable: a stop (the user's, or a playlist delete)
+            // cancels this job, and the row of what it captured must still be
+            // finished.
+            runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    // The row as it stands now: a playlist delete that kept
+                    // its recordings, or a playlist merge, may have moved it
+                    // while it recorded.
+                    val current = rowId?.let { localRecordingDao.byId(it) }
+                    if (finalBytes > 0L && deleted != false) {
+                        if (rowId != null && current == null) {
+                            // Its row was removed while it recorded (its profile
+                            // was removed with its recordings): the capture goes
+                            // with it.
+                            sink.discard()
+                            Log.i(TAG, "Recording $rowId: its row was removed while recording; capture discarded")
+                        } else {
+                            val base = current ?: startRow
+                            val finished = base.copy(
+                                endedAt = System.currentTimeMillis(),
+                                byteSize = finalBytes,
+                                status = status,
+                            ).let { if (deleted == true) it.copy(playlistId = null, profileScope = "") else it }
+                            if (rowId == null) localRecordingDao.insert(finished) else localRecordingDao.update(finished)
+                        }
+                    } else if (rowId != null) {
+                        // Nothing kept (an empty capture, or its playlist was
+                        // deleted with its recordings): no row, as before.
+                        localRecordingDao.delete(rowId)
+                    }
+                }
+            }.onFailure { Log.w(TAG, "Couldn't persist local recording row", it) }
+            capturingRowId = null
             releaseWakeLock()
             stopSelf()
         }
@@ -698,6 +731,12 @@ class LocalRecordingService : Service() {
             /** The playlist it records from, read when it starts (a delete stops it). */
             val playlistId: String? = null,
         )
+
+        /** The row of the capture running now ([InterruptedCapture] never finishes it). */
+        @Volatile private var capturingRowId: Long? = null
+
+        /** True while the running capture is the one behind [rowId]. */
+        fun isCapturingRow(rowId: Long): Boolean = isActive && capturingRowId == rowId
 
         /** A recording (not a download) from [playlistId] is running now. */
         fun isRecordingFor(playlistId: String): Boolean = _active.value?.playlistId == playlistId
