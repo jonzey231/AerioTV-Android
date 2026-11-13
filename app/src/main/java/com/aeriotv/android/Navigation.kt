@@ -357,10 +357,17 @@ fun AerioTVNavHost(
     if (dlGraphEntry != null) {
         val dlVm: PlaylistViewModel = hiltViewModel(dlGraphEntry)
         val dlState by dlVm.state.collectAsStateWithLifecycle()
-        LaunchedEffect(deepLinkTarget, dlState.channels.size, dlCurrentEntry?.destination?.route) {
+        // A cold-start channel link waits for the launch to leave its start
+        // screen (BOOTSTRAP's ChannelsReady step navigates to MAIN, popping a
+        // player opened under it) and for any launch PIN, picker, or profile
+        // switch; then it follows the warm-start rules below.
+        val dlChannelLinkHeld = dlCurrentEntry?.destination?.route == Routes.BOOTSTRAP ||
+            dlLaunchGate != null || dlLaunchPicker != null || dlSwitching
+        LaunchedEffect(deepLinkTarget, dlState.channels.size, dlCurrentEntry?.destination?.route, dlChannelLinkHeld) {
             val target = deepLinkTarget ?: return@LaunchedEffect
             when (target) {
                 is DeepLinkTarget.Channel -> {
+                    if (dlChannelLinkHeld) return@LaunchedEffect
                     // aeriotv://channel/<id> in any documented form (README,
                     // Deep links): resolved to the active playlist's channel.
                     val resolved = ChannelDeepLink.resolve(target.channelId, dlState.channels)
@@ -607,7 +614,9 @@ fun AerioTVNavHost(
                                 .appPreferences()
                             val resume = prefs.autoResumeLastChannelOnce()
                             val resumeId = if (resume) prefs.lastWatchedChannelIdOnce() else ""
-                            val hasResumeTarget = resumeId.isNotBlank() &&
+                            // A channel link opened the app: it plays instead.
+                            val hasResumeTarget = deepLinkTarget !is DeepLinkTarget.Channel &&
+                                resumeId.isNotBlank() &&
                                 state.channels.any { it.id == resumeId && it.url.isNotBlank() }
                             if (hasResumeTarget) {
                                 navController.navigate(Routes.MAIN) {
