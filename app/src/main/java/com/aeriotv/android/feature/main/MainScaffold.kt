@@ -1164,13 +1164,13 @@ fun MainScaffold(
             var barHeightPx by remember { mutableIntStateOf(0) }
             var barDrawnBottomPx by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
             val chromeDensity = LocalDensity.current
-            // 62dp is the bar's designed height (16 top + 34 capsule + 12
+            // 70dp is the bar's designed height (23 top + 34 capsule + 13
             // bottom); it only ever seeds the very first frame, after which
             // the measured height governs.
             val barInset = if (barHeightPx > 0) {
                 with(chromeDensity) { barHeightPx.toDp() }
             } else {
-                62.dp
+                70.dp
             }
             // The corner mini player is mounted at the ACTIVITY root, outside
             // this composition, so it cannot read a CompositionLocal from
@@ -2914,10 +2914,19 @@ private fun TvTopTabBar(
     // 2026-08-06). Out here the capsule's focus contract is exactly the
     // pre-circle one, and each circle is a plain focusable CLICK target
     // that D-pad Left reaches geometrically.
+    // Apple TV's tab bar keeps its size at every Text Size, so the bar's
+    // text is laid out at a fixed scale: its labels never grow with the app
+    // or system font scale.
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalDensity provides androidx.compose.ui.unit.Density(LocalDensity.current.density, 1f),
+    ) {
     androidx.compose.ui.layout.Layout(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 16.dp, bottom = 12.dp)
+            // Apple TV: the 34 dp capsule's top at y 23 dp (tvOS 46 pt). The
+            // bar keeps its 70 dp overall height, so the content under it
+            // (laid out from the bar's measured height) does not move.
+            .padding(top = 23.dp, bottom = 13.dp)
             // AFTER the padding, so these bounds are the drawn content's.
             .onGloballyPositioned { onDrawnBottomChanged(it.boundsInRoot().bottom) },
         content = {
@@ -2952,14 +2961,13 @@ private fun TvTopTabBar(
                     // is the reliable "is the user in the bar" signal for [armed].
                     .onFocusChanged { navHasFocus = it.hasFocus }
                     // tvOS system tab bar, halved: a 68 pt capsule holding
-                    // 44 pt pills (Logan 2026-09-10, Streamer vs Apple TV).
+                    // 44 pt pills, its fill a faint lift off the page
+                    // (measured on Apple TV: rgb 23, 34, 50 on 10, 22, 40).
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                    .background(Color.White.copy(alpha = 0.05f))
                     .padding(horizontal = 6.dp, vertical = 6.dp),
-                // 6dp still leaves headroom for the focused pill's 1.04x paint-only
-                // grow (graphicsLayer does not relayout); at 3dp the widest pill
-                // visually collided. Trimmed from 8dp to narrow the bar.
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                // Apple TV spaces its pills about 20 pt apart (halved).
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 tabs.forEach { tab ->
@@ -3047,14 +3055,24 @@ private fun TvTopTabBar(
         layout(width, height) {
             val capsuleX = (width - capsule.width) / 2
             capsule.placeRelative(capsuleX, (height - capsule.height) / 2)
-            avatar.placeRelative(capsuleX + capsule.width + 10.dp.roundToPx(), (height - avatar.height) / 2)
-            val circlesX = capsuleX - 10.dp.roundToPx() - (circles?.width ?: 0)
+            // Apple TV places the profile circle and the action circles from
+            // the bar's ESTIMATED width, 230 pt per visible tab centered on
+            // the screen, 16 pt beyond it (HomeView: barTrailing + 16 and
+            // barLeading - 16), not from the drawn capsule; on the Apple TV
+            // with five tabs the profile circle's left edge is at x 1550 pt
+            // (775 dp). Same here, never closer to the capsule than 8 dp.
+            val estHalf = (tabs.size * 115).dp.roundToPx() / 2
+            val gap = 8.dp.roundToPx()
+            val avatarX = maxOf(width / 2 + estHalf + gap, capsuleX + capsule.width + gap)
+            avatar.placeRelative(avatarX, (height - avatar.height) / 2)
+            val circlesX = minOf(width / 2 - estHalf - gap, capsuleX - gap) - (circles?.width ?: 0)
             circles?.placeRelative(circlesX, (height - circles.height) / 2)
             // Publish the real left edge for the hint chips. Writing snapshot
             // state here is safe: it feeds a SIBLING overlay, never this bar,
             // so it cannot drive a layout loop, and an equal write is a no-op.
             onLeftEdgeChanged(if (circles != null) circlesX else capsuleX)
         }
+    }
     }
 }
 
@@ -3121,10 +3139,14 @@ private fun TvTab(
         durationMillis = 150,
         easing = androidx.compose.animation.core.EaseInOut,
     )
+    // Apple TV's tab bar, measured: the focused pill is a light grey
+    // platter (rgb 232, 233, 235) with dark ink (41, 41, 41); the selected
+    // pill, while focus is in the page, is a translucent grey (white at about
+    // 16%) with white ink; every other tab is white ink on the capsule.
     val background by animateColorAsState(
         targetValue = when {
-            focused -> Color.White
-            selected -> MaterialTheme.colorScheme.primary
+            focused -> Color(0xFFE8E9EB)
+            selected -> Color.White.copy(alpha = 0.16f)
             else -> Color.Transparent
         },
         animationSpec = pillTween,
@@ -3132,9 +3154,8 @@ private fun TvTab(
     )
     val foreground by animateColorAsState(
         targetValue = when {
-            focused -> Color.Black
-            selected -> MaterialTheme.colorScheme.onPrimary
-            else -> MaterialTheme.colorScheme.onSurfaceVariant
+            focused -> Color(0xFF292929)
+            else -> Color.White
         },
         animationSpec = pillTween,
         label = "tvTabForeground",
@@ -3154,23 +3175,26 @@ private fun TvTab(
             // Trimmed (13->10 h / 20->18 icon) to narrow the whole centered nav
             // bar so its right edge clears the enlarged corner mini-player.
             // Vertical 8 = the old 6 plus the 2dp ring the platter replaced.
-            // tvOS system tab bar pill: 44 pt tall, ~20 pt sides, 26 pt
-            // glyph, 28 pt semibold label, halved.
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            // tvOS system tab bar pill, measured and halved: 44 pt tall,
+            // 24 pt sides, a 30 pt glyph 14 pt from an 18 pt-cap label.
+            .height(22.dp)
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Icon(
             imageVector = if (selected) tab.iconSelected else tab.iconUnselected,
             contentDescription = null,
             tint = foreground,
-            modifier = Modifier.size(14.dp),
+            modifier = Modifier.size(18.dp),
         )
         Text(
             text = tab.label,
             color = foreground,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.5.sp,
+            // tvOS draws the label in a heavy weight with no extra tracking.
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.sp,
             maxLines = 1,
         )
     }
