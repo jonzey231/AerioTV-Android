@@ -2187,6 +2187,66 @@ class PlaylistRepository @Inject constructor(
      *  rather than downloading the same feeds twice in parallel. */
     private val layeringJobs = ConcurrentHashMap<String, Job>()
 
+    /** What [layeringJobs] holds per playlist (walk or layering) and how to start it again. */
+    private val layeringRestart = ConcurrentHashMap<String, Pair<String, () -> Unit>>()
+
+    /**
+     * Long-running guide jobs across a server address change (Apple cdfab66;
+     * Nothing Phone 2026-11-13: the re-sweep kept paging the OLD address after
+     * Edit Playlist moved the playlist, carrying the NEW server's key). Each
+     * request checks [routeGuard] right before it goes out; the jobs stop when
+     * a change starts, wait while it runs, and start again once it lands.
+     */
+    private val routeGuard = RouteGuard(
+        isChanging = { id -> runCatching { profileManager.get().isRouteChanging(id) }.getOrDefault(false) },
+        addresses = { id -> dao.byId(id)?.let { it.urlString to it.lanUrlString } },
+    )
+    private val routeJobs = RouteChangeJobs()
+
+    private fun routeChanging(playlistId: String): Boolean =
+        runCatching { profileManager.get().isRouteChanging(playlistId) }.getOrDefault(false)
+
+    /** True when [kind] for [playlistId] waits for an address change to land (then [start] runs). */
+    private fun holdForRouteChange(playlistId: String, kind: String, start: () -> Unit): Boolean {
+        if (!routeJobs.hold(playlistId, routeChanging(playlistId), kind, start)) return false
+        Log.i("PlaylistRepo", "[EPG] $kind for ${playlistId.take(8)} waits: its server address is changing")
+        return true
+    }
+
+    /** withApiKeyRetry for a long-running job: [base] must still be the playlist's own address. */
+    private suspend fun <T> withKeyAtRoute(playlistId: String, base: String, job: String, block: suspend (String) -> T): T =
+        dispatcharrAuth.withApiKeyRetry(playlistId) { key ->
+            try {
+                routeGuard.ensure(playlistId, base, job)
+            } catch (e: RouteMoved) {
+                Log.i("PlaylistRepo", "[EPG] ${e.message}")
+                throw e
+            }
+            block(key)
+        }
+
+    private fun onRouteChange(playlistId: String, landed: Boolean) {
+        val id8 = playlistId.take(8)
+        val runningKinds = buildSet {
+            if (epgSweepJobs[playlistId]?.isActive == true) add(RouteChangeJobs.SWEEP)
+            if (layeringJobs[playlistId]?.isActive == true) layeringRestart[playlistId]?.first?.let(::add)
+        }
+        if (!landed) {
+            val running = buildMap<String, () -> Unit> {
+                if (RouteChangeJobs.SWEEP in runningKinds) put(RouteChangeJobs.SWEEP) { startEpgBackgroundSweep(playlistId) }
+                layeringRestart[playlistId]?.takeIf { it.first in runningKinds }?.let { put(it.first, it.second) }
+            }
+            val stop = routeJobs.onStart(playlistId, running)
+            if (RouteChangeJobs.SWEEP in stop) epgSweepJobs.remove(playlistId)?.cancel()
+            if (stop.any { it != RouteChangeJobs.SWEEP }) layeringJobs.remove(playlistId)?.cancel()
+            if (stop.isNotEmpty()) Log.i("PlaylistRepo", "[EPG] server address changing on $id8: stopped ${stop.joinToString()} for the old address")
+        } else {
+            val start = routeJobs.onLanded(playlistId, runningKinds)
+            if (start.isNotEmpty()) Log.i("PlaylistRepo", "[EPG] server address change landed on $id8: starting ${start.joinToString { it.first }} at the current address")
+            start.forEach { (_, run) -> runCatching { run() } }
+        }
+    }
+
     private val _upstreamEpgLayered = MutableSharedFlow<String>(extraBufferCapacity = 4)
 
     /** Emits a playlistId after that playlist's upstream catch-up history has
@@ -2229,7 +2289,7 @@ class PlaylistRepository @Inject constructor(
         while (start < throughMs) {
             val end = minOf(throughMs, start + dayMs)
             val programmes = runCatching {
-                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                withKeyAtRoute(playlist.id, base, "guide range fetch") { key ->
                     dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
                 }
             }.getOrElse {
@@ -2265,10 +2325,18 @@ class PlaylistRepository @Inject constructor(
          *  non-authoritative: each chunk is a fragment of the guide and must
          *  not delete what the neighbouring chunks put there. */
         authoritative: Boolean = false,
+        /** A long-running job's name: its request must still go to the playlist's own address. */
+        routeJob: String? = null,
     ): Int? {
         val programmes = runCatching {
-            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
-                dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+            if (routeJob != null) {
+                withKeyAtRoute(playlist.id, base, routeJob) { key ->
+                    dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+                }
+            } else {
+                dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+                    dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
+                }
             }
         }.getOrElse {
             if (it is CancellationException) throw it
@@ -2306,7 +2374,7 @@ class PlaylistRepository @Inject constructor(
         start: Long,
         end: Long,
     ): Int? {
-        val n = fetchGridChunk(playlist, base, start, end) ?: return null
+        val n = fetchGridChunk(playlist, base, start, end, routeJob = RouteChangeJobs.WALK) ?: return null
         DeletedPlaylists.ensureAlive(playlist.id, "EPG chunk coverage")
         runCatching {
             epgChunkCoverageDao.upsert(
@@ -2543,6 +2611,16 @@ class PlaylistRepository @Inject constructor(
      *  walking reuses it instead of double-fetching every chunk. */
     private val epgSweepJobs = ConcurrentHashMap<String, Job>()
 
+    init {
+        // Address changes stop, hold, and restart the guide jobs (routeJobs).
+        // Here, after every field it touches is set, and from a coroutine so
+        // ProfileManager (which needs this repository) is never asked for
+        // while either is being built.
+        layeringScope.launch {
+            profileManager.get().routeChanges.collect { change -> onRouteChange(change.playlistId, change.landed) }
+        }
+    }
+
     /**
      * What a background sweep has to do: the server state to remember once it
      * completes, and which channels it may write.
@@ -2578,7 +2656,7 @@ class PlaylistRepository @Inject constructor(
         base: String,
     ): EpgSweepPlan? {
         val sources = runCatching {
-            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            withKeyAtRoute(playlist.id, base, RouteChangeJobs.SWEEP) { key ->
                 dispatcharrClient.listEpgSources(base, key)
             }
         }.getOrElse {
@@ -2631,7 +2709,7 @@ class PlaylistRepository @Inject constructor(
      */
     private suspend fun epgKeysForSources(playlist: PlaylistEntity, base: String, sourceIds: Set<Int>): Set<String>? {
         val rows = runCatching {
-            dispatcharrAuth.withApiKeyRetry(playlist.id) { key -> dispatcharrClient.listEpgData(base, key) }
+            withKeyAtRoute(playlist.id, base, RouteChangeJobs.SWEEP) { key -> dispatcharrClient.listEpgData(base, key) }
         }.getOrElse {
             if (it is CancellationException) throw it
             Log.w("PlaylistRepo", "[EPG] epgdata unreadable; sweep waits for the next gate: $it")
@@ -2683,7 +2761,7 @@ class PlaylistRepository @Inject constructor(
     ): Int? {
         val t0 = android.os.SystemClock.elapsedRealtime()
         val programmes = runCatching {
-            dispatcharrAuth.withApiKeyRetry(playlist.id) { key ->
+            withKeyAtRoute(playlist.id, base, RouteChangeJobs.SWEEP) { key ->
                 dispatcharrClient.getEpgGrid(base, key, start, end).toProgrammes()
             }
         }.getOrElse {
@@ -2776,6 +2854,7 @@ class PlaylistRepository @Inject constructor(
      * two threads), the one-at-a-time pacing, and the inter-chunk gap.
      */
     fun startEpgBackgroundSweep(playlistId: String) {
+        if (holdForRouteChange(playlistId, RouteChangeJobs.SWEEP) { startEpgBackgroundSweep(playlistId) }) return
         epgSweepJobs.compute(playlistId) { _, existing ->
             if (existing?.isActive == true) return@compute existing
             layeringScope.launch(DeletedPlaylists.started(playlistId)) {
@@ -2915,8 +2994,16 @@ class PlaylistRepository @Inject constructor(
         base: String,
         liveProgrammeCount: Int,
     ) {
+        val restart: () -> Unit = {
+            layeringScope.launch(DeletedPlaylists.started(playlist.id)) {
+                val row = dao.byId(playlist.id) ?: return@launch
+                extendGridWindowInBackground(row, effectiveBaseUrl(row), liveProgrammeCount)
+            }
+        }
+        if (holdForRouteChange(playlist.id, RouteChangeJobs.WALK, restart)) return
         layeringJobs.compute(playlist.id) { _, existing ->
             if (existing?.isActive == true) return@compute existing
+            layeringRestart[playlist.id] = RouteChangeJobs.WALK to restart
             layeringScope.launch(DeletedPlaylists.started(playlist.id)) {
                 val now = System.currentTimeMillis()
                 val dayMs = 86_400_000L
@@ -3081,15 +3168,23 @@ class PlaylistRepository @Inject constructor(
         customXmltvUrl: String?,
         knownChannelKeys: Set<String>?,
     ) {
+        val restart: () -> Unit = {
+            layeringScope.launch(DeletedPlaylists.started(playlistId)) {
+                val row = dao.byId(playlistId) ?: return@launch
+                layerUpstreamInBackground(playlistId, effectiveBaseUrl(row), customXmltvUrl, knownChannelKeys)
+            }
+        }
+        if (holdForRouteChange(playlistId, RouteChangeJobs.LAYERING, restart)) return
         layeringJobs.compute(playlistId) { _, existing ->
             if (existing?.isActive == true) return@compute existing
+            layeringRestart[playlistId] = RouteChangeJobs.LAYERING to restart
             layeringScope.launch(DeletedPlaylists.started(playlistId)) {
                 // GH #53: source discovery moved in here with the fetching. It
                 // needs /api/epg/epgdata/ as well as /api/epg/sources/ now (to
                 // learn which feed each tvg-id came from), and neither belongs
                 // in front of the guide paint.
                 val layers = runCatching {
-                    dispatcharrAuth.withApiKeyRetry(playlistId) { key ->
+                    withKeyAtRoute(playlistId, base, RouteChangeJobs.LAYERING) { key ->
                         dispatcharrEpgLayers(
                             epgData = dispatcharrClient.listEpgData(base, key),
                             sources = dispatcharrClient.listEpgSources(base, key),
