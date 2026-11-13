@@ -248,18 +248,25 @@ fun PinEntryDialog(
                             focusClear = focusClear,
                         )
                         isTv -> {
-                            // Focus target for the raw D-pad capture.
+                            // Focus target for the raw D-pad capture. The hint
+                            // fills the pad's width and centers its lines under
+                            // the dots (Apple's TV pad, 1f9dbc8). "the PIN", not
+                            // "your PIN": the same pad sets and enters other
+                            // profiles' PINs; the wording matches Apple's.
                             Box(
                                 Modifier
+                                    .fillMaxWidth()
                                     .focusRequester(rootFocus)
                                     .focusable()
                                     .padding(8.dp),
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Text(
-                                    "Up, Down, Left, Right. Select to confirm, Back to clear.",
+                                    "Use the directional pad to enter the PIN. Select to confirm, Back to clear.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
                             }
                         }
