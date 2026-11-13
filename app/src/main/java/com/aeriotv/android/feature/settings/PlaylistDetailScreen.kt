@@ -505,14 +505,8 @@ fun PlaylistDetailScreen(
             }
             // Profiles (2026-10-16): one Dispatcharr user per profile. Shown
             // only once the playlist has 2+ profiles, or to an Admin who can
-            // add one; a single-profile non-admin sees nothing new.
-            // Apple TV: Actions first, then Profiles (below); phones and tablets keep Profiles first.
-            if (!isTv && playlist.isDispatcharrDirectConnect()) item {
-                androidx.compose.foundation.layout.Column {
-                    ProfilesSection(playlistId = playlist.id)
-                    AskAtLaunchRow(playlistId = playlist.id)
-                }
-            }
+            // add one; a single-profile non-admin sees nothing new. Apple
+            // (iOS and tvOS) lists Profiles after Actions.
             if (isTv) {
             item {
                 Section(header = "Actions", footer = null) {
@@ -633,6 +627,16 @@ fun PlaylistDetailScreen(
                             running = state.lanRefreshStatus is PlaylistViewModel.ActionStatus.Running,
                             status = state.lanRefreshStatus,
                         )
+                    }
+                }
+            }
+            // iOS ServerDetailView: Actions, Set up a TV, then Profiles.
+            if (playlist.isDispatcharrDirectConnect()) {
+                item { SetUpAnotherDeviceSection(playlistId = playlist.id) }
+                item {
+                    androidx.compose.foundation.layout.Column {
+                        ProfilesSection(playlistId = playlist.id)
+                        AskAtLaunchRow(playlistId = playlist.id)
                     }
                 }
             }

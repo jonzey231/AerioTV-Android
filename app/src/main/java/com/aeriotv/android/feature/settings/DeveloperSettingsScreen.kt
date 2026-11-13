@@ -169,17 +169,20 @@ fun DeveloperSettingsScreen(
                     onRequestDisable = { pendingDisable = true },
                 )
             }
-            // Force HLS (Dispatcharr native HLS test), TV, phone and tablet.
-            item("force-hls") {
+            // Section order follows Apple per platform. Phone: Logging, What's
+            // Captured, Force HLS, Cast, Log File. TV: Logging, Force HLS, Log
+            // File, What's Captured, and no Cast section at all (casting is a
+            // phone-sender feature). Force HLS sits where Apple's Playback
+            // Engine section does: after What's Captured on iOS, after Logging
+            // on tvOS; Android has no engine choice yet.
+            if (isTv) item("force-hls") {
                 ForceHlsSection(checked = forceHls, onCheckedChange = settingsVm::setDeveloperForceHls)
             }
-            // Section order follows Apple per platform. Phone: Logging, What's
-            // Captured, Cast, Log File. TV: Logging, Log File, What's Captured,
-            // and no Cast section at all (casting is a phone-sender feature).
-            // Apple's Playback Engine section sits after What's Captured on
-            // iOS and after Logging on tvOS; Android has no engine choice yet.
             if (!isTv) {
                 item("captured") { WhatsCapturedSection() }
+                item("force-hls") {
+                    ForceHlsSection(checked = forceHls, onCheckedChange = settingsVm::setDeveloperForceHls)
+                }
                 item("cast") {
                     CastTestSection(
                         forceTranscode = castForceHevc,

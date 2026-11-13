@@ -195,9 +195,8 @@ fun PlayerSettingsScreen(
                             onCheckedChange = viewModel::setPlayerShowChannelInfoCard,
                         )
                     }
-                    // Apple TV lists the pop-up first, then Info Card; phones
-                    // and tablets keep Info Card first (iOS).
-                    if (isTv) popUpRow()
+                    // Apple lists the pop-up first, then Info Card (iOS and tvOS).
+                    popUpRow()
                     SettingsSubGroup(
                         title = "Info Card",
                         summary = settingsItemsSummary(
@@ -229,7 +228,6 @@ fun PlayerSettingsScreen(
                             )
                         }
                     }
-                    if (!isTv) popUpRow()
                 }
 
                 // MARK: Radio Mode
@@ -279,7 +277,10 @@ fun PlayerSettingsScreen(
                             title = "Live Rewind",
                             summary = formatDepthMinutes(snappedDepth),
                             leadingIcon = Icons.Filled.Replay30,
-                            footer = "How far back you can rewind the channel you are watching. Buffered video is released as soon as you leave the channel. Keeping recent channels live holds an extra stream connection per channel; opening a channel beyond the limit drops the oldest.",
+                            // iOS ends its sub-page footer with the kept-channels
+                            // sentence; Apple TV prints it under Channels to Keep.
+                            footer = "How far back you can rewind the channel you are watching. Buffered video is released as soon as you leave the channel. Keeping recent channels live holds an extra stream connection per channel; opening a channel beyond the limit drops the oldest." +
+                                if (isTv) "" else " Kept channels keep one connection to your server open until you stop them.",
                         ) {
                             // The sub-page host shows one page at a time and
                             // drops a body whose row leaves composition, so a
@@ -309,10 +310,6 @@ fun PlayerSettingsScreen(
                                 checked = keepRecent,
                                 onCheckedChange = viewModel::setLiveRewindKeepRecent,
                             )
-                            // One footer sentence under the toggle on phones and
-                            // tablets (iOS); Apple TV puts its longer footer
-                            // under Channels to Keep.
-                            if (!isTv) SettingsSectionFooter("Kept channels keep one connection to your server open until you stop them.")
                             if (keepRecent) {
                                 SteppedSliderRow(
                                     label = "Channels to Keep",
@@ -581,9 +578,9 @@ fun PlayerSettingsScreen(
                             )
                         }
                     }
-                    // Apple TV: the logo's position and size right under Show
-                    // Channel Logos; phones and tablets keep them last.
-                    if (isTv) logoRows()
+                    // Apple: the logo's position and size right under Show
+                    // Channel Logos (iOS and tvOS).
+                    logoRows()
                     SettingsToggleRow(
                         title = "Show Subtitles",
                         subtitle = "Show the program subtitle in the Add to Multiview picker",
@@ -596,7 +593,6 @@ fun PlayerSettingsScreen(
                         checked = multiviewPickerShowDescriptions,
                         onCheckedChange = viewModel::setMultiviewPickerShowDescriptions,
                     )
-                    if (!isTv) logoRows()
                 }
 
                 // MARK: Display (TV only)

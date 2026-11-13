@@ -309,24 +309,7 @@ fun GeneralSettingsScreen(
                             onIndexChange = { viewModel.setNetworkTimeoutSecs(TIMEOUT_STOPS[it].toDouble()) },
                             dimValue = true,
                         )
-                    }
-                }
-
-                // Max Retries stays a stepper (no tvOS equivalent), on a resting card.
-                SettingsSection(
-                    header = "",
-                    footer = "Per-request retry budget (0-10).",
-                ) {
-                    if (isTv) {
-                        // Same minus / value / plus stepper as Text Size on
-                        // Appearance (D-pad Left / Right on one row).
-                        com.aeriotv.android.ui.settings.SettingsIntStepperRow(
-                            title = "Max Retries",
-                            options = (0..10).toList(),
-                            value = maxRetries,
-                            onValueChange = { viewModel.setMaxRetries(it) },
-                        )
-                    } else {
+                        // iOS: Max Retries in Network, right after Request Timeout.
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -363,6 +346,23 @@ fun GeneralSettingsScreen(
                             }
                         }
                     }
+                }
+
+                // Max Retries: a stepper on its own resting card on TV (tvOS has
+                // no Max Retries row); phones and tablets list it in Network,
+                // after Request Timeout, as iOS does.
+                if (isTv) SettingsSection(
+                    header = "",
+                    footer = "Per-request retry budget (0-10).",
+                ) {
+                    // Same minus / value / plus stepper as Text Size on
+                    // Appearance (D-pad Left / Right on one row).
+                    com.aeriotv.android.ui.settings.SettingsIntStepperRow(
+                        title = "Max Retries",
+                        options = (0..10).toList(),
+                        value = maxRetries,
+                        onValueChange = { viewModel.setMaxRetries(it) },
+                    )
                 }
             }
         }

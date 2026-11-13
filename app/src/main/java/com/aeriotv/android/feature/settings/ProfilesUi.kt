@@ -521,6 +521,45 @@ internal fun LevelBadge(level: ProfileLevel) {
     )
 }
 
+/** Settings > Playlists > (Dispatcharr playlist) > Set up another device. */
+@Composable
+fun SetUpAnotherDeviceSection(playlistId: String) {
+    // Set up a TV: phone and tablet only, Admin or default profile. Its own
+    // section between Actions and Profiles, as iOS ServerDetailView lists
+    // it. With one playlist Settings > Playlists opens this page directly.
+    val vm: ProfilesViewModel = hiltViewModel()
+    val activeId by vm.activeProfileId(playlistId).collectAsStateWithLifecycle(initialValue = null)
+    var canSetUpTv by remember { mutableStateOf(false) }
+    var showSetUpTv by remember { mutableStateOf(false) }
+    LaunchedEffect(playlistId, activeId) { canSetUpTv = vm.canSetUpTv(playlistId) }
+    if (!canSetUpTv || rememberIsTvDevice()) return
+    SettingsCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .settingsRowCard(false)
+                .clickable { showSetUpTv = true }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.size(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Set up another device", color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Text(
+                    "Send this playlist, your profiles, and sync to another device on your network.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (showSetUpTv) {
+        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = playlistId, onDismiss = { showSetUpTv = false })
+    }
+}
+
 /** Settings > Playlists > (Dispatcharr playlist) > Profiles. */
 @Composable
 fun ProfilesSection(playlistId: String) {
@@ -529,21 +568,17 @@ fun ProfilesSection(playlistId: String) {
     val activeId by vm.activeProfileId(playlistId).collectAsStateWithLifecycle(initialValue = null)
     var isAdmin by remember { mutableStateOf(false) }
     var canChannelProfiles by remember { mutableStateOf(false) }
-    var canSetUpTv by remember { mutableStateOf(false) }
-    var showSetUpTv by remember { mutableStateOf(false) }
     LaunchedEffect(playlistId, activeId) {
         isAdmin = vm.isAdmin(playlistId)
-        canSetUpTv = vm.canSetUpTv(playlistId)
         canChannelProfiles = vm.canAssignChannelProfiles(playlistId)
     }
     val isTv = rememberIsTvDevice()
-    val showSetUpTvRow = canSetUpTv && !isTv
     val role by vm.activeRole.collectAsStateWithLifecycle()
     // Phase 2b: a Child has no Profiles section (Manage Profiles at the
     // bottom of Settings is its only way out).
     if (!com.aeriotv.android.core.profiles.RoleRules.canSeeSwitcher(role)) return
     // Nothing new for a single-profile non-admin; an Admin sees Add Profile.
-    if (profiles.size < 2 && !isAdmin && !showSetUpTvRow) return
+    if (profiles.size < 2 && !isAdmin) return
 
     var confirmSwitch by remember { mutableStateOf<DispatcharrProfile?>(null) }
     var actionsFor by remember { mutableStateOf<DispatcharrProfile?>(null) }
@@ -727,30 +762,6 @@ fun ProfilesSection(playlistId: String) {
                     Text("Add Profile", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 }
             }
-            // Set up a TV: phone and tablet only, Admin or default profile.
-            // With one playlist Settings > Playlists opens this page directly.
-            if (showSetUpTvRow) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .settingsRowCard(false)
-                        .clickable { showSetUpTv = true }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.Tv, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.size(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Set up another device", color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                        Text(
-                            "Send this playlist, your profiles, and sync to another device on your network.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
             if (isAdmin) DeviceAdminPinRow(playlistId, vm)
             if (busy) {
                 Row(Modifier.padding(16.dp)) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
@@ -759,10 +770,6 @@ fun ProfilesSection(playlistId: String) {
         SettingsSectionFooter(
             "Each profile signs in as its own Dispatcharr user. Favorites, recordings, and watch history are kept per profile on this device.",
         )
-    }
-
-    if (showSetUpTv) {
-        com.aeriotv.android.feature.devicesetup.SetUpTvDialog(playlistId = playlistId, onDismiss = { showSetUpTv = false })
     }
 
     confirmSwitch?.let { p ->

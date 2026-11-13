@@ -374,16 +374,13 @@ fun LiveTvSettingsScreen(
                                 selected = if (phoneGroupSelector == "pills") "pills" else "sidebar",
                                 onSelect = viewModel::setPhoneGroupSelector,
                             )
-                        }
-                        // Apple issue #102 parity: only with Sidebar Menu.
-                        if (phoneGroupSelector != "pills") {
-                            SettingsSection(
-                                header = "",
-                                footer = "A swipe in from the left edge opens the group sidebar. " +
-                                    "Swiping left or right to change groups is off while this is on.",
-                            ) {
+                            // Apple issue #102 parity: only with Sidebar Menu,
+                            // in the Group Selection section as on iOS.
+                            if (phoneGroupSelector != "pills") {
                                 SettingsToggleRow(
                                     title = "Swipe from Left Edge Opens Sidebar",
+                                    subtitle = "A swipe in from the left edge opens the group sidebar. " +
+                                        "Swiping left or right to change groups is off while this is on.",
                                     checked = edgeSwipeOpensSidebar,
                                     onCheckedChange = viewModel::setLiveTvEdgeSwipeOpensSidebar,
                                 )
@@ -440,8 +437,9 @@ fun LiveTvSettingsScreen(
                     }
                 }
 
-                // Apple TV: Recently Watched between Badges and Display Scale.
-                if (isTv) recentlyWatched()
+                // Apple: Recently Watched between Badges and Display Scale
+                // (iOS and tvOS).
+                recentlyWatched()
 
                 // MARK: Display Scale
                 settingsCard(
@@ -526,6 +524,16 @@ fun LiveTvSettingsScreen(
                         }
                     }
                     DividerRow()
+                    // iOS: Add more categories, then Reset Colors to Defaults.
+                    Box(modifier = Modifier.alpha(if (palette.masterEnabled) 1f else 0.4f)) {
+                        AddMoreCategoriesRow(
+                            extraOn = ProgramCategory.additionalBuckets.count { palette.isBucketEnabled(it) },
+                            customCount = palette.custom.size,
+                            enabled = palette.masterEnabled,
+                            onClick = onOpenAddMoreCategories,
+                        )
+                    }
+                    DividerRow()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -545,20 +553,8 @@ fun LiveTvSettingsScreen(
                             fontWeight = FontWeight.Medium,
                         )
                     }
-                    DividerRow()
-                    Box(modifier = Modifier.alpha(if (palette.masterEnabled) 1f else 0.4f)) {
-                        AddMoreCategoriesRow(
-                            extraOn = ProgramCategory.additionalBuckets.count { palette.isBucketEnabled(it) },
-                            customCount = palette.custom.size,
-                            enabled = palette.masterEnabled,
-                            onClick = onOpenAddMoreCategories,
-                        )
-                    }
                 }
 
-                // MARK: Recently Watched (GH #130, Apple 5e34cf6)
-                // Phones and tablets: last (Apple TV's spot is after Badges).
-                if (!isTv) recentlyWatched()
             }
         }
     }

@@ -1195,8 +1195,14 @@ fun SyncCategoriesScreen(
                 // Data rows are plain on/off toggles.
                 val choices = SyncScope.choices(viewModel.syncDeviceIsTv)
                 val scopeOptions = choices.map { SettingsPickerOption(it, it.title) }
+                // Apple (iOS and tvOS): a settings group lists only its
+                // settings, and Your Data lists every data item in catalog
+                // order, so Remote Button Map (filed under Remote Control)
+                // leads Your Data.
+                val allDataItems = SyncItemCatalog.groups.flatMap { g -> g.items.filter { it.isData } }
                 SyncItemCatalog.groups.forEach { group ->
-                    val items = group.items.filter { (!dsync || !it.driveOnly) && (dsyncOn || !it.dsyncOnly) }
+                    val groupItems = if (group.id == "data") allDataItems else group.items.filterNot { it.isData }
+                    val items = groupItems.filter { (!dsync || !it.driveOnly) && (dsyncOn || !it.dsyncOnly) }
                     if (items.isEmpty()) return@forEach
                     item(key = "sync-group-${group.id}") {
                         SettingsSection(header = group.title, titleHeader = true) {
