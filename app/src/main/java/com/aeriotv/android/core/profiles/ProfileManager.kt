@@ -1543,7 +1543,8 @@ class ProfileManager @Inject constructor(
         runCatching { watchlistStore.deleteScope(profileId) }
         runCatching { hiddenTitlesStore.deleteScope(profileId) }
         runCatching {
-            localRecordingDao.allOnceIn(profileId).forEach { File(it.filePath).delete() }
+            // content:// (Downloads, a custom folder) and file paths alike.
+            localRecordingDao.allOnceIn(profileId).forEach { com.aeriotv.android.core.data.LocalRecordingFiles.delete(context, it.filePath) }
             localRecordingDao.deleteScope(profileId)
         }
         runCatching { channelSnapshotDao.deleteForPlaylistKey("${p.playlistId}@$profileId") }
