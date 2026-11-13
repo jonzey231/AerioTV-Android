@@ -6,10 +6,7 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Autorenew
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import com.aeriotv.android.ui.scale.subtext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -438,11 +435,16 @@ private val ABOUT_REFRESHING_ITEMS = listOf(
 )
 
 /**
- * Informational row: same card, padding, and type as the other settings rows
- * (accent glyph, bold title, wrapped secondary body). On TV it is a D-pad
- * stop through [SettingsRowContainer] (same focus ring and bring-into-view as
- * every other row, no-op select) so the section scrolls one row at a time and
- * all four rows stay readable. On touch it stays a plain, non-clickable card.
+ * Informational row: same card, padding, and type as the other settings rows.
+ * Touch keeps the iPhone's About Refreshing row (accent glyph, semibold title,
+ * wrapped secondary body). TV draws Apple TV's standard pane row, as every
+ * other icon row on the page does: the icon tile, the regular row title, and
+ * the row subtitle (Apple TV's sweep in a22268e left no bare glyph or bold
+ * title in a pane row; tvOS has no About Refreshing section of its own). On
+ * TV it is a D-pad stop through [SettingsRowContainer] (same focus ring and
+ * bring-into-view as every other row, no-op select) so the section scrolls
+ * one row at a time and all four rows stay readable. On touch it stays a
+ * plain, non-clickable card.
  */
 @Composable
 private fun AboutRefreshingRow(item: AboutRefreshingItem) {
@@ -466,24 +468,24 @@ private fun AboutRefreshingRow(item: AboutRefreshingItem) {
 
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.AboutRefreshingRowContent(item: AboutRefreshingItem) {
+    val isTv = rememberIsTvDevice()
     run {
-        Icon(
-            imageVector = item.icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(22.dp),
-        )
-        Spacer(Modifier.width(14.dp))
+        // TV: the tile, 7 dp from the text. Touch: the 22 dp glyph, 14 dp.
+        com.aeriotv.android.ui.settings.SettingsLeadingGlyph(item.icon)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = item.title,
                 style = settingsRowTitleStyle(),
                 color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = if (isTv) com.aeriotv.android.ui.settings.settingsRowTitleWeight() else FontWeight.SemiBold,
             )
             Text(
                 text = item.body,
-                style = com.aeriotv.android.ui.settings.settingsFootnoteStyle().subtext(),
+                style = if (isTv) {
+                    com.aeriotv.android.ui.settings.settingsRowSubtitleStyle().subtext()
+                } else {
+                    com.aeriotv.android.ui.settings.settingsFootnoteStyle().subtext()
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
