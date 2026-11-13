@@ -235,6 +235,30 @@ internal object DriveMerge {
         return if (com.aeriotv.android.core.sync.dsync.DsyncPayloads.tmdbKeepsLocal(local, remote.key, localEditedAtSec, remote.atMs / 1000)) null else remote
     }
 
+    /**
+     * The Credentials file with only its TMDB key changed (the Credentials
+     * item is off, Option A, owner 2026-11-13): [remote]'s entries exactly as
+     * Drive has them, and this device's key when it wins ([tmdbToWrite]).
+     * Null when nothing changes. [envelope] builds the written file's envelope
+     * from Drive's and the key's time.
+     */
+    fun tmdbOnlyFile(
+        remote: CredentialsSnapshot?,
+        localKey: String,
+        localEditedAtSec: Long,
+        envelope: (SyncEnvelope?, Long) -> SyncEnvelope,
+    ): CredentialsSnapshot? {
+        val current = tmdbOf(remote)
+        val out = tmdbToWrite(current, localKey, localEditedAtSec) ?: return null
+        if (out == current) return null
+        return CredentialsSnapshot(
+            envelope = envelope(remote?.envelope, out.atMs),
+            entries = remote?.entries.orEmpty(),
+            tmdbKey = out.key,
+            tmdbUpdatedAt = out.atMs,
+        )
+    }
+
     // ── Preferences (per key) ─────────────────────────────────────────────
 
     /** One lane's values plus their change times, keyed "lane:key". */

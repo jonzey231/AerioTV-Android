@@ -136,6 +136,42 @@ class DriveTmdbKeyTest {
         assertEquals(drive("", 400), DriveMerge.tmdbOf(json.decodeFromString<CredentialsSnapshot>(json.encodeToString(f))))
     }
 
+    // ── Option A: the Credentials item off, Drive Sync on ──
+
+    private val entries = listOf(
+        CredentialsSnapshotEntry(playlistId = "p1", username = "u1", password = "PW-1", updatedAt = 10L),
+        CredentialsSnapshotEntry(playlistId = "p2", apiKey = "PL-KEY-2", updatedAt = 20L),
+    )
+    private fun env(prev: SyncEnvelope?, at: Long) = SyncEnvelope(lastModified = maxOf(prev?.lastModified ?: 0L, at), device = "this", format = prev?.format)
+
+    @Test fun keyOnlyWriteLeavesTheEntriesAsDriveHasThem() {
+        val remote = CredentialsSnapshot(env, entries, tmdbKey = "OLD", tmdbUpdatedAt = 100_000L)
+        val out = DriveMerge.tmdbOnlyFile(remote, "NEW", 200, ::env)!!
+        assertEquals("every sign-in untouched", entries, out.entries)
+        assertEquals("NEW", out.tmdbKey)
+        assertEquals("the key's edit time, never the push time", 200_000L, out.tmdbUpdatedAt)
+    }
+
+    @Test fun keyOnlyWriteStartsAFileWithNoSignIns() {
+        val out = DriveMerge.tmdbOnlyFile(null, "KEY", 300, ::env)!!
+        assertTrue("no playlist sign-in is written", out.entries.isEmpty())
+        assertEquals(drive("KEY", 300), DriveMerge.tmdbOf(out))
+    }
+
+    @Test fun keyOnlyWriteChangesNothingWhenDriveWins() {
+        val remote = CredentialsSnapshot(env, entries, tmdbKey = "NEWER", tmdbUpdatedAt = 300_000L)
+        assertNull("Drive's newer key stands; nothing is written", DriveMerge.tmdbOnlyFile(remote, "OLDER", 200, ::env))
+        assertNull("the same key: nothing to write", DriveMerge.tmdbOnlyFile(remote, "NEWER", 900, ::env))
+        assertNull("no key anywhere: nothing to write", DriveMerge.tmdbOnlyFile(CredentialsSnapshot(env, entries), "", 0, ::env))
+    }
+
+    @Test fun keyOnlyWriteCarriesANewerClear() {
+        val remote = CredentialsSnapshot(env, entries, tmdbKey = "KEY", tmdbUpdatedAt = 100_000L)
+        val out = DriveMerge.tmdbOnlyFile(remote, "", 150, ::env)!!
+        assertEquals(entries, out.entries)
+        assertEquals(drive("", 150), DriveMerge.tmdbOf(out))
+    }
+
     /** The Credentials file as builds before 2026-11-13 declare it. */
     @Serializable
     private data class OlderCredentials(val envelope: SyncEnvelope, val entries: List<CredentialsSnapshotEntry>)

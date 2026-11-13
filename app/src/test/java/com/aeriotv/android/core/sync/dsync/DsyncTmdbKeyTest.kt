@@ -23,7 +23,8 @@ class DsyncTmdbKeyTest {
         assertEquals("tmdbKey", DsyncKey.TmdbKey.suffix)
         assertNull("no Sync Categories toggle", DsyncKey.TmdbKey.category)
         assertNull("no Sync Categories row", SyncItemCatalog.itemForDsync("tmdbKey"))
-        assertNull("never in a Drive snapshot", DsyncCoexistence.driveFileFor(DsyncKey.TmdbKey))
+        // Drive carries the key in the Credentials file on its own terms (DriveTmdbKeyTest), never through a follow.
+        assertNull("no Drive follow file", DsyncCoexistence.driveFileFor(DsyncKey.TmdbKey))
         assertFalse("not a setup-choice key", DsyncKey.TmdbKey in DsyncCoexistence.FORCE_KEYS)
         assertFalse("never pushed or pulled by hand", DsyncKey.TmdbKey in DsyncManual.keys(emptyMap()))
         assertTrue("in the one App Data key", DsyncKey.TmdbKey in DsyncBucket.Main.keys)

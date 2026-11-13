@@ -304,18 +304,7 @@ class DriveSyncManager @Inject constructor(
     suspend fun pushAll(token: String, enabled: Set<SyncCategory>): Map<SyncCategory, Boolean> {
         Log.i(TAG, "pushAll: categories=${enabled.map { it.name }}")
         val result = mutableMapOf<SyncCategory, Boolean>()
-        // The Drive backup belongs to the base (signed-in) profile: read its state only.
-        pushProviders = runCatching {
-            kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
-                providersStore.forPush(
-                    SyncProvidersStore.DRIVE,
-                    isBaseProfile = true,
-                    dispatcharrOn = appPreferences.dispatcharrSyncEnabledOnce(),
-                    driveOn = appPreferences.syncMasterEnabled.first(),
-                    deviceId = dispatcharrSync.get().deviceId,
-                )
-            }
-        }.getOrNull()
+        refreshPushProviders()
         for (category in enabled) {
             // Worker cancelled (Drive turned off, or a newer push replaced
             // this one): stop before the next category starts; a category
@@ -332,6 +321,11 @@ class DriveSyncManager @Inject constructor(
                 .onFailure { if (it !is kotlinx.coroutines.CancellationException) Log.w(TAG, "push ${category.name} failed", it) }
                 .getOrDefault(false)
             result[category] = ok
+        }
+        // The TMDB key follows Drive Sync itself, not the Credentials item.
+        if (SyncCategory.Credentials !in enabled && kotlinx.coroutines.currentCoroutineContext().isActive) {
+            runCatching { pushTmdbOnly(token) }
+                .onFailure { if (it !is kotlinx.coroutines.CancellationException) Log.w(TAG, "[DRIVE] push tmdbKey failed: ${it.javaClass.simpleName}") }
         }
         if (result.values.any { it }) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
             appPreferences.setSyncLastPushAt(System.currentTimeMillis())
@@ -360,6 +354,7 @@ class DriveSyncManager @Inject constructor(
                 .getOrDefault(false)
             result[category] = ok
         }
+        if (SyncCategory.Credentials !in enabled) pullTmdbOnlySafely(token)
         appPreferences.setSyncLastPullAt(System.currentTimeMillis())
         // This install has seen the remote state; automatic pushes are now
         // safe (see AppPreferences.syncInitialPullDone).
@@ -381,6 +376,7 @@ class DriveSyncManager @Inject constructor(
                 .getOrDefault(PullOutcome.Failed)
             result[category] = outcome != PullOutcome.Failed
         }
+        if (SyncCategory.Credentials !in enabled) pullTmdbOnlySafely(token)
         appPreferences.setSyncLastPullAt(System.currentTimeMillis())
         if (result.values.all { it }) appPreferences.setSyncInitialPullDone(true)
         // One server account is one playlist (Logan 2026-11-10): duplicates
@@ -423,9 +419,85 @@ class DriveSyncManager @Inject constructor(
                 PullOutcome.Failed -> updateRestoreStep(category, RestoreStepState.Failed, "Couldn't restore")
             }
         }
+        if (SyncCategory.Credentials !in enabled) pullTmdbOnlySafely(token)
         appPreferences.setSyncLastPullAt(System.currentTimeMillis())
         appPreferences.setSyncInitialPullDone(true)
         return result
+    }
+
+    /**
+     * The TMDB key follows Google Drive Sync itself, not the Credentials item
+     * (owner 2026-11-13, Option A), as on Apple (iCloud Keychain, always) and
+     * Dispatcharr Sync (no category row). It still rides the Credentials
+     * file's top-level fields. With the Credentials item on, the Credentials
+     * push and pull carry it; with the item off these two read and write only
+     * those fields and leave the file's entries (every playlist's sign-in)
+     * exactly as Drive has them. With Drive Sync off nothing moves.
+     */
+    suspend fun tmdbOnlyRound(token: String) {
+        pullTmdbOnlySafely(token)
+        refreshPushProviders()
+        runCatching { pushTmdbOnly(token) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; Log.w(TAG, "[DRIVE] push tmdbKey failed: ${it.javaClass.simpleName}") }
+    }
+
+    /** The record every file of the next push carries (envelope.syncProviders). */
+    private suspend fun refreshPushProviders() {
+        // The Drive backup belongs to the base (signed-in) profile: read its state only.
+        pushProviders = runCatching {
+            kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+                providersStore.forPush(
+                    SyncProvidersStore.DRIVE,
+                    isBaseProfile = true,
+                    dispatcharrOn = appPreferences.dispatcharrSyncEnabledOnce(),
+                    driveOn = appPreferences.syncMasterEnabled.first(),
+                    deviceId = dispatcharrSync.get().deviceId,
+                )
+            }
+        }.getOrNull()
+    }
+
+    private suspend fun pullTmdbOnlySafely(token: String) {
+        runCatching { pullTmdbOnly(token) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; Log.w(TAG, "[DRIVE] pull tmdbKey failed: ${it.javaClass.simpleName}") }
+    }
+
+    /** The key from the Credentials file, nothing else (the Credentials item is off). */
+    private suspend fun pullTmdbOnly(token: String) {
+        if (!appPreferences.syncMasterEnabled.first()) return
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val body = when (val r = readRemote(token, SyncCategory.Credentials)) {
+                RemoteFile.Missing -> return@withContext
+                RemoteFile.Failed -> { Log.i(TAG, "[DRIVE] pull tmdbKey: the Credentials file could not be read"); return@withContext }
+                is RemoteFile.Body -> r.text
+            }
+            val file = runCatching { json.decodeFromString<CredentialsSnapshot>(body) }.getOrNull()
+                ?: run { Log.i(TAG, "[DRIVE] pull tmdbKey: the Credentials file does not decode"); return@withContext }
+            applyTmdbKey(file)
+        }
+    }
+
+    /**
+     * This device's key into the Credentials file when it wins (the merge
+     * rule of the Credentials push), with the file's entries left as Drive
+     * has them. A file that cannot be read is never overwritten.
+     */
+    private suspend fun pushTmdbOnly(token: String) {
+        if (!appPreferences.syncMasterEnabled.first()) return
+        kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) {
+            val remote: CredentialsSnapshot? = when (val r = readRemote(token, SyncCategory.Credentials)) {
+                RemoteFile.Missing -> null
+                RemoteFile.Failed -> { Log.i(TAG, "[DRIVE] push tmdbKey held: the Credentials file could not be read (never overwritten unread)"); return@withContext }
+                is RemoteFile.Body -> runCatching { json.decodeFromString<CredentialsSnapshot>(r.text) }.getOrNull()
+                    ?: run { Log.i(TAG, "[DRIVE] push tmdbKey held: the Credentials file does not decode; left as is"); return@withContext }
+            }
+            val local = appPreferences.tmdbApiKeyState.first()
+            val tmdbRemote = DriveMerge.tmdbOf(remote)
+            val file = DriveMerge.tmdbOnlyFile(remote, local.key, local.editedAt) { env, at -> mergedEnvelope(env, listOf(at)) }
+                ?: return@withContext
+            Log.i(TAG, "[DRIVE] push tmdbKey (Credentials item off; entries left as Drive has them): this device's ${if (file.tmdbKey.isNullOrEmpty()) "clear" else "key"} t=${DriveFileStats.time(file.tmdbUpdatedAt)} (drive ${if (tmdbRemote == null) "has none" else "t=${DriveFileStats.time(tmdbRemote.atMs)}"})")
+            commitWhole(token, SyncCategory.Credentials, json.encodeToString(file), null, emptyMap()) {}
+        }
     }
 
     // Profiles phase 1: sync carries the DEFAULT profile only. defaultOnly()
@@ -506,10 +578,19 @@ class DriveSyncManager @Inject constructor(
         // once the upload starts, the upload, the follow bookkeeping, and the
         // push line finish together; cancellation only stops the NEXT
         // category (pushAll checks between categories).
-        return kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-            commitCategory(token, category, payload, label ?: if (waiting) "replace" else null, local)
-                .also { ok -> if (ok) built.second() }
-        }
+        return commitWhole(token, category, payload, label ?: if (waiting) "replace" else null, local, built.second)
+    }
+
+    /** The one category upload and its bookkeeping, run whole: a cancel stops only the next category. */
+    private suspend fun commitWhole(
+        token: String,
+        category: SyncCategory,
+        payload: String,
+        why: String?,
+        local: Map<String, Int>,
+        after: () -> Unit,
+    ): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+        commitCategory(token, category, payload, why, local).also { ok -> if (ok) after() }
     }
 
     private sealed interface RemoteFile {

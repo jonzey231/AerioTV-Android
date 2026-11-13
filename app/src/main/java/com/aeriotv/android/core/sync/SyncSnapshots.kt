@@ -268,8 +268,11 @@ data class CredentialsSnapshot(
     /**
      * The TMDB API key (2026-11-13): one key per device, not per playlist, as
      * entered and trimmed; "" = cleared. Null in older files and when no
-     * device has set or cleared a key. Same trust model as the entries, and
-     * the same Credentials item controls it. Older readers ignore it.
+     * device has set or cleared a key. Same trust model as the entries. It
+     * follows Google Drive Sync itself, not the Credentials item (Option A):
+     * with that item off, only this field and [tmdbUpdatedAt] are read and
+     * written, and the entries are left as Drive has them. Older readers
+     * ignore it.
      */
     val tmdbKey: String? = null,
     /**

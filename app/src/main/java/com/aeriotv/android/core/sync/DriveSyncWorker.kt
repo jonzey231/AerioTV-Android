@@ -54,7 +54,9 @@ class DriveSyncWorker @AssistedInject constructor(
             .filter { prefs.syncCategoryEnabled(it).first() }
             .toSet()
         if (enabled.isEmpty()) {
-            Log.i(TAG, "No categories enabled, skipping")
+            // The TMDB key follows Drive Sync itself, not the items (owner 2026-11-13).
+            Log.i(TAG, "No categories enabled: the TMDB key only")
+            sync.tmdbOnlyRound(token)
             return@runCatching Result.success()
         }
         // Logan 2026-11-10: pre-migration data never overwrites post-migration
