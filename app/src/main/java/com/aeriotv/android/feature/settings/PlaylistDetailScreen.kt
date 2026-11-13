@@ -506,7 +506,8 @@ fun PlaylistDetailScreen(
             // Profiles (2026-10-16): one Dispatcharr user per profile. Shown
             // only once the playlist has 2+ profiles, or to an Admin who can
             // add one; a single-profile non-admin sees nothing new.
-            if (playlist.isDispatcharrDirectConnect()) item {
+            // Apple TV: Actions first, then Profiles (below); phones and tablets keep Profiles first.
+            if (!isTv && playlist.isDispatcharrDirectConnect()) item {
                 androidx.compose.foundation.layout.Column {
                     ProfilesSection(playlistId = playlist.id)
                     AskAtLaunchRow(playlistId = playlist.id)
@@ -567,6 +568,12 @@ fun PlaylistDetailScreen(
                             status = state.lanRefreshStatus,
                         )
                     }
+                }
+            }
+            if (playlist.isDispatcharrDirectConnect()) item {
+                androidx.compose.foundation.layout.Column {
+                    ProfilesSection(playlistId = playlist.id)
+                    AskAtLaunchRow(playlistId = playlist.id)
                 }
             }
 

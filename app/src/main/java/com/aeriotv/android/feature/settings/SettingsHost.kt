@@ -72,6 +72,8 @@ import com.aeriotv.android.ui.settings.LocalSettingsInPane
 import com.aeriotv.android.ui.settings.SettingsNavRow
 import com.aeriotv.android.ui.settings.SettingsSectionHeader
 import com.aeriotv.android.ui.settings.TvSettingsMetrics
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 
 /**
  * Fallback touch sidebar width (plan B3) for callers that do not pass one.
@@ -531,7 +533,7 @@ fun SettingsTvRailHost(
             },
             railFocus = railFocus,
             modifier = Modifier
-                .width(TvRailWidth + TvOverscanStart)
+                .width(TvSettingsMetrics.railColumnWidth)
                 .onFocusChanged { railHasFocus = it.hasFocus }
                 .onPreviewKeyEvent { event ->
                     val right = event.key == Key.DirectionRight &&
@@ -568,6 +570,8 @@ fun SettingsTvRailHost(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                // Apple TV's detail column (TvSettingsMetrics.paneInset*).
+                .padding(start = TvSettingsMetrics.paneInsetStart, top = TvSettingsMetrics.paneInsetTop, end = TvSettingsMetrics.paneInsetEnd)
                 .focusRequester(detailFocus)
                 .onFocusChanged { detailHasFocus = it.hasFocus }
                 // Left out of any page lands on the SELECTED rail row (the
@@ -677,25 +681,33 @@ private fun SettingsTvRail(
     val windowFocused = androidx.compose.runtime.rememberUpdatedState(
         androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused,
     )
+    // Apple TV's rail geometry (08c1be8, TvSettingsMetrics): the first row's
+    // top rests at y 98.5 dp on screen, level with the detail card's top,
+    // and 12 rows fit above the bottom safe edge, so the rail never scrolls
+    // at the default text size. The column's top is measured on screen; the
+    // offset to the resting top sits OUTSIDE the list, so a rail that does
+    // scroll (a large system font scale) clips there, never in the tab bar's
+    // band, with 1 dp inside the clip for the focus ring.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var columnTopDp by remember { mutableStateOf<Float?>(null) }
+    val restingOffset = columnTopDp?.let {
+        (TvSettingsMetrics.railRestingTop.value - it - TvSettingsMetrics.railRingRoom.value).coerceAtLeast(0f).dp
+    } ?: 0.dp
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxHeight(),
-        // Top inset aligns the first rail row with the DETAIL PANE'S TITLE.
-        // At 8dp the rail started ~20dp above it and read as floating higher
-        // than the body it belongs to (Logan, on the Streamer). tvOS lines its
-        // rail up with the pane content for the same reason.
-        //
-        // Still budgeted so ALL rail items clear the fold: tvOS fits its 9
-        // without scrolling, Android carries 11 (Remote Control is TV-only,
-        // App Updates sideload-only), so the pitch stays near 40dp and the
-        // inset can only spend what the budget leaves.
+        modifier = modifier
+            .fillMaxHeight()
+            .onGloballyPositioned { c ->
+                if (columnTopDp == null) columnTopDp = with(density) { c.positionInWindow().y.toDp().value }
+            }
+            .padding(top = restingOffset),
         contentPadding = PaddingValues(
-            start = TvOverscanStart,
-            end = 12.dp,
-            top = 30.dp,
-            bottom = 12.dp,
+            start = TvSettingsMetrics.railRowStart,
+            end = TvSettingsMetrics.railTrailing,
+            top = TvSettingsMetrics.railRingRoom,
+            bottom = TvSettingsMetrics.railRingRoom,
         ),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalArrangement = Arrangement.spacedBy(TvSettingsMetrics.railRowGap),
     ) {
         itemsIndexed(rows, key = { _, row -> encodeSettingsRoute(row.first) }) { index, row ->
             val (route, title, subtitle) = row
@@ -718,6 +730,7 @@ private fun SettingsTvRail(
                 selected = route == selection,
                 trailingChevron = false,
                 flat = true,
+                railMinHeight = TvSettingsMetrics.railRowHeight,
                 modifier = Modifier
                     .onFocusChanged {
                         if (it.isFocused && !wasFocused) {

@@ -77,8 +77,9 @@ private val GUIDE_SLOTS = listOf(
 )
 private val GUIDE_EXTENDED_SLOTS = listOf(
     RemoteSlot.PLAY_PAUSE, RemoteSlot.FFWD, RemoteSlot.REWIND,
-    RemoteSlot.CHANNEL_UP, RemoteSlot.CHANNEL_DOWN,
 )
+/** Channel Up and Down in the guide: the end of "In the TV Guide", as on Apple TV. */
+private val GUIDE_CHANNEL_SLOTS = listOf(RemoteSlot.CHANNEL_UP, RemoteSlot.CHANNEL_DOWN)
 
 /** Player actions offered in the picker: only actions the executor can
  *  actually run today (implementer note: omit rather than fake). */
@@ -390,6 +391,13 @@ fun RemoteControlSettingsScreen(
                             subtitle = if (slot == RemoteSlot.BACK_SHORT) {
                                 "Single press. Pressing twice quickly and the Radio Mode shortcuts are fixed."
                             } else null,
+                            onClick = { editingGuideSlot = slot },
+                        )
+                    }
+                    GUIDE_CHANNEL_SLOTS.forEach { slot ->
+                        SlotRow(
+                            slotName = slot.displayName,
+                            valueName = map.guideAction(slot).displayName(groupSelector == "sidebar"),
                             onClick = { editingGuideSlot = slot },
                         )
                     }

@@ -134,6 +134,19 @@ fun LiveTvSettingsScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
+                // Recently Watched, placed per form factor below.
+                fun androidx.compose.foundation.lazy.LazyListScope.recentlyWatched() {
+                    if (com.aeriotv.android.core.profiles.ProfileRoles.active.value != com.aeriotv.android.core.profiles.ProfileRole.Child) item("recently-watched") {
+                        SettingsSection(header = "Recently Watched") {
+                            SettingsActionRow(
+                                label = "Clear Recently Watched",
+                                leadingIcon = Icons.Filled.History,
+                                destructive = true,
+                                onClick = { confirmClearRecents = true },
+                            )
+                        }
+                    }
+                }
                 // MARK: Guide Presentation
                 //
                 // Copy is Apple's word for word. `listViewShown` stands in
@@ -427,6 +440,9 @@ fun LiveTvSettingsScreen(
                     }
                 }
 
+                // Apple TV: Recently Watched between Badges and Display Scale.
+                if (isTv) recentlyWatched()
+
                 // MARK: Display Scale
                 settingsCard(
                     header = "Display Scale",
@@ -541,16 +557,8 @@ fun LiveTvSettingsScreen(
                 }
 
                 // MARK: Recently Watched (GH #130, Apple 5e34cf6)
-                if (com.aeriotv.android.core.profiles.ProfileRoles.active.value != com.aeriotv.android.core.profiles.ProfileRole.Child) item("recently-watched") {
-                    SettingsSection(header = "Recently Watched") {
-                        SettingsActionRow(
-                            label = "Clear Recently Watched",
-                            leadingIcon = Icons.Filled.History,
-                            destructive = true,
-                            onClick = { confirmClearRecents = true },
-                        )
-                    }
-                }
+                // Phones and tablets: last (Apple TV's spot is after Badges).
+                if (!isTv) recentlyWatched()
             }
         }
     }

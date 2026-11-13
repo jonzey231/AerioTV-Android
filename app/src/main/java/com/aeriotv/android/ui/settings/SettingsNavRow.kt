@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -87,6 +88,12 @@ fun SettingsNavRow(
      * the accent.
      */
     iconTint: Color? = null,
+    /**
+     * TV Settings rail (Apple 08c1be8): rows at least this tall with the
+     * text centered and Apple's 9 dp side padding, so the rail's pitch is
+     * exact. Null keeps the padded height.
+     */
+    railMinHeight: androidx.compose.ui.unit.Dp? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val isTv = rememberIsTvDevice()
@@ -105,8 +112,8 @@ fun SettingsNavRow(
     val iconBox = if (isTv) TvSettingsMetrics.railIconWidth else SettingsCardMetrics.iconTile
     val iconGlyph = if (isTv) TvSettingsMetrics.railIconGlyph else SettingsCardMetrics.iconGlyph
     val gap = if (isTv) TvSettingsMetrics.railIconGap else 12.dp
-    val padH = if (isTv) 10.dp else 16.dp
-    val padV = if (isTv) 2.dp else 12.dp
+    val padH = if (railMinHeight != null) TvSettingsMetrics.railRowPaddingH else if (isTv) 10.dp else 16.dp
+    val padV = if (railMinHeight != null) 0.dp else if (isTv) 2.dp else 12.dp
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -156,6 +163,7 @@ fun SettingsNavRow(
                 },
             )
             .clickable(onClick = onClick)
+            .then(if (railMinHeight != null) Modifier.heightIn(min = railMinHeight) else Modifier)
             .padding(horizontal = padH, vertical = padV),
         verticalAlignment = Alignment.CenterVertically,
     ) {

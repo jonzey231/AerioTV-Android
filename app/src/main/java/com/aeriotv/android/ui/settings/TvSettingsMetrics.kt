@@ -48,13 +48,51 @@ object TvSettingsMetrics {
     /** Title-to-subtitle gap. tvOS 2. */
     val railTextSpacing = 1.dp
 
+    // MARK: Rail geometry (Apple 08c1be8 RailMetrics, halved)
+    //
+    // The rail fits without scrolling, so it never moves: 12 rows (the
+    // GitHub build's count with Updates) x 32 + 11 gaps x 2 = 406 dp, from the
+    // resting top at y 98.5 to y 504.5, above the 510 dp bottom safe edge.
+    // A larger system font scale can still overflow; then the rail scrolls,
+    // clipped at its resting top so rows never draw into the tab bar's band.
+
+    /** Row height (minimum: larger text grows it). tvOS 64. */
+    val railRowHeight = 32.dp
+    /** Gap between rows. tvOS 4. */
+    val railRowGap = 2.dp
+    /** Horizontal padding inside a row. tvOS 18. */
+    val railRowPaddingH = 9.dp
+    /** A row's left edge from the screen's: tvOS 140 (80 safe area + 60 rail leading). */
+    val railRowStart = 70.dp
+    /** The rail's trailing padding. tvOS 16. */
+    val railTrailing = 8.dp
+    /** The first row's top from the screen's, level with the detail card's top. tvOS y 197. */
+    val railRestingTop = 98.5.dp
+    /** Room inside the clip for the 2 dp focus ring. tvOS 2. */
+    val railRingRoom = 1.dp
+    /** The rail column, from the screen's left edge. tvOS 510 (80 safe area + 430). */
+    val railColumnWidth = 255.dp
+
+    // MARK: Detail pane (measured on Apple TV, settings-compare/atvu)
+    //
+    // Apple TV's detail cards run from x 307.5 to 867.25 dp (tvOS 615 to
+    // 1734.5). Android TV pages pad their cards 16 dp inside the pane, so the
+    // pane itself is inset by the rest.
+    val paneInsetStart = 36.5.dp
+    val paneInsetEnd = 76.25.dp
+    /** The first card's top lands at y 98.5 dp, level with the rail's first row (tvOS y 197). */
+    val paneInsetTop = 4.5.dp
+
     // MARK: Line height
     //
     // Material defaults lineHeight to ~1.5x the font size where SwiftUI uses
     // ~1.2x, which inflates every stacked title+subtitle row independently of
     // the font size. These restore the SwiftUI ratio.
-    val railTitleLineHeight = 16.sp
-    val railSubtitleLineHeight = 11.sp
+    // SwiftUI's lines for the 26/18 pt rail label and subtitle (about 31 and
+    // 21 pt), so a row's text measures as Apple's (55 pt) and 11 rows still
+    // fit at a 130% font scale, as on Apple TV.
+    val railTitleLineHeight = 15.5.sp
+    val railSubtitleLineHeight = 10.5.sp
 
     // MARK: Overscan
     //
