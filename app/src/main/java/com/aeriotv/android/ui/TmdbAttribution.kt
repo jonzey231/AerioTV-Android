@@ -31,7 +31,11 @@ fun TmdbAttribution(
         isTv -> 44.dp
         else -> 28.dp
     }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // Phones and tablets: Apple's TMDBAttributionView, VStack(spacing: 8)
+    // with the lines in textTertiary, the dim footer ink (colorScheme
+    // .tertiary, as the Settings footers). Android TV keeps its own look.
+    val lineColor = if (isTv) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.tertiary
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 8.dp)) {
         Image(
             painter = painterResource(id = if (long) R.drawable.ic_tmdb_long else R.drawable.ic_tmdb_short),
             contentDescription = "The Movie Database",
@@ -46,12 +50,12 @@ fun TmdbAttribution(
         Text(
             text = "This product uses the TMDB API but is not endorsed or certified by TMDB.",
             style = style.subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = lineColor,
         )
         Text(
             text = "TMDB data is used only after configuring a TMDB API key in Settings > Movies & TV Shows.",
             style = style.subtext(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = lineColor,
         )
     }
 }
