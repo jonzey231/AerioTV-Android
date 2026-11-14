@@ -191,7 +191,7 @@ fun ConfigureSourceScreen(
         return
     }
     if (userQrProbing) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+        com.aeriotv.android.ui.scale.Dialog(onDismissRequest = {}) {
             androidx.compose.foundation.layout.Row(
                 Modifier.background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(20.dp),
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -205,7 +205,7 @@ fun ConfigureSourceScreen(
     userQrPick?.let { (found, k) ->
         var userOnly by remember(found) { mutableStateOf(false) }
         // Headline, card, and buttons as in Set up another device (SetUpTvScreen, 12 dp spacing, 560 dp column), sized to content.
-        androidx.compose.ui.window.Dialog(
+        com.aeriotv.android.ui.scale.Dialog(
             onDismissRequest = { userQrPick = null },
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
         ) {

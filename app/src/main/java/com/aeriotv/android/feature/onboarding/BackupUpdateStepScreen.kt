@@ -128,7 +128,7 @@ fun BackupUpdateStepScreen(
 /** Settings: the same step inside the themed dialog surface. */
 @Composable
 fun BackupUpdateDialog(busy: Boolean, onUpdate: () -> Unit, onNotNow: () -> Unit) {
-    androidx.compose.ui.window.Dialog(
+    com.aeriotv.android.ui.scale.Dialog(
         onDismissRequest = { if (!busy) onNotNow() },
         properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
     ) {

@@ -247,7 +247,7 @@ private fun PromptSurface(
 ) {
     val mainFocus = androidx.compose.ui.platform.LocalFocusManager.current
     LaunchedEffect(Unit) { mainFocus.clearFocus(force = true) }
-    androidx.compose.ui.window.Dialog(
+    com.aeriotv.android.ui.scale.Dialog(
         onDismissRequest = onBack,
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,

@@ -319,6 +319,8 @@ private fun TvFormDialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(dismissOnClickOutside = outsideTapCancels),
     ) {
+        // Its own window: re-apply Text Size, as the other dialogs do.
+        com.aeriotv.android.ui.scale.ProvideAppTextScale {
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -353,6 +355,7 @@ private fun TvFormDialog(
                     confirmButton()
                 }
             }
+        }
         }
     }
 }
@@ -448,6 +451,8 @@ internal fun ProfileActionStackDialog(
         onDismissRequest = onCancel,
         properties = DialogProperties(dismissOnClickOutside = ProfileDialogRules.outsideTapCancels(ProfileDialogRules.Kind.WithCancel)),
     ) {
+        // Its own window: re-apply Text Size, as the other dialogs do.
+        com.aeriotv.android.ui.scale.ProvideAppTextScale {
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -475,6 +480,7 @@ internal fun ProfileActionStackDialog(
                 Spacer(Modifier.height(ProfileDialogRules.ACTION_GROUP_GAP_DP.dp))
                 ProfileActionButton(label = "Cancel", onClick = onCancel)
             }
+        }
         }
     }
 }

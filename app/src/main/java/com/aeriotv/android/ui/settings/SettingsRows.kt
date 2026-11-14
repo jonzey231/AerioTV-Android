@@ -1157,6 +1157,8 @@ fun Modifier.settingsTvFocusableRow(traceTitle: String = "info"): Modifier {
 /**
  * AlertDialog with the app's themed dialog look (surface container, title on
  * onBackground, body on onSurfaceVariant), matching the other Settings dialogs.
+ * Built on the Text Size shim, so its window keeps Appearance > Text Size
+ * (Material's own dialog window drew it at 100%).
  */
 @androidx.compose.runtime.Composable
 fun SettingsAlertDialog(
@@ -1168,7 +1170,7 @@ fun SettingsAlertDialog(
     text: (@androidx.compose.runtime.Composable () -> Unit)? = null,
     properties: androidx.compose.ui.window.DialogProperties = androidx.compose.ui.window.DialogProperties(),
 ) {
-    androidx.compose.material3.AlertDialog(
+    com.aeriotv.android.ui.scale.AlertDialog(
         onDismissRequest = onDismissRequest,
         confirmButton = confirmButton,
         modifier = modifier,

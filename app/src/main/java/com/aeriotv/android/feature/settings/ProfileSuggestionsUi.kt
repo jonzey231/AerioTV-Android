@@ -648,8 +648,9 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolea
  * Apple's ServerUserCaption (12dbe4c): one line while it fits; otherwise the
  * note moves under the level and wraps, and the level never splits, so both
  * read in full at every Text Size. The key glyph rides the note's first
- * line, 6 dp before its text, and the note's wrapped lines start under
- * its text, as Apple's key sits beside the wrapping note.
+ * line, 6 dp before its text. Wrapped lines start at the key, not under
+ * the text: in the Add Profile dialog on a phone at 150% that indent left
+ * too little room and split "password" mid-word.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -672,7 +673,7 @@ internal fun ServerUserCaption(user: DispatcharrUserSummary) {
                     appendInlineContent(KEY_GLYPH_ID, "[key]")
                     append("Needs a password or API key")
                 },
-                style = style.copy(textIndent = androidx.compose.ui.text.style.TextIndent(restLine = slot)),
+                style = style,
                 color = color,
                 inlineContent = mapOf(
                     KEY_GLYPH_ID to androidx.compose.foundation.text.InlineTextContent(
