@@ -157,7 +157,7 @@ object StreamAddresses {
                 val b = request.newBuilder().url(d.url)
                 RedirectAuthRule.HEADERS.forEach { b.removeHeader(it) }
                 if (key != null && d.key != null) {
-                    com.aeriotv.android.core.playback.StreamAuth.authHeaders(d.key).forEach { (k, v) -> b.header(k, v) }
+                    com.aeriotv.android.core.playback.StreamAuth.authHeaders(d.key, d.url.toString()).forEach { (k, v) -> b.header(k, v) }
                 }
                 chain.proceed(b.build())
             }

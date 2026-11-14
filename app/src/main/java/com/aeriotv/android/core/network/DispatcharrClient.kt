@@ -2327,10 +2327,12 @@ class DispatcharrClient @Inject constructor() {
             if (m3uAccountId != null) add("m3u_account_id=$m3uAccountId")
         }
         val entry = if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
+        // X-API-Key only: this request creates the VOD session, and
+        // Dispatcharr's VOD proxy sends that session's Authorization header to
+        // the provider on every upstream fetch (VodSignIn).
         val request = Request.Builder()
             .url(entry)
             .header("X-API-Key", apiKey)
-            .header("Authorization", "ApiKey $apiKey")
             .header("Accept", "*/*")
             .build()
         noRedirectOkHttp.newCall(request).execute().use { response ->
@@ -2396,10 +2398,12 @@ class DispatcharrClient @Inject constructor() {
         m3uAccountId: Int? = null,
     ): String = withContext(Dispatchers.IO) {
         val entry = vodMovieUrl(baseUrl, movieUuid, streamId, m3uAccountId)
+        // X-API-Key only: this request creates the VOD session, and
+        // Dispatcharr's VOD proxy sends that session's Authorization header to
+        // the provider on every upstream fetch (VodSignIn).
         val request = Request.Builder()
             .url(entry)
             .header("X-API-Key", apiKey)
-            .header("Authorization", "ApiKey $apiKey")
             .header("Accept", "*/*")
             .build()
         noRedirectOkHttp.newCall(request).execute().use { response ->
