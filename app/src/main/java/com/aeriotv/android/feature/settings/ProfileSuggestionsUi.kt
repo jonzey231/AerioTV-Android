@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.draw.alpha
 
 /**
@@ -644,31 +645,55 @@ internal fun RoleChip(role: ProfileRole, enabled: Boolean = true, locked: Boolea
 /**
  * Server row subtitle: the server level (Admin or Standard) as a caption,
  * not a pill, plus a key note when the list has no api key for the user.
+ * Apple's ServerUserCaption (12dbe4c): one line while it fits; otherwise the
+ * note moves under the level and wraps, and the level never splits, so both
+ * read in full at every Text Size. The key glyph rides the note's first
+ * line, 6 dp before its text, and the note's wrapped lines start under
+ * its text, as Apple's key sits beside the wrapping note.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun ServerUserCaption(user: DispatcharrUserSummary) {
     val level = com.aeriotv.android.core.profiles.ProfileLevel.of(serverLevel(user))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(level.label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    val style = MaterialTheme.typography.bodySmall
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        Text(level.label, style = style, color = color, maxLines = 1, softWrap = false)
         if (user.apiKey.isNullOrBlank()) {
-            Spacer(Modifier.size(6.dp))
-            androidx.compose.material3.Icon(
-                androidx.compose.material.icons.Icons.Filled.Key,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.size(6.dp))
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            // The glyph keeps its 13 dp at every Text Size, plus the 6 dp gap.
+            val slot = with(density) { 19.dp.toSp() }
+            val glyph = with(density) { 13.dp.toSp() }
             Text(
-                "Needs a password or API key",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                androidx.compose.ui.text.buildAnnotatedString {
+                    appendInlineContent(KEY_GLYPH_ID, "[key]")
+                    append("Needs a password or API key")
+                },
+                style = style.copy(textIndent = androidx.compose.ui.text.style.TextIndent(restLine = slot)),
+                color = color,
+                inlineContent = mapOf(
+                    KEY_GLYPH_ID to androidx.compose.foundation.text.InlineTextContent(
+                        androidx.compose.ui.text.Placeholder(slot, glyph, androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter),
+                    ) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                            androidx.compose.material3.Icon(
+                                androidx.compose.material.icons.Icons.Filled.Key,
+                                contentDescription = null,
+                                tint = color,
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                    },
+                ),
             )
         }
     }
 }
+
+private const val KEY_GLYPH_ID = "key"
 
 /** Focusable button row that expands a section in place (TV: one focus stop). */
 @Composable
