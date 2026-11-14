@@ -102,12 +102,16 @@ class UserQrViewModel @Inject constructor(
     }
 
     suspend fun target(playlistId: String, profileId: String): Target? {
-        manager.userQrText(playlistId, profileId) ?: return null
+        // A code exists here (a stored key); whether it may show is [held].
+        if (!manager.hasUserQrKey(playlistId, profileId)) return null
         val p = manager.profiles(playlistId).first().firstOrNull { it.id == profileId } ?: return null
         return Target(playlistId, profileId, p.username, p.displayName)
     }
 
     suspend fun text(t: Target): String? = manager.userQrText(t.playlistId, t.profileId)
+
+    /** The code would name a server address not proven after a change: no code, the refusal line instead. */
+    suspend fun held(t: Target): Boolean = manager.userQrHeld(t.playlistId)
     fun needsPin(t: Target) = manager.userQrNeedsPin(t.playlistId, t.profileId)
     fun pinType(t: Target) = manager.userQrPinType(t.playlistId, t.profileId)
     fun verify(t: Target, entries: List<String>) = manager.verifyUserQrPin(t.playlistId, t.profileId, entries)
@@ -199,23 +203,31 @@ private fun UserQrFlow(t: UserQrViewModel.Target, vm: UserQrViewModel, onClose: 
         )
         return
     }
-    val text by produceState<String?>(null, t) { value = vm.text(t) }
+    // Held (the code would name an unproven address): no code and nothing
+    // secret on screen, so the window needs no screenshot block.
+    val held by produceState<Boolean?>(null, t) { value = vm.held(t) }
+    val isHeld = held ?: return
+    val text by produceState<String?>(null, t, isHeld) { value = if (isHeld) null else vm.text(t) }
     Dialog(
         onDismissRequest = onClose,
         // Its own buttons close it; a tap outside never does.
-        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn, dismissOnClickOutside = false),
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            securePolicy = if (isHeld) SecureFlagPolicy.Inherit else SecureFlagPolicy.SecureOn,
+            dismissOnClickOutside = false,
+        ),
     ) {
         val src = remember(text) { text?.let { vm.source(t, it) } }
         DisposableEffect(src) {
             onDispose { src?.stop() }
         }
         LaunchedEffect(src) { src?.start() }
-        UserQrScreen(text, t.username, src, onClose)
+        UserQrScreen(text, t.username, src, onClose, held = isHeld)
     }
 }
 
 @Composable
-private fun UserQrScreen(text: String?, username: String, source: com.aeriotv.android.core.setup.UserQrSource?, onClose: () -> Unit) {
+private fun UserQrScreen(text: String?, username: String, source: com.aeriotv.android.core.setup.UserQrSource?, onClose: () -> Unit, held: Boolean = false) {
     var revealed by remember { mutableStateOf(false) }
     LaunchedEffect(revealed) { if (revealed) { delay(60_000L); revealed = false } }
     val owner = LocalLifecycleOwner.current
@@ -243,7 +255,14 @@ private fun UserQrScreen(text: String?, username: String, source: com.aeriotv.an
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
-            Box(
+            // The address the code would name is not proven: the refusal
+            // line, as Fix Login shows it, and no code (StoredSecrets).
+            if (held) Text(
+                com.aeriotv.android.core.profiles.StoredSecrets.FIX_LOGIN_NEW_ADDRESS,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            ) else Box(
                 Modifier.size(260.dp).clip(RoundedCornerShape(16.dp)).background(Color.White)
                     .clickable { revealed = !revealed }.padding(12.dp),
                 contentAlignment = Alignment.Center,
@@ -262,7 +281,7 @@ private fun UserQrScreen(text: String?, username: String, source: com.aeriotv.an
                     }
                 }
             }
-            Text(
+            if (!held) Text(
                 "Anyone who scans this code can sign in as $username. It hides after 60 seconds.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

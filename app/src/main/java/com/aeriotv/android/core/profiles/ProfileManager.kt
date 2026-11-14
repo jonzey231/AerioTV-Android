@@ -1254,6 +1254,35 @@ class ProfileManager @Inject constructor(
     suspend fun userQrText(playlistId: String, profileId: String): String? {
         val row = playlistDao.rawById(playlistId) ?: return null
         if (!row.sourceType.startsWith("Dispatcharr")) return null
+        // The code carries the stored key and names the server URL: no code
+        // while that address is not proven after a change (StoredSecrets).
+        if (userQrHeld(playlistId)) {
+            StoredSecrets.noteRefused(playlistId, StoredSecrets.Path.UserQr)
+            return null
+        }
+        return userQrCode(playlistId, profileId, row)
+    }
+
+    /**
+     * Show User QR Code is held: an address the playlist uses (the server
+     * URL the code names, or its local URL) is not proven after a change,
+     * the same rule as Set up another device ([StoredSecrets.setupMayCarry]),
+     * so no code with the stored key shows until it is.
+     */
+    suspend fun userQrHeld(playlistId: String): Boolean {
+        val row = playlistDao.rawById(playlistId) ?: return false
+        return row.sourceType.startsWith("Dispatcharr") &&
+            !StoredSecrets.setupMayCarry(playlistId, row.urlString, row.lanUrlString)
+    }
+
+    /** Whether [profileId] has a code to show here at all (a stored key), proven or not. */
+    suspend fun hasUserQrKey(playlistId: String, profileId: String): Boolean {
+        val row = playlistDao.rawById(playlistId) ?: return false
+        if (!row.sourceType.startsWith("Dispatcharr")) return false
+        return userQrCode(playlistId, profileId, row) != null
+    }
+
+    private fun userQrCode(playlistId: String, profileId: String, row: com.aeriotv.android.core.data.db.entity.PlaylistEntity): String? {
         val p = store.byId(profileId)?.takeIf { it.playlistId == playlistId }
             ?.let { ProfileHostHold.withoutHeldSignIn(it, hostHolds.isHeld(it.id)) } ?: return null
         val key = (if (p.isDefault) row.apiKey else p.apiKey)?.takeIf { it.isNotBlank() } ?: return null

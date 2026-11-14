@@ -42,6 +42,7 @@ object StoredSecrets {
         FixLogin("Fix Login"),
         DispatcharrSync("Dispatcharr Sync"),
         DeviceSetup("Set up another device"),
+        UserQr("Show User QR Code"),
     }
 
     /** Edit Playlist and Refresh Session at a new address with no typed password (Apple copy). */

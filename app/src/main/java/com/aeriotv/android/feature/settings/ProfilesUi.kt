@@ -118,7 +118,7 @@ class ProfilesViewModel @Inject constructor(
     /** App-local Admin role: add and remove profiles (server level not needed). */
     /** Set up a TV sender gate (docs/DeviceSetupHandoff.md). */
     fun canSetUpTv(playlistId: String): Boolean = manager.canSetUpTv(playlistId)
-    suspend fun hasUserQr(playlistId: String, profileId: String): Boolean = manager.userQrText(playlistId, profileId) != null
+    suspend fun hasUserQr(playlistId: String, profileId: String): Boolean = manager.hasUserQrKey(playlistId, profileId)
 
     suspend fun isAdmin(playlistId: String) =
         com.aeriotv.android.core.profiles.RoleRules.canManageProfiles(manager.activeRole(playlistId)) &&
