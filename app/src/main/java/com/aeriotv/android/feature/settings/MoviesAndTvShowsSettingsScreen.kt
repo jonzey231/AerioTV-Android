@@ -45,6 +45,7 @@ import com.aeriotv.android.ui.settings.SettingsTextField
 import com.aeriotv.android.ui.settings.SettingsToggleRow
 import com.aeriotv.android.ui.settings.dpadFocusRing
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
+import com.aeriotv.android.ui.settings.settingsFooterPull
 import com.aeriotv.android.ui.settings.settingsFormWidth
 import com.aeriotv.android.ui.tv.TvKeyboardOnOkHost
 
@@ -121,10 +122,11 @@ fun MoviesAndTvShowsSettingsScreen(
                         Column {
                             SettingsSection(
                                 header = "The Movie Database",
-                                // Apple iOS: the footer is always shown. Apple tvOS:
-                                // the same text sits under the buttons, only while
-                                // the toggle is on (rendered below the card here).
-                                footer = if (isTv) null else TMDB_FOOTER_PHONE,
+                                // Apple iOS: the footer is always shown, with the
+                                // short attribution in it. Apple tvOS: the same text
+                                // sits under the buttons, only while the toggle is
+                                // on. Both are rendered below the card here.
+                                footer = null,
                             ) {
                                 SettingsToggleRow(
                                     title = "Use TMDB for Movies and TV Shows",
@@ -204,17 +206,34 @@ fun MoviesAndTvShowsSettingsScreen(
                                     }
                                 }
                             }
-                            if (isTv && programPostersTmdb) {
-                                com.aeriotv.android.ui.settings.SettingsSectionFooter(TMDB_FOOTER_TV)
+                            if (isTv) {
+                                if (programPostersTmdb) {
+                                    com.aeriotv.android.ui.settings.SettingsSectionFooter(TMDB_FOOTER_TV)
+                                }
+                                // Apple tvOS: long attribution below, always.
+                                TmdbAttribution(
+                                    modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 8.dp),
+                                    long = true,
+                                    isTv = true,
+                                    caption = true,
+                                )
+                            } else {
+                                // Apple iOS: the footer is VStack(spacing: 10) of the
+                                // text and the short attribution, so the logo starts
+                                // 10 under the text, and the pair ends the section:
+                                // the footer pull applies to the pair, not to the
+                                // text, which let the logo draw over its last line.
+                                val inset = com.aeriotv.android.ui.settings.settingsRowInsetH()
+                                Column(modifier = Modifier.settingsFooterPull()) {
+                                    com.aeriotv.android.ui.settings.SettingsSectionFooter(TMDB_FOOTER_PHONE)
+                                    TmdbAttribution(
+                                        modifier = Modifier.padding(start = inset, end = inset, top = 10.dp),
+                                        long = false,
+                                        isTv = false,
+                                        caption = false,
+                                    )
+                                }
                             }
-                            // Apple iOS: short attribution inside the footer, always.
-                            // Apple tvOS: long attribution below, always.
-                            TmdbAttribution(
-                                modifier = Modifier.padding(horizontal = com.aeriotv.android.ui.settings.settingsRowInsetH(), vertical = 8.dp),
-                                long = isTv,
-                                isTv = isTv,
-                                caption = isTv,
-                            )
                         }
                     }
 
