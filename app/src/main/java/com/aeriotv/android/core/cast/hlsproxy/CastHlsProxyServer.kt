@@ -6,6 +6,8 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +42,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * Every response carries `Access-Control-Allow-Origin: *` because the
  * receiver page's origin is Google's, not ours, and Chromium enforces
  * CORS on MSE fetches.
+ *
+ * The listener binds every interface, so every path above sits behind a
+ * per-session path token ([pathToken], 128 random bits, new at each
+ * [start]): the URL handed to the receiver is /<token>/demuxed.m3u8, every
+ * URI in the playlists carries the token, and anything without it is a
+ * 404. Another device on the network cannot read the stream by guessing
+ * the port. No API key is ever in these URLs; the token is not one.
  *
  * Segment store: an in-memory ring of the last [RING_SIZE] segments
  * (about 3 s each; 16 advertised plus a short tail). Generations
@@ -147,6 +156,29 @@ class CastHlsProxyServer(
         /** After [VERBOSE_REQUESTS], only non-200 responses and every
          *  Nth request are logged, so a long cast does not flood. */
         private const val REQUEST_LOG_EVERY = 50
+
+        /** Random bytes in a session's path token (128 bits). */
+        internal const val PATH_TOKEN_BYTES = 16
+
+        /** A fresh path token: [PATH_TOKEN_BYTES] random bytes, lowercase hex. */
+        internal fun newPathToken(random: SecureRandom = SecureRandom()): String =
+            ByteArray(PATH_TOKEN_BYTES).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+
+        /**
+         * The route a request asks for once its token checks out: "/<token>/x"
+         * is "/x"; anything else (no token, a wrong one, or no token issued)
+         * is null, which the server answers 404. The token compare does not
+         * stop at the first differing byte.
+         */
+        internal fun routeFor(rawPath: String, token: String): String? {
+            if (token.isEmpty() || !rawPath.startsWith("/")) return null
+            val rest = rawPath.substring(1)
+            val slash = rest.indexOf('/')
+            if (slash <= 0) return null
+            val presented = rest.substring(0, slash)
+            if (!MessageDigest.isEqual(presented.toByteArray(Charsets.US_ASCII), token.toByteArray(Charsets.US_ASCII))) return null
+            return rest.substring(slash)
+        }
 
         private const val MIME_PLAYLIST = "application/vnd.apple.mpegurl"
         private const val MIME_MP4 = "video/mp4"
@@ -282,12 +314,24 @@ class CastHlsProxyServer(
     @Volatile var boundPort: Int = 0
         private set
 
+    /** This listener's path token, issued by [start] and cleared by [stop];
+     *  every URL handed out and every playlist URI begins with /<token>/. */
+    @Volatile var pathToken: String = ""
+        private set
+
+    /** [name] as the playlists list it: behind the session's path token. */
+    private fun uri(name: String): String = if (pathToken.isEmpty()) name else "/$pathToken/$name"
+
+    /** [text] with the session's token masked, for the log. */
+    private fun masked(text: String): String = if (pathToken.isEmpty()) text else text.replace(pathToken, "<token>")
+
     /** Bind and start accepting. Idempotent. Binds the wildcard address
      *  (the URL handed to the receiver carries the Wi-Fi LAN IP; binding
      *  only that IP would break when Android re-ranks interfaces
      *  mid-session). Returns the bound port. */
     fun start(): Int {
         if (running.get()) return boundPort
+        pathToken = newPathToken()
         val socket = ServerSocket(0, 8, null as InetAddress?)
         serverSocket = socket
         boundPort = socket.localPort
@@ -302,6 +346,7 @@ class CastHlsProxyServer(
 
     fun stop() {
         if (!running.getAndSet(false)) return
+        pathToken = ""
         runCatching { serverSocket?.close() }
         serverSocket = null
         acceptThread = null
@@ -647,7 +692,7 @@ class CastHlsProxyServer(
         if (audioCodec != null) {
             sb.append(
                 "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Main\"," +
-                    "DEFAULT=YES,AUTOSELECT=YES,URI=\"audio.m3u8\"\n",
+                    "DEFAULT=YES,AUTOSELECT=YES,URI=\"" + uri("audio.m3u8") + "\"\n",
             )
         }
         sb.append("#EXT-X-STREAM-INF:BANDWIDTH=12000000,CODECS=\"").append(videoCodec)
@@ -655,7 +700,7 @@ class CastHlsProxyServer(
         sb.append('"')
         if (audioCodec != null) sb.append(",AUDIO=\"aud\"")
         sb.append(",CLOSED-CAPTIONS=NONE\n")
-        sb.append("video.m3u8\n")
+        sb.append(uri("video.m3u8")).append('\n')
         return sb.toString()
     }
 
@@ -668,7 +713,7 @@ class CastHlsProxyServer(
         val codec = audioCodecString(audioInit) ?: return null
         return "#EXTM3U\n" +
             "#EXT-X-STREAM-INF:BANDWIDTH=$AUDIO_ONLY_BANDWIDTH,CODECS=\"$codec\"\n" +
-            "audio.m3u8\n"
+            uri("audio.m3u8") + "\n"
     }
 
     /** True when the current generation is an audio-only program. */
@@ -814,14 +859,13 @@ class CastHlsProxyServer(
             // media time 0, which is exactly where our tfdt timestamps put
             // them, and the same playlist reached PLAYING (session10).
             if (seg.generation != lastGen) {
-                sb.append("#EXT-X-MAP:URI=\"").append(initPrefix)
-                    .append(seg.generation).append(".mp4\"\n")
+                sb.append("#EXT-X-MAP:URI=\"").append(uri("$initPrefix${seg.generation}.mp4")).append("\"\n")
                 lastGen = seg.generation
             }
             val ticks = if (rendition == Rendition.AUDIO) seg.audioDurationTicks else seg.durationTicks
             val seconds = ticks / TsToFmp4Remuxer.TICKS_PER_SECOND.toDouble()
             sb.append("#EXTINF:").append(String.format(java.util.Locale.US, "%.3f", seconds)).append(",\n")
-            sb.append(segPrefix).append(seg.seq).append(".m4s\n")
+            sb.append(uri("$segPrefix${seg.seq}.m4s")).append('\n')
         }
         // LIVE playlist: no EXT-X-ENDLIST, ever; the advancing
         // MEDIA-SEQUENCE is the manifest clock the progressive URL lacked.
@@ -861,7 +905,14 @@ class CastHlsProxyServer(
             val parts = requestLine.split(' ')
             if (parts.size < 2) return
             val method = parts[0]
-            val path = parts[1].substringBefore('?')
+            // Every route sits behind the session's path token; without it
+            // (another device guessing the port) the answer is 404.
+            val path = routeFor(parts[1].substringBefore('?'), pathToken)
+            if (path == null) {
+                log("$method <no token> 404")
+                respond(out, 404, "Not Found", "text/plain", "not found".toByteArray())
+                return
+            }
             if (method == "OPTIONS") {
                 respond(out, 204, "No Content", null, ByteArray(0))
                 return
@@ -883,7 +934,7 @@ class CastHlsProxyServer(
                     body = text.toByteArray(Charsets.UTF_8)
                     mime = MIME_PLAYLIST
                     if (demuxedMasterTextLogged.compareAndSet(false, true)) {
-                        log("demuxed master playlist: ${escaped(text)}")
+                        log("demuxed master playlist: ${escaped(masked(text))}")
                     }
                 }
                 path == "/video.m3u8" -> {
@@ -894,7 +945,7 @@ class CastHlsProxyServer(
                         log("receiver fetched the playlist for the first time (${sock.inetAddress?.hostAddress})")
                     }
                     if (videoPlaylistTextLogged.compareAndSet(false, true)) {
-                        log("video playlist: ${escaped(text)}")
+                        log("video playlist: ${escaped(masked(text))}")
                     }
                 }
                 path == "/audio.m3u8" -> {
@@ -902,7 +953,7 @@ class CastHlsProxyServer(
                     body = text.toByteArray(Charsets.UTF_8)
                     mime = MIME_PLAYLIST
                     if (audioPlaylistTextLogged.compareAndSet(false, true)) {
-                        log("audio playlist: ${escaped(text)}")
+                        log("audio playlist: ${escaped(masked(text))}")
                     }
                 }
                 path.startsWith("/vinit") && path.endsWith(".mp4") -> {

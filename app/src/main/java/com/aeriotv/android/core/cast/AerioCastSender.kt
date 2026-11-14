@@ -84,7 +84,7 @@ class AerioCastSender @Inject constructor(
          * for the devices Cast Connect can't launch the native app on: legacy
          * Chromecast dongles, Nest Hub, Google Home displays, any non-Android-TV
          * Cast target. Phase 1 of the casting rework: this is now the PHONE-LOCAL
-         * HLS proxy playlist (http://<phoneLanIp>:<port>/demuxed.m3u8) built by
+         * HLS proxy playlist (http://<phoneLanIp>:<port>/<path token>/demuxed.m3u8) built by
          * [CastHlsProxySession], which ingests the channel's raw MPEG-TS and
          * re-serves it as sliding-window live HLS with fMP4 segments. The previous
          * Dispatcharr progressive-fMP4 URL stuttered every 10-15 s on the styled
