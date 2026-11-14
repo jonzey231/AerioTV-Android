@@ -936,10 +936,11 @@ private fun SignOutButton(busy: Boolean, onClick: () -> Unit) {
  * system font, so this uses the system sans-serif (Roboto) in medium.
  * On TV, focus draws AerioTV's ring around the button, outside it, and the
  * button's own colors never change; on touch a press shows the standard
- * ripple.
+ * ripple. The one Google sign-in button: Settings > Sync and the onboarding
+ * Drive offer (DriveBackupOfferStepScreen) both draw this.
  */
 @Composable
-private fun GoogleSignInButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun GoogleSignInButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val tv = rememberIsTvDevice()
     var focused by remember { mutableStateOf(false) }
     val pill = RoundedCornerShape(50)

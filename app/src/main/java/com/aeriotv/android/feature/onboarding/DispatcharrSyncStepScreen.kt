@@ -212,6 +212,10 @@ fun DispatcharrSyncStepScreen(
  * Full-screen Dispatcharr Sync prompt layout shared by the onboarding step and
  * the main-screen offers (matches the Apple prompts): centered title, body, a
  * filled accent pill, an outlined pill, and an optional footer.
+ * [primaryButton] draws the primary action itself in place of the accent
+ * pill, at its own size (the Drive offer's Sign in with Google, which keeps
+ * Google's look); it gets the focus modifier, [primaryLabel] still names it in
+ * the focus trace, and [busy] shows a spinner under the buttons, not in it.
  */
 @Composable
 fun SyncPromptLayout(
@@ -226,9 +230,10 @@ fun SyncPromptLayout(
     busy: Boolean = false,
     primaryFocus: androidx.compose.ui.focus.FocusRequester? = null,
     footer: String? = "You can change this later in Settings > Sync.",
+    primaryButton: (@Composable (Modifier) -> Unit)? = null,
 ) {
     if (com.aeriotv.android.ui.settings.rememberIsTvDevice()) {
-        TvSyncPromptLayout(title, body, primaryLabel, secondaryLabel, onPrimary, onSecondary, modifier, lead, busy, primaryFocus, footer)
+        TvSyncPromptLayout(title, body, primaryLabel, secondaryLabel, onPrimary, onSecondary, modifier, lead, busy, primaryFocus, footer, primaryButton)
         return
     }
     val vp = com.aeriotv.android.ui.adaptive.rememberViewport()
@@ -272,23 +277,30 @@ fun SyncPromptLayout(
             Spacer(Modifier.height(8.dp))
             // Buttons are never disabled mid-flow (TV focus would fall away);
             // taps are ignored while busy instead.
-            Button(
-                onClick = onPrimary,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
-                    .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
-                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                else Text(primaryLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (primaryButton != null) {
+                primaryButton(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
+            } else {
+                Button(
+                    onClick = onPrimary,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
+                        .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
+                        .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                ) {
+                    if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                    else Text(primaryLabel, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
             }
             OutlinedButton(
                 onClick = onSecondary,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
             ) { Text(secondaryLabel, style = MaterialTheme.typography.titleMedium) }
+            if (primaryButton != null && busy) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
             if (footer != null) {
                 Text(
                     footer,
@@ -322,6 +334,7 @@ private fun TvSyncPromptLayout(
     busy: Boolean,
     primaryFocus: androidx.compose.ui.focus.FocusRequester?,
     footer: String?,
+    primaryButton: (@Composable (Modifier) -> Unit)?,
 ) {
     androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = modifier.fillMaxSize(),
@@ -377,17 +390,27 @@ private fun TvSyncPromptLayout(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
-                // Shared onboarding pill; ring 3 Apple TV points (3 px at 1080p).
-                com.aeriotv.android.feature.onboarding.components.OnboardingPill(
-                    filled = true,
-                    onClick = onPrimary,
-                    ringWidth = u * 3f,
-                    modifier = Modifier.padding(top = u * 8f).fillMaxWidth().height(u * 66f)
-                        .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
-                        .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$primaryLabel") },
-                ) {
-                    if (busy) CircularProgressIndicator(Modifier.size(u * 30f), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = u * 3f)
-                    else Text(primaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.Bold)
+                if (primaryButton != null) {
+                    // Drawn by the caller at its own size, never stretched to
+                    // the column; it reports focus to the trace by its label.
+                    primaryButton(
+                        Modifier.padding(top = u * 8f)
+                            .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
+                            .onFocusChanged { if (it.hasFocus) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$primaryLabel") },
+                    )
+                } else {
+                    // Shared onboarding pill; ring 3 Apple TV points (3 px at 1080p).
+                    com.aeriotv.android.feature.onboarding.components.OnboardingPill(
+                        filled = true,
+                        onClick = onPrimary,
+                        ringWidth = u * 3f,
+                        modifier = Modifier.padding(top = u * 8f).fillMaxWidth().height(u * 66f)
+                            .then(if (primaryFocus != null) Modifier.focusRequester(primaryFocus) else Modifier)
+                            .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$primaryLabel") },
+                    ) {
+                        if (busy) CircularProgressIndicator(Modifier.size(u * 30f), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = u * 3f)
+                        else Text(primaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
                 com.aeriotv.android.feature.onboarding.components.OnboardingPill(
                     filled = false,
@@ -396,6 +419,9 @@ private fun TvSyncPromptLayout(
                     modifier = Modifier.fillMaxWidth().height(u * 66f)
                         .onFocusChanged { if (it.isFocused) com.aeriotv.android.ui.tv.TvFocusTrace.focus("prompt:$secondaryLabel") },
                 ) { Text(secondaryLabel, fontSize = sp(23f), letterSpacing = 0.sp, fontWeight = FontWeight.SemiBold) }
+                if (primaryButton != null && busy) {
+                    CircularProgressIndicator(Modifier.size(u * 30f), strokeWidth = u * 3f)
+                }
                 if (footer != null) {
                     Text(
                         footer,

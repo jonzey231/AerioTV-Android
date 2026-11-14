@@ -17,8 +17,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -40,6 +38,9 @@ import com.aeriotv.android.ui.settings.dpadFocusRing
  * Onboarding step after "Turn on Dispatcharr Sync?" when Drive is off
  * (Logan, 2026-10-30): one tap signs in to Google and turns Drive on.
  * Buttons are never disabled mid-flow (TV focus); taps are ignored while [busy].
+ * The sign-in is Google's own branded button (GoogleSignInButton, as in
+ * Settings > Sync) at its natural size on every device, never stretched,
+ * recolored, or dimmed; while [busy] a spinner shows under the buttons.
  */
 @Composable
 fun DriveBackupOfferStepScreen(
@@ -64,6 +65,9 @@ fun DriveBackupOfferStepScreen(
             busy = busy,
             primaryFocus = focus,
             footer = null,
+            primaryButton = { m ->
+                com.aeriotv.android.feature.settings.GoogleSignInButton(onClick = { if (!busy) onSignIn() }, modifier = m)
+            },
         )
         return
     }
@@ -97,23 +101,15 @@ fun DriveBackupOfferStepScreen(
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(8.dp))
-            Button(
+            com.aeriotv.android.feature.settings.GoogleSignInButton(
                 onClick = { if (!busy) onSignIn() },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
-                    .focusRequester(focus)
-                    .dpadFocusRing(RoundedCornerShape(50), onFilled = true),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                else Text("Sign in with Google", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            }
+                modifier = Modifier.focusRequester(focus),
+            )
             OutlinedButton(
                 onClick = { if (!busy) onNotNow() },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).dpadFocusRing(RoundedCornerShape(50)),
             ) { Text("Not now", style = MaterialTheme.typography.titleMedium) }
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
         }
     }
 }
