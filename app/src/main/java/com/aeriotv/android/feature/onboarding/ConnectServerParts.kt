@@ -173,16 +173,19 @@ internal fun DispatcharrHeroCard(
                 )
             }
         } else {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onScanQr, colors = filled, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+            // Apple 2dc0045: at a large Text Size a label wraps, the wrapped
+            // lines are centered, and both buttons take the taller one's
+            // height (the row sizes to its tallest child).
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onScanQr, colors = filled, modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 48.dp)) {
                     Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.size(8.dp))
-                    Text("Scan QR code")
+                    Text("Scan QR code", textAlign = TextAlign.Center)
                 }
-                OutlinedButton(onClick = onEnterDetails, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                OutlinedButton(onClick = onEnterDetails, modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 48.dp)) {
                     Icon(Icons.AutoMirrored.Outlined.Login, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.size(8.dp))
-                    Text("Enter details")
+                    Text("Enter details", textAlign = TextAlign.Center)
                 }
             }
         }
