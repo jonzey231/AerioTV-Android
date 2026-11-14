@@ -31,11 +31,12 @@ fun TmdbAttribution(
         isTv -> 44.dp
         else -> 28.dp
     }
-    // Phones and tablets: Apple's TMDBAttributionView, VStack(spacing: 8)
-    // with the lines in textTertiary, the dim footer ink (colorScheme
-    // .tertiary, as the Settings footers). Android TV keeps its own look.
-    val lineColor = if (isTv) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.tertiary
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(if (isTv) 4.dp else 8.dp)) {
+    // Apple's TMDBAttributionView on every platform: VStack(spacing: 8) with
+    // the lines in textTertiary, the dim footer ink (colorScheme.tertiary,
+    // as the Settings footers; in dark mode the accent at 28% on phones and
+    // tablets and 45% on Android TV, as on Apple TV).
+    val lineColor = MaterialTheme.colorScheme.tertiary
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Image(
             painter = painterResource(id = if (long) R.drawable.ic_tmdb_long else R.drawable.ic_tmdb_short),
             contentDescription = "The Movie Database",
