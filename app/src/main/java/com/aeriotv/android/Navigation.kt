@@ -2270,6 +2270,11 @@ fun AerioTVNavHost(
                             else -> navController.navigate(Routes.player(channel.id)) { launchSingleTop = true }
                         }
                     },
+                    // The same Channels and Programs sections as the Search tab:
+                    // without them this route (the guide's Search action, hold-Down
+                    // in the player) showed the old guide rows, and a later program
+                    // jumped to the guide instead of opening Program Info.
+                    liveData = playlistVm::searchLiveData,
                 )
             }
 

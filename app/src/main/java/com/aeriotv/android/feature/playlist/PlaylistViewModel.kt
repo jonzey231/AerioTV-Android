@@ -408,6 +408,16 @@ class PlaylistViewModel @Inject constructor(
         _liveTvTabRequests.tryEmit(Unit)
     }
 
+    /**
+     * The loaded channels and guide map behind Search's "Channels" and
+     * "Programs" sections. Every Search entry point (the TV Search tab, and
+     * the pushed Search route from the guide's Search action or hold-Down in
+     * the player) reads this one source, so they show the same results and
+     * a row does the same thing in each.
+     */
+    fun searchLiveData(): Pair<List<com.aeriotv.android.core.data.M3UChannel>, Map<String, List<com.aeriotv.android.core.data.EPGProgramme>>> =
+        state.value.let { it.channels to it.epgByChannel }
+
     /** Called when a Search EPG result is tapped: stash + broadcast the
      *  jump, and force the group filter back to All so the target channel is
      *  guaranteed visible (iOS ChannelListView sets selectedGroup='All').

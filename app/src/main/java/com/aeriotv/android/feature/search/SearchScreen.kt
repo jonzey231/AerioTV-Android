@@ -263,9 +263,9 @@ fun SearchScreen(
                         onPlayChannel?.invoke(ch.id)
                     },
                     onProgram = { hit ->
-                        if (hit.isAiring(System.currentTimeMillis()) && onPlayChannel != null) {
+                        if (programHitAction(hit, System.currentTimeMillis(), onPlayChannel != null) == ProgramHitAction.PlayChannel) {
                             android.util.Log.i("AerioSearch", "[SEARCH] program hit: play channel")
-                            onPlayChannel(hit.channel.id)
+                            onPlayChannel?.invoke(hit.channel.id)
                         } else {
                             android.util.Log.i("AerioSearch", "[SEARCH] program hit: program info")
                             liveInfo = hit.programme.toInfoTarget(hit.channel.name, hit.channel.dispatcharrChannelId)
@@ -619,6 +619,20 @@ private fun Modifier.upTo(target: FocusRequester): Modifier = onPreviewKeyEvent 
     e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp &&
         runCatching { target.requestFocus() }.isSuccess
 }
+
+/** What a Programs row does, at every Search entry point. */
+internal enum class ProgramHitAction { PlayChannel, ProgramInfo }
+
+/**
+ * A program airing now plays its channel; a later (or earlier) one opens
+ * Program Info over the results, which Back closes. With no way to play
+ * ([canPlay] false) every row opens Program Info.
+ */
+internal fun programHitAction(
+    hit: com.aeriotv.android.feature.livetv.LiveProgramHit,
+    nowMillis: Long,
+    canPlay: Boolean,
+): ProgramHitAction = if (canPlay && hit.isAiring(nowMillis)) ProgramHitAction.PlayChannel else ProgramHitAction.ProgramInfo
 
 /** Channels and Programs for the TV Live TV search sections. */
 private class LiveSections(
