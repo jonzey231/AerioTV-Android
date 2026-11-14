@@ -571,8 +571,11 @@ private fun Message(title: String, body: String, primary: Pair<String, () -> Uni
         Spacer(Modifier.height(12.dp))
         Text(body, style = MaterialTheme.typography.bodyLarge.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
+        // Cancel's 54 dp, so the two pills in a row are the same height
+        // (Apple's pills share one minimum height); Material's 40 dp left the
+        // primary shorter.
         val primaryButton: @Composable (Modifier) -> Unit = { m ->
-            Button(onClick = primary.second, modifier = m.focusRequester(focus).dpadFocusRing(RoundedCornerShape(50))) {
+            Button(onClick = primary.second, modifier = m.heightIn(min = 54.dp).focusRequester(focus).dpadFocusRing(RoundedCornerShape(50))) {
                 Text(primary.first, textAlign = TextAlign.Center)
             }
         }
@@ -620,7 +623,7 @@ private fun Message(title: String, body: String, primary: Pair<String, () -> Uni
                 }
             } else {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    primaryButton(Modifier.fillMaxWidth().heightIn(min = 54.dp))
+                    primaryButton(Modifier.fillMaxWidth())
                     cancelButton(Modifier.fillMaxWidth())
                 }
             }
