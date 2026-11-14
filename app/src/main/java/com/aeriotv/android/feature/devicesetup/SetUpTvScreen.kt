@@ -259,7 +259,15 @@ class SetUpTvViewModel @Inject constructor(
             val fixFor = target.playlistId?.takeIf { target.isFixLogin }
             val payload = (if (fixFor != null) sender.buildFixLoginPayload(id, fixFor)
                 else sender.buildPayload(id, profileIds, sync, userOnly = _userOnly.value))
-                ?: run { _step.value = Step.Error("This playlist could not be read.", back); return@launch }
+                ?: run {
+                    // Fix Login with an address not proven after a change has no
+                    // sign-in it may send: say so (StoredSecrets), not "could not be read".
+                    val line = if (fixFor != null && com.aeriotv.android.core.profiles.StoredSecrets.isRouteUnproven(id)) {
+                        com.aeriotv.android.core.profiles.StoredSecrets.FIX_LOGIN_NEW_ADDRESS
+                    } else "This playlist could not be read."
+                    _step.value = Step.Error(line, back)
+                    return@launch
+                }
             if (fixFor != null) android.util.Log.i("AerioSetup", "[SETUP] fix login: sending ${id.take(8)}'s sign-in for ${fixFor.take(8)}")
             // Never hand over a key the server refuses (2026-11-09): one
             // authenticated request with exactly the key in the payload.
