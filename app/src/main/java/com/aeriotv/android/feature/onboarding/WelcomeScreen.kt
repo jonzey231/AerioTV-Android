@@ -137,7 +137,10 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
     // Logan, 2026-10-29: the logo floats centered between the status bar and
     // the headline; the headline, cards, and Skip sit in the lower part of
     // the screen. Weights only apply when there is room; on a short screen
-    // the band collapses to a fixed gap and the column scrolls.
+    // the band collapses to a fixed gap. The column always scrolls: on a
+    // tall screen it is at least the screen's height, so while everything
+    // fits the weights lay it out exactly as before, and at a large Text
+    // Size (150% on a phone hid Skip for now) it grows and scrolls instead.
     BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
         val tall = maxHeight >= 640.dp
         Column(
@@ -145,7 +148,8 @@ private fun WelcomeSingleColumn(c: WelcomeContent) {
                 .widthIn(max = 560.dp)
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .then(if (tall) Modifier.fillMaxHeight() else Modifier.verticalScroll(rememberScrollState()))
+                .verticalScroll(rememberScrollState())
+                .then(if (tall) Modifier.heightIn(min = maxHeight) else Modifier)
                 .padding(horizontal = 20.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
