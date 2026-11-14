@@ -12,6 +12,7 @@ import com.aeriotv.android.core.data.db.entity.PlaylistEntity
 import com.aeriotv.android.core.preferences.AppPreferences
 import com.aeriotv.android.core.profiles.PinRules
 import com.aeriotv.android.core.profiles.ProfileManager
+import com.aeriotv.android.core.profiles.StoredSecrets
 import com.aeriotv.android.core.profiles.effectiveRole
 import com.aeriotv.android.core.sync.dsync.DispatcharrSyncManager
 import kotlinx.coroutines.Dispatchers
@@ -219,10 +220,12 @@ class SetupSender(
         val row = profiles.defaultPlaylistRow(playlistId) ?: return null
         val isD = row.sourceType.startsWith("Dispatcharr")
         val currentId = profiles.activeProfile(playlistId)?.id
+        // What a setup would carry: nothing stored while an address it names is unproven.
+        val carry = mayCarry(playlistId, row)
         val choices = if (!isD) emptyList() else profiles.setupSources(playlistId).map { s ->
             val p = s.profile
-            val key = if (p.isDefault) row.apiKey else p.apiKey
-            val pw = if (p.isDefault) row.password else p.password
+            val key = (if (p.isDefault) row.apiKey else p.apiKey).takeIf { carry }
+            val pw = (if (p.isDefault) row.password else p.password).takeIf { carry }
             ProfileChoice(
                 profileId = p.id,
                 displayName = p.displayName,
@@ -254,6 +257,15 @@ class SetupSender(
             else -> "m3u"
         }
         val offset = runCatching { prefs.catchupTimeOffsetMinutes(playlistId).first() }.getOrDefault(0)
+        // The receiving device saves this sign-in and signs in with it at the
+        // server URL and the local URL below, so the playlist's stored secrets
+        // (saved password, stored key, profiles' sign-ins) go only when every
+        // one of those addresses is proven (StoredSecrets; Apple a634285).
+        val carry = mayCarry(playlistId, row)
+        if (!carry && (!row.apiKey.isNullOrBlank() || !row.password.isNullOrBlank())) {
+            StoredSecrets.noteRefused(playlistId, StoredSecrets.Path.DeviceSetup)
+        }
+        val credential = setupCredential(row.apiKey, row.username, row.password, carry)
         val playlist = SetupProtocol.PlaylistPart(
             id = row.id,
             type = type,
@@ -266,12 +278,10 @@ class SetupSender(
             catchupOffsetMinutes = offset,
             vodEnabled = row.vodEnabled,
             channelProfileIds = listOfNotNull(row.dispatcharrProfileId),
-            credential = SetupProtocol.Credential(
-                apiKey = row.apiKey?.takeIf { it.isNotBlank() },
-                username = row.username?.takeIf { it.isNotBlank() },
-                password = row.password?.takeIf { it.isNotBlank() },
-            ).takeIf { it.apiKey != null || it.username != null || it.password != null },
+            credential = credential,
         )
+        // Presence only, never a value.
+        Log.i(TAG, "[SETUP] payload sign-in key=${presence(credential?.apiKey)} password=${presence(credential?.password)}")
         if (type != "dispatcharr") return SetupProtocol.Payload(playlist = playlist)
         val parts = profiles.setupSources(playlistId).withIndex()
             .filter { (_, s) -> s.profile.isDefault || s.profile.id in profileIds }
@@ -286,7 +296,7 @@ class SetupSender(
                     avatar = p.avatar?.let { SetupProtocol.Avatar(it.icon, it.color) },
                     order = index,
                     isDefault = p.isDefault,
-                    credential = if (p.isDefault) null else SetupProtocol.Credential(
+                    credential = if (p.isDefault || !carry) null else SetupProtocol.Credential(
                         apiKey = p.apiKey?.takeIf { it.isNotBlank() },
                         password = p.password?.takeIf { it.isNotBlank() },
                     ),
@@ -295,6 +305,7 @@ class SetupSender(
                     pinSalt = pin?.salt.orEmpty(),
                 )
             }
+        Log.i(TAG, "[SETUP] payload profiles=${parts.size} withSignIn=${parts.count { it.credential != null }}")
         return SetupProtocol.Payload(
             playlist = playlist,
             profiles = parts,
@@ -302,12 +313,18 @@ class SetupSender(
         )
     }
 
+    /** Whether a setup for [playlistId] may carry its stored secrets ([StoredSecrets.setupMayCarry]). */
+    private fun mayCarry(playlistId: String, row: PlaylistEntity): Boolean =
+        StoredSecrets.setupMayCarry(playlistId, row.urlString, row.lanUrlString)
+
     /**
      * Fix Login: only [playlistId]'s own sign-in (the default profile's, as
      * in a full setup), marked [SetupProtocol.MODE_FIX_LOGIN], with
      * `playlist.id` set to the TV's advertised [receiverPlaylistId] so the TV
      * updates the playlist it asked about. No profiles, no sync choice. Null
-     * when the playlist cannot be read or has no sign-in to send.
+     * when the playlist cannot be read or has no sign-in to send, which
+     * includes an address it names that is not proven yet (buildPayload
+     * leaves the stored key and password out then).
      */
     suspend fun buildFixLoginPayload(playlistId: String, receiverPlaylistId: String): SetupProtocol.Payload? {
         val full = buildPayload(playlistId, emptySet(), turnOnSync = false) ?: return null
@@ -322,7 +339,10 @@ class SetupSender(
         val src = profiles.setupSources(playlistId).firstOrNull { it.profile.id == activeId }
             ?: profiles.setupSources(playlistId).firstOrNull { it.profile.isDefault } ?: return full
         val p = src.profile
-        val cred = if (p.isDefault) full.playlist.credential else userOnlyCredential(p.apiKey, p.username, p.password) ?: return null
+        // The default profile's sign-in is the playlist's, already gated in buildPayload.
+        val carry = mayCarry(playlistId, row)
+        val cred = if (p.isDefault) full.playlist.credential
+            else userOnlyCredential(p.apiKey?.takeIf { carry }, p.username, p.password?.takeIf { carry }) ?: return null
         val pin = src.pin
         return full.copy(
             // Another user's sign-in is another account, so another playlist:
@@ -457,6 +477,22 @@ internal fun fixLoginPayload(playlist: SetupProtocol.PlaylistPart, receiverPlayl
         mode = SetupProtocol.MODE_FIX_LOGIN,
     )
 }
+
+/**
+ * The playlist's sign-in in a setup payload: the stored key and the saved
+ * password only when [mayCarry] (every address the setup names is proven,
+ * [StoredSecrets.setupMayCarry]); the username always. Null when nothing is
+ * left. Pure, for the tests.
+ */
+internal fun setupCredential(apiKey: String?, username: String?, password: String?, mayCarry: Boolean): SetupProtocol.Credential? =
+    SetupProtocol.Credential(
+        apiKey = apiKey?.takeIf { mayCarry && it.isNotBlank() },
+        username = username?.takeIf { it.isNotBlank() },
+        password = password?.takeIf { mayCarry && it.isNotBlank() },
+    ).takeIf { it.apiKey != null || it.username != null || it.password != null }
+
+/** Log presence of a secret, never its value. */
+internal fun presence(secret: String?): String = if (secret.isNullOrBlank()) "absent" else "present"
 
 /**
  * The sign-in for "Import this user only": `username` always rides beside the

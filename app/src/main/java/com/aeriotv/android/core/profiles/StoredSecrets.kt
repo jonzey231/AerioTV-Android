@@ -41,6 +41,7 @@ object StoredSecrets {
         RefreshSession("Refresh Session"),
         FixLogin("Fix Login"),
         DispatcharrSync("Dispatcharr Sync"),
+        DeviceSetup("Set up another device"),
     }
 
     /** Edit Playlist and Refresh Session at a new address with no typed password (Apple copy). */
@@ -61,6 +62,19 @@ object StoredSecrets {
         if (proof == null) return true
         val k = ProfileHostHold.routeKey(target)
         return k.isNotEmpty() && k in proof.current && k in proof.trusted
+    }
+
+    /**
+     * Set up another device: the receiving device saves the setup's sign-in
+     * and signs in with it at every address the setup names (the server URL,
+     * and the local URL when there is one). So the playlist's stored secrets
+     * (its saved password, its stored key, its profiles' sign-ins) go only
+     * when each of those addresses may receive them (Apple a634285
+     * setupMayCarry). No address at all: nothing.
+     */
+    fun setupMayCarry(proof: RouteProof?, url: String?, localUrl: String?): Boolean {
+        val named = listOf(url, localUrl).filterNot { it.isNullOrBlank() }
+        return named.isNotEmpty() && named.all { mayUseStored(proof, it) }
     }
 
     /** What a password field sends: what the user typed, else the saved one only where it may go, else nothing. */
@@ -102,6 +116,10 @@ object StoredSecrets {
 
     /** Whether [playlistId]'s stored secrets may go to [target] now. */
     fun mayUse(playlistId: String, target: String?): Boolean = mayUseStored(proof(playlistId), target)
+
+    /** [setupMayCarry] for [playlistId] now. */
+    fun setupMayCarry(playlistId: String, url: String?, localUrl: String?): Boolean =
+        setupMayCarry(proof(playlistId), url, localUrl)
 
     /** One line per refusal: the path and the playlist, never a secret or an address. */
     fun noteRefused(playlistId: String, path: Path) {

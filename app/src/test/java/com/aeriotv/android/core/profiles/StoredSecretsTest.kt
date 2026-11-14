@@ -235,4 +235,30 @@ class StoredSecretsTest {
         assertTrue(StoredSecrets.mayUse("P1", newServer))
         assertTrue(logged.isEmpty())
     }
+
+    // ---- Set up another device (Apple a634285) ----
+
+    @Test
+    fun aSetupCarriesStoredSecretsOnlyWhenEveryAddressItNamesIsProven() {
+        fun carries(base: String?, lan: String?) = StoredSecrets.setupMayCarry("P1", base, lan)
+        // No change since the route was proven: the setup carries the saved password and key.
+        assertTrue(carries(oldServer, oldLan))
+        assertTrue(carries(oldServer, null))
+        // The server URL moved to another server and is not proven yet.
+        assertTrue(move())
+        assertFalse(carries(newServer, oldLan))
+        assertFalse(carries(newServer, null))
+        // The default account answers at the new server URL as recorded: proven, carried again.
+        assertEquals(HostHoldBook.Outcome.Proven, book.onAnswer("P1", k(newServer), ProfileHostHold.routes(newServer, oldLan), Answer.Me(admin)))
+        assertTrue(carries(newServer, oldLan))
+        // Only the local URL changed: the receiver signs in there too, so nothing stored goes.
+        assertTrue(book.markRouteChange("P1", ProfileHostHold.routes(newServer, oldLan), ProfileHostHold.routes(newServer, newLan)))
+        assertFalse(carries(newServer, newLan))
+        // No address at all: nothing.
+        assertFalse(StoredSecrets.setupMayCarry(null, "", null))
+        // The refusal names the path, never a secret or an address.
+        StoredSecrets.noteRefused("P1", StoredSecrets.Path.DeviceSetup)
+        assertTrue(logged.last().contains("Set up another device refused for playlist=P1"))
+        assertTrue(logged.none { it.contains("example.test") || it.contains("192.168") })
+    }
 }
