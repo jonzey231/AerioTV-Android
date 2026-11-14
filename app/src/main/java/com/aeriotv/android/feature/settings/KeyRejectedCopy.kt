@@ -84,7 +84,7 @@ object KeyRejectedCopy {
     const val PASSWORD = "Password"
     const val FORM_SIGN_IN = SIGN_IN
     const val CANCEL = "Cancel"
-    const val FOOTNOTE = "AerioTV keeps your password on this device so it can reconnect if the key changes again."
+    const val FOOTNOTE = "AerioTV saves your password with this playlist's sign-in so it can reconnect if the API key changes again."
 
     /**
      * Above the form's fields when a picked profile's sign-in is held because

@@ -129,7 +129,7 @@ class KeyRejectedCopyTest {
         assertEquals("Password", KeyRejectedCopy.PASSWORD)
         assertEquals("Sign In", KeyRejectedCopy.FORM_SIGN_IN)
         assertEquals("Cancel", KeyRejectedCopy.CANCEL)
-        assertEquals("AerioTV keeps your password on this device so it can reconnect if the key changes again.", KeyRejectedCopy.FOOTNOTE)
+        assertEquals("AerioTV saves your password with this playlist's sign-in so it can reconnect if the API key changes again.", KeyRejectedCopy.FOOTNOTE)
         assertEquals("Dispatcharr did not accept that username or password.", KeyRejectedCopy.WRONG_PASSWORD)
         assertEquals(
             "This account has no API key yet. Ask your Dispatcharr administrator to turn on API access for it.",
