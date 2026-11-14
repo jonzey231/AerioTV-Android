@@ -3409,24 +3409,23 @@ private fun SettingsTabContent(
         }
         playlistVm.consumeSettingsPage()
     }
-    // Watch for a playlist id flip while we're inside the Add Playlist flow;
-    // that means the user's onboarding Save succeeded and the new row was
-    // promoted active. Close the embedded flow.
+    // A successful add on the Configure step moves on, on the same one-shot
+    // event onboarding waits for (PlaylistViewModel.sourceConfigured, sent
+    // once the test has loaded channels). The flow used to wait for the
+    // active playlist id to change from the id it started with, so with no
+    // playlist yet (after Skip for now) the add succeeded and the form
+    // stayed up. Apple's Settings add moves on either way (AddServerView
+    // saveServer).
     var qrRestoreSignIn by remember { mutableStateOf<com.aeriotv.android.core.qr.QrImportBus.SignIn?>(null) }
     qrRestoreSignIn?.let { si ->
         com.aeriotv.android.feature.onboarding.QrRestoreOfferDialog(signIn = si, onClose = { qrRestoreSignIn = null })
     }
-    val startId = remember(addPlaylistStep) {
-        if (addPlaylistStep != AddPlaylistStep.None) playlistState.playlist?.id else null
-    }
-    LaunchedEffect(playlistState.playlist?.id) {
-        if (addPlaylistStep != AddPlaylistStep.None &&
-            startId != null &&
-            playlistState.playlist?.id != startId
-        ) {
-            val step = addPlaylistStep
-            val newId = playlistState.playlist?.id
-            if (step is AddPlaylistStep.Configure && newId != null &&
+    val configureStep = addPlaylistStep as? AddPlaylistStep.Configure
+    LaunchedEffect(configureStep) {
+        val step = configureStep ?: return@LaunchedEffect
+        playlistVm.sourceConfigured.collect {
+            val newId = playlistVm.state.value.playlist?.id
+            if (newId != null &&
                 (step.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrApiKey ||
                     step.sourceType == com.aeriotv.android.core.data.SourceType.DispatcharrUserPass)
             ) {
