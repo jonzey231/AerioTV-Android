@@ -55,4 +55,23 @@ class LocalRecordingRulesTest {
         // ICU data, a plain one on older; Apple's DateFormatter follows its own.
         assertTrue(title, Regex("Recording from Nov 13, 2026 at 2:52[ \\u202F]PM").matches(title))
     }
+
+    @Test fun aRecordingShowsTheChannelNameSavedWithIt() {
+        assertEquals("Channel 7", LocalRecordingRules.shownChannelName("Channel 7", "Saturday Game"))
+        assertEquals("Channel 7", LocalRecordingRules.shownChannelName("  Channel 7 ", "Saturday Game"))
+    }
+
+    @Test fun noChannelNameIsShownWhenNoneWasSaved() {
+        // An adopted file is saved with no channel.
+        assertEquals(null, LocalRecordingRules.shownChannelName("", "Recording from Nov 13, 2026 at 2:52 PM"))
+        assertEquals(null, LocalRecordingRules.shownChannelName("   ", "Show"))
+        assertEquals(null, LocalRecordingRules.shownChannelName(null, "Show"))
+    }
+
+    @Test fun aSavedNameThatOnlyRepeatsTheTitleIsNotAChannel() {
+        // Save to Device and the capture's fallback stored the title as the channel.
+        assertEquals(null, LocalRecordingRules.shownChannelName("Evening News", "Evening News"))
+        // A row with no title shows the channel name as its title: not twice.
+        assertEquals(null, LocalRecordingRules.shownChannelName("Channel 7", ""))
+    }
 }

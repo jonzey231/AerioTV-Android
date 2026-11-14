@@ -303,11 +303,14 @@ private fun TvProgramInfoCard(
             ProgramArtSlot(model = posterUrl, containerCorner = INFO_CARD_CORNER)
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(
-                text = target.channelName.uppercase(Locale.getDefault()),
-                fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.5.sp,
-                color = colors.onSurfaceVariant,
-            )
+            // No channel saved with an on-device recording: no empty line.
+            if (target.channelName.isNotBlank()) {
+                Text(
+                    text = target.channelName.uppercase(Locale.getDefault()),
+                    fontSize = 10.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.5.sp,
+                    color = colors.onSurfaceVariant,
+                )
+            }
             Text(
                 text = target.title.ifBlank { "Untitled" },
                 fontSize = 19.sp, lineHeight = 23.sp, fontWeight = FontWeight.Bold, color = colors.onBackground,
@@ -435,13 +438,16 @@ private fun ProgramInfoBody(
 ) {
     Row(verticalAlignment = Alignment.Top) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = target.channelName.uppercase(Locale.getDefault()),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                letterSpacing = 1.5.sp,
-            )
-            Spacer(Modifier.height(6.dp))
+            // No channel saved with an on-device recording: no empty line.
+            if (target.channelName.isNotBlank()) {
+                Text(
+                    text = target.channelName.uppercase(Locale.getDefault()),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 1.5.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             // Title spans the FULL text column and wraps on word boundaries
             // (badges no longer share its row, which had squeezed a long
             // single-word title into ugly mid-word breaks like "Somethi/ng").
@@ -589,7 +595,11 @@ private fun InfoColumnsRow(target: ProgramInfoTarget, rowPadding: Dp) {
     val duration = formatDuration(target.endMillis - target.startMillis)
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        InfoRow(label = "Channel", value = target.channelName, verticalPadding = rowPadding)
+        // An on-device recording saved with no channel (an adopted file):
+        // no row, rather than a label with nothing beside it.
+        if (target.channelName.isNotBlank()) {
+            InfoRow(label = "Channel", value = target.channelName, verticalPadding = rowPadding)
+        }
         InfoRow(label = "Airs", value = airs, verticalPadding = rowPadding)
         InfoRow(label = "Date", value = date, verticalPadding = rowPadding)
         InfoRow(label = "Duration", value = duration, verticalPadding = rowPadding)

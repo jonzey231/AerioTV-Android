@@ -154,6 +154,12 @@ class DvrViewModel @Inject constructor(
         /** Why an on-device recording failed (Apple's wording), shown in its details. */
         val failureReason: String? = null,
         /**
+         * The channel an on-device recording was made from, as saved with it
+         * (LocalRecordingRules.shownChannelName). Null on server rows, whose
+         * channel comes from [dispatcharrChannelId], and when none was saved.
+         */
+        val channelName: String? = null,
+        /**
          * A finished on-device recording whose file is not there (removed
          * outside the app): badged "Missing", "File missing" in its
          * details, no Play, still deletable (Apple 743bd6b).
@@ -477,6 +483,8 @@ class DvrViewModel @Inject constructor(
                             endMillis = active.endsAt,
                             status = Recording.Status.Recording,
                             fileSizeBytes = 0L,
+                            channelName = com.aeriotv.android.core.data.LocalRecordingRules
+                                .shownChannelName(active.channelName, active.title),
                         )
                     }
                     st.copy(
@@ -1139,9 +1147,10 @@ class DvrViewModel @Inject constructor(
      * appears in the DVR tab as a Local copy playable offline. Mirrors iOS
      * downloadDispatcharrRecording. Server recordings only; the playbackUrl is
      * the same /file/ URL used for streaming, fetched with the source's
-     * X-API-Key.
+     * X-API-Key. [channelName] is the server recording's channel, saved with
+     * the copy so its Program Info names it (Apple keeps the server row's).
      */
-    suspend fun saveToDevice(recording: Recording): Result<Unit> {
+    suspend fun saveToDevice(recording: Recording, channelName: String = ""): Result<Unit> {
         if (recording.source != Source.Server) {
             return Result.failure(IllegalStateException("Save to Device is for server recordings."))
         }
@@ -1156,7 +1165,7 @@ class DvrViewModel @Inject constructor(
                 context = appContext,
                 fileUrl = url,
                 title = recording.title,
-                channelName = recording.title,
+                channelName = channelName,
                 apiKey = key,
                 userAgent = com.aeriotv.android.core.network.PlaybackHeaders
                     .customUserAgent(playlist).orEmpty(),
@@ -1557,6 +1566,7 @@ private fun LocalRecordingEntity.toRecording(fileMissing: Boolean = false): DvrV
         savedOnDevice = playlistId == null,
         partial = this.status.lowercase() == InterruptedCapture.INTERRUPTED,
         failureReason = failureReason.takeIf { status == DvrViewModel.Recording.Status.Failed },
+        channelName = com.aeriotv.android.core.data.LocalRecordingRules.shownChannelName(channelName, title),
         fileMissing = fileMissing,
     )
 }

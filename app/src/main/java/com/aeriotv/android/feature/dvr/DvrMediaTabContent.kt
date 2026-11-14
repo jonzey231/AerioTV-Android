@@ -225,7 +225,11 @@ fun DvrMediaTabContent(
         playlistState.channels.asSequence().filter { it.dispatcharrChannelId != null }
             .associateBy { it.dispatcharrChannelId!! }
     }
-    val channelName: (Rec) -> String = { rec -> channelsById[rec.dispatcharrChannelId]?.name ?: "" }
+    // Apple DVRView.showInfo: the recording's own saved channel name first
+    // (on-device rows), else the playlist channel with its Dispatcharr id.
+    val channelName: (Rec) -> String = { rec ->
+        rec.channelName?.takeIf { it.isNotBlank() } ?: channelsById[rec.dispatcharrChannelId]?.name ?: ""
+    }
     val channelLogo: (Rec) -> String? = { rec ->
         channelsById[rec.dispatcharrChannelId]?.tvgLogo?.takeIf { it.isNotBlank() }
     }
@@ -370,7 +374,7 @@ fun DvrMediaTabContent(
                 if (isServer) {
                     add(com.aeriotv.android.core.tv.TvMenuAction("Watch from Beginning") { playFromStart(rec) })
                     // Save to Device is a read (GET the file), never gated.
-                    add(com.aeriotv.android.core.tv.TvMenuAction("Save to Device") { scope.launch { viewModel.saveToDevice(rec).onFailure { toast("Save failed: ${it.message}") }.onSuccess { toast("Saving to device") } } })
+                    add(com.aeriotv.android.core.tv.TvMenuAction("Save to Device") { scope.launch { viewModel.saveToDevice(rec, channelName(rec)).onFailure { toast("Save failed: ${it.message}") }.onSuccess { toast("Saving to device") } } })
                     if (canManageDvr) {
                         add(com.aeriotv.android.core.tv.TvMenuAction("Remove Commercials") { scope.launch { viewModel.applyComskip(rec).onFailure { toast("Removing commercials failed: ${it.message}") }.onSuccess { toast("Removing commercials started") } } })
                     }

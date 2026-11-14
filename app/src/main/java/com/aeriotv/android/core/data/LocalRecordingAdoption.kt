@@ -64,6 +64,20 @@ object LocalRecordingRules {
         val at = Date(createdMillis)
         return "Recording from ${d.format(at)} at ${t.format(at)}"
     }
+
+    /**
+     * The channel an on-device recording shows (Program Info's Channel row,
+     * the DVR card's meta line): the name saved with it, as Apple shows a
+     * recording's own channelName. Null when none was saved (an adopted file)
+     * or when what was saved only repeats the shown [title]: Save to Device
+     * and the capture's fallback stored the title there, and a channel named
+     * like its program needs no second line.
+     */
+    fun shownChannelName(savedChannelName: String?, title: String): String? {
+        val name = savedChannelName?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val shownTitle = title.trim().ifEmpty { name }
+        return name.takeUnless { it == shownTitle }
+    }
 }
 
 /**
