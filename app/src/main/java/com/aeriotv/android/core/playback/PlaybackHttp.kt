@@ -42,6 +42,9 @@ object PlaybackHttp {
             // HttpURLConnection spoke HTTP/1.1, one socket per stream; keep
             // that isolation (see TileLiveCalls on HTTP/2 multiplexing).
             .protocols(listOf(Protocol.HTTP_1_1))
+            // A URL from before the playlist moved is rebuilt on its current
+            // address, or sent without the key (StreamAddresses).
+            .let(com.aeriotv.android.core.network.StreamAddresses::install)
             .let(RedirectAuthRule::install)
             .build()
     }

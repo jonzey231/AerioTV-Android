@@ -1,8 +1,12 @@
 package com.aeriotv.android.core.network
 
+import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.SendingRequest
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.http.URLBuilder
+import io.ktor.http.URLProtocol
+import io.ktor.http.takeFrom
 import io.ktor.http.Url
 import io.ktor.http.isSecure
 import io.ktor.util.AttributeKey
@@ -22,13 +26,20 @@ import okhttp3.OkHttpClient
  *  2. An http-to-https upgrade on the same host keeps them when the ports are
  *     the defaults (80 to 443) or the port is unchanged.
  *  3. Every other hop drops all four: another host, another port, or https to
- *     http.
+ *     http (rule 6 aside).
  *  4. Each hop is judged against the previous URL and the original request,
  *     and once a hop has dropped them no later hop of that chain gets them
  *     back, so a chain that leaves the host and comes back never carries them
  *     again.
  *  5. A 307 or 308 that would carry a request body to a hop that drops the
  *     sign-in is not followed: the redirect response comes back instead.
+ *  6. A server behind a TLS proxy it does not trust: when a request carries
+ *     the sign-in and its chain so far was all https and still signed in, a
+ *     redirect to http on the same host, on port 80 or on the port of the
+ *     request that answered, is followed as https on the original request's
+ *     port, and keeps the sign-in. Every other downgrade still drops it
+ *     ([tlsUpgradeTarget]); a request with no sign-in follows the Location as
+ *     given.
  *
  * Why: a Dispatcharr channel on a Redirect stream profile answers 302 straight
  * to the provider, and the HTTP stacks re-send the request's own headers on
@@ -85,6 +96,52 @@ object RedirectAuthRule {
         keepsSignIn(previous, next) && keepsSignIn(origin, next)
 
     /**
+     * Rule 6, a server behind a TLS proxy it does not trust: Dispatcharr then
+     * builds absolute URLs as http on the request's host (core/utils.py
+     * build_absolute_uri_with_port takes the forwarded scheme only from a
+     * trusted proxy). When the chain so far was all https and still signed in,
+     * a redirect from [answered] to [next] that is http on the same host, on
+     * port 80 or on [answered]'s port, is followed as https on the original
+     * request's port, and keeps the sign-in. Null for every other hop, which
+     * the rules above judge as before. The caller supplies "all https and
+     * signed in so far".
+     */
+    fun tlsUpgradeTarget(origin: HttpUrl, answered: HttpUrl, next: HttpUrl): HttpUrl? =
+        if (tlsUpgradePort(origin.host, origin.isHttps, origin.port, answered.host, answered.isHttps, answered.port,
+                next.scheme, next.host, next.port) != null
+        ) next.newBuilder().scheme("https").port(origin.port).build() else null
+
+    /** Rule 6 on parts: the port the hop goes to as https, or null when it is not that hop. */
+    fun tlsUpgradePort(
+        originHost: String, originHttps: Boolean, originPort: Int,
+        answeredHost: String, answeredHttps: Boolean, answeredPort: Int,
+        nextScheme: String, nextHost: String, nextPort: Int,
+    ): Int? {
+        if (!originHttps || !answeredHttps || !nextScheme.equals("http", ignoreCase = true)) return null
+        if (nextHost.isEmpty() || !nextHost.equals(answeredHost, ignoreCase = true) ||
+            !nextHost.equals(originHost, ignoreCase = true)
+        ) return null
+        if (nextPort != 80 && nextPort != answeredPort) return null
+        return originPort.takeIf { it > 0 }
+    }
+
+    /**
+     * First-request form of rules 1 to 3 and 6: [url] as it may be requested
+     * with the sign-in of the server at one of [serverUrls], or null. An
+     * absolute http URL a server behind an untrusted TLS proxy reported for its
+     * own host comes back as https on the server URL's port.
+     */
+    fun serverUrlFor(url: String, serverUrls: Collection<String?>): String? {
+        val target = url.trim().toHttpUrlOrNull() ?: return null
+        for (raw in serverUrls) {
+            val server = raw?.trim()?.takeIf { it.isNotEmpty() }?.toHttpUrlOrNull() ?: continue
+            if (keepsSignIn(server, target)) return target.toString()
+            tlsUpgradeTarget(server, server, target)?.let { return it.toString() }
+        }
+        return null
+    }
+
+    /**
      * First-request gate, the same host and port rule: true when a request to
      * [url] may carry the sign-in of the server reached at any of [serverUrls]
      * (a playlist's remote and LAN addresses), as a redirect from that URL
@@ -127,6 +184,8 @@ object RedirectAuthRule {
     private class Hops(val origin: HttpUrl, val authorization: String?) {
         var last: HttpUrl = origin
         var signedIn = true
+        /** Every hop so far was https (rule 6). */
+        var allHttps = origin.isHttps
     }
 
     /**
@@ -159,6 +218,7 @@ object RedirectAuthRule {
                 why = reason(hops.origin, hops.last, request.url)
             }
             hops.last = request.url
+            hops.allHttps = hops.allHttps && request.url.isHttps
             hops.signedIn
         }
         val present = HEADERS.filter { request.header(it) != null }
@@ -175,6 +235,20 @@ object RedirectAuthRule {
             else -> request
         }
         val response = chain.proceed(sent)
+        // Rule 6: OkHttp follows the Location as given, so an http one on the
+        // same host that the rule takes as https is handed back as https.
+        if (response.isRedirect && present.isNotEmpty()) {
+            val next = response.header("Location")?.let { request.url.resolve(it) }
+            val upgraded = next?.let {
+                synchronized(hops) {
+                    if (hops.signedIn && hops.allHttps) tlsUpgradeTarget(hops.origin, request.url, it) else null
+                }
+            }
+            if (upgraded != null) {
+                log("[REDIRECT] https-to-http hop on the same host: followed as https on the request's port")
+                return@Interceptor response.newBuilder().header("Location", upgraded.toString()).build()
+            }
+        }
         // Rule 5: OkHttp follows a 307 or 308 with the same method and body.
         // Without a Location it returns this response instead of following.
         if ((response.code == 307 || response.code == 308) && request.body != null) {
@@ -207,8 +281,18 @@ object RedirectAuthRule {
 
     // ---- Ktor ----
 
-    /** Where a Ktor request's chain started, the hop it was last sent to, and the builder that sent it. */
-    private class KtorHop(val origin: Url, val url: Url, val sentBy: HttpRequestBuilder)
+    /**
+     * Where a Ktor request's chain started, the hop it was last sent to, the
+     * builder that sent it, whether the chain still signs in, and whether
+     * every hop so far was https.
+     */
+    private class KtorHop(
+        val origin: Url,
+        val url: Url,
+        val sentBy: HttpRequestBuilder,
+        val signedIn: Boolean,
+        val allHttps: Boolean,
+    )
 
     private val KtorHopKey = AttributeKey<KtorHop>("AerioRedirectAuthHop")
 
@@ -221,6 +305,9 @@ object RedirectAuthRule {
         from.isHttp() && to.isHttp() &&
             keepsSignIn(from.host, from.isHttps(), from.port, to.host, to.isHttps(), to.port)
 
+    private val ktorRedirects = setOf(301, 302, 303, 307, 308)
+    private const val MAX_TLS_UPGRADES = 20
+
     /**
      * Ktor plugin. Ktor's OkHttp engine follows no redirects (followRedirects
      * false); Ktor's HttpRedirect builds every hop as a copy of the previous
@@ -229,17 +316,19 @@ object RedirectAuthRule {
      * stays removed on every later hop (rule 4). A builder sent again as it is
      * (no redirect) starts a new chain. HttpRedirect follows only GET and HEAD
      * (checkHttpMethod) and refuses an https-to-http redirect, so no request
-     * body is ever re-sent (rule 5).
+     * body is ever re-sent (rule 5); rule 6's hop it never follows, so this
+     * follows it, as https, before HttpRedirect sees the answer.
      */
     val Ktor = createClientPlugin("RedirectAuthRule") {
         on(SendingRequest) { request, _ ->
             val url = request.url.build()
             val previous = request.attributes.getOrNull(KtorHopKey)
-            val origin = if (previous == null || previous.sentBy === request) {
-                url
+            val hop = if (previous == null || previous.sentBy === request) {
+                KtorHop(url, url, request, signedIn = true, allHttps = url.isHttps())
             } else {
                 val fromPrevious = keeps(previous.url, url)
-                if (!fromPrevious || !keeps(previous.origin, url)) {
+                val signedIn = previous.signedIn && fromPrevious && keeps(previous.origin, url)
+                if (!signedIn) {
                     val present = HEADERS.filter { request.headers.contains(it) }
                     if (present.isNotEmpty()) {
                         HEADERS.forEach { request.headers.remove(it) }
@@ -250,9 +339,46 @@ object RedirectAuthRule {
                         )
                     }
                 }
-                previous.origin
+                KtorHop(previous.origin, url, request, signedIn, previous.allHttps && url.isHttps())
             }
-            request.attributes.put(KtorHopKey, KtorHop(origin, url, request))
+            request.attributes.put(KtorHopKey, hop)
+        }
+
+        on(Send) { request ->
+            var sent = request
+            var call = proceed(sent)
+            var upgrades = 0
+            while (upgrades < MAX_TLS_UPGRADES) {
+                val method = sent.method.value
+                if (method != "GET" && method != "HEAD") break
+                if (call.response.status.value !in ktorRedirects) break
+                val hop = sent.attributes.getOrNull(KtorHopKey) ?: break
+                if (!hop.signedIn || !hop.allHttps || HEADERS.none { sent.headers.contains(it) }) break
+                val location = call.response.headers["Location"] ?: break
+                val next = runCatching {
+                    URLBuilder(hop.url).apply { parameters.clear() }.takeFrom(location).build()
+                }.getOrNull() ?: break
+                val port = tlsUpgradePort(
+                    hop.origin.host, hop.origin.isHttps(), hop.origin.port,
+                    hop.url.host, hop.url.isHttps(), hop.url.port,
+                    next.protocol.name, next.host, next.port,
+                ) ?: break
+                log("[REDIRECT] https-to-http hop on the same host: followed as https on the request's port")
+                val upgraded = URLBuilder(next).apply {
+                    protocol = URLProtocol.HTTPS
+                    this.port = port
+                }.build()
+                // A copy of the hop that answered, headers and attributes
+                // included, on the https URL (HttpRedirect copies the same way).
+                val following = HttpRequestBuilder().apply {
+                    takeFrom(sent)
+                    url.takeFrom(upgraded)
+                }
+                sent = following
+                call = proceed(following)
+                upgrades++
+            }
+            call
         }
     }
 }

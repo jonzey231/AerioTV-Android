@@ -62,10 +62,16 @@ import org.junit.Test
 class RedirectAuthStandInTest {
 
     /** One request as the stand-in saw it. Never a header or body value. */
-    data class Seen(val hostPort: String, val method: String, val present: Map<String, Boolean>, val bodyBytes: Int) {
+    data class Seen(
+        val hostPort: String,
+        val method: String,
+        val present: Map<String, Boolean>,
+        val bodyBytes: Int,
+        val tls: Boolean = false,
+    ) {
         val none get() = present.values.none { it }
         val all get() = present.values.all { it }
-        override fun toString() = "host=$hostPort $method " +
+        override fun toString() = "${if (tls) "https" else "http"} host=$hostPort $method " +
             RedirectAuthRule.HEADERS.joinToString(" ") { "$it=${if (present[it] == true) "present" else "absent"}" } +
             (if (method == "GET" || method == "HEAD") "" else " body=${bodyBytes}B")
     }
@@ -84,6 +90,8 @@ class RedirectAuthStandInTest {
 
     @Before fun setUp() {
         RedirectAuthRule.log = { ruleLog += it }
+        // No saved playlists: the stale-address gate on the playback client judges nothing.
+        StreamAddresses.resetForTests()
         main = StandIn(tls?.server)
         other = StandIn(tls?.server)
     }
@@ -140,6 +148,7 @@ class RedirectAuthStandInTest {
                 method = req.method,
                 present = RedirectAuthRule.HEADERS.associateWith { req.headers.containsKey(it.lowercase()) },
                 bodyBytes = req.body.size,
+                tls = secure,
             )
             respond(output, route(req, if (secure) "https" else "http", port))
         }
@@ -160,6 +169,12 @@ class RedirectAuthStandInTest {
             "/away-and-back" -> Resp(302, "$provider/bounce")
             "/bounce" -> Resp(302, "$here/landing/back")
             "/down" -> Resp(302, "http://dispatcharr.test:$port/landing/down")
+            // Rule 6: http on port 80 (Dispatcharr behind an untrusted TLS proxy
+            // omits the port), on another port, on another host, and a POST 307.
+            "/down80" -> Resp(302, "http://dispatcharr.test/landing/down80")
+            "/down-other" -> Resp(302, "http://dispatcharr.test:${other.port}/landing/down-other")
+            "/down-cross" -> Resp(302, "http://provider.test:$port/landing/down-cross")
+            "/post-down-307" -> Resp(307, "http://dispatcharr.test/landing/post-down-307")
             "/up" -> Resp(302, "https://dispatcharr.test:$port/landing/up")
             "/post-same-307" -> Resp(307, "$here/landing/post-same-307")
             "/post-cross-307" -> Resp(307, "$provider/landing/post-cross-307")
@@ -356,16 +371,41 @@ class RedirectAuthStandInTest {
         assertTrue(back.none)
     }
 
-    @Test fun okHttpDowngradeDropsAllFourAndUpgradeOnTheSamePortKeepsThem() {
+    @Test fun okHttpSameHostDowngradeIsFollowedAsHttpsWithTheSignIn() {
         needsTls()
         val c = okHttp(rule = true)
         c.get(url("/down", "https"))
+        c.get(url("/down80", "https"))
+        c.get(url("/down-other", "https"))
+        c.get(url("/down-cross", "https"))
+        c.post(url("/post-down-307", "https"))
         c.get(url("/up"))
-        val down = measure("OkHttp + rule, GET 302 https to http, same host and port", "/landing/down")
+        val down = measure("OkHttp + rule, GET 302 https to http same host and port", "/landing/down")
+        val down80 = measure("OkHttp + rule, GET 302 https to http://samehost/path (port 80)", "/landing/down80")
+        val elsewhere = measure("OkHttp + rule, GET 302 https to http same host, another port", "/landing/down-other")
+        val cross = measure("OkHttp + rule, GET 302 https to http another host", "/landing/down-cross")
+        val post = measure("OkHttp + rule, POST 307 https to http://samehost/path (port 80)", "/landing/post-down-307")
         val up = measure("OkHttp + rule, GET 302 http to https, same host and port", "/landing/up")
-        assertTrue(down.none)
-        assertTrue(ruleLog.any { it.contains("https-to-http") })
+        // Followed as https on the original request's port, sign-in kept.
+        assertTrue(down.tls && down.all)
+        assertTrue(down80.tls && down80.all)
+        assertEquals("dispatcharr.test:${main.port}", down80.hostPort)
+        assertTrue(post.tls && post.all)
+        assertEquals(PAYLOAD.length, post.bodyBytes)
+        assertTrue(ruleLog.any { it.contains("followed as https") })
+        // Every other downgrade still drops the sign-in.
+        assertTrue(!elsewhere.tls && elsewhere.none)
+        assertEquals("dispatcharr.test:${other.port}", elsewhere.hostPort)
+        assertTrue(!cross.tls && cross.none)
         assertTrue(up.all)
+    }
+
+    @Test fun okHttpRequestWithNoSignInFollowsTheDowngradeAsGiven() {
+        needsTls()
+        okHttp(rule = true).newCall(Request.Builder().url(url("/down", "https")).build()).execute().use { it.body.string() }
+        val s = measure("OkHttp + rule, GET 302 https to http same host and port, no sign-in", "/landing/down")
+        assertTrue("followed as the Location gave it", !s.tls && s.none)
+        assertFalse(ruleLog.any { it.contains("followed as https") })
     }
 
     @Test fun okHttpBodyIsNeverSentToAHopThatDropsTheSignIn() {
@@ -433,13 +473,21 @@ class RedirectAuthStandInTest {
         }
     }
 
-    @Test fun ktorRefusesTheDowngrade() {
+    @Test fun ktorFollowsTheSameHostDowngradeAsHttps() {
         needsTls()
         ktor(rule = true).use { c ->
-            val status = c.getStatus(url("/down", "https"))
+            assertEquals(200, c.getStatus(url("/down", "https")))
+            assertEquals(200, c.getStatus(url("/down80", "https")))
+            val refused = c.getStatus(url("/down-other", "https"))
             c.getStatus(url("/up"))
-            measureNothing("Ktor + rule, GET 302 https to http, same host and port", status, "/landing/down")
-            assertEquals(302, status)
+            val down = measure("Ktor + rule, GET 302 https to http same host and port", "/landing/down")
+            val down80 = measure("Ktor + rule, GET 302 https to http://samehost/path (port 80)", "/landing/down80")
+            assertTrue(down.tls && down.all)
+            assertTrue(down80.tls && down80.all)
+            assertEquals("dispatcharr.test:${main.port}", down80.hostPort)
+            // Any other downgrade: Ktor's HttpRedirect refuses it, as before.
+            measureNothing("Ktor + rule, GET 302 https to http same host, another port", refused, "/landing/down-other")
+            assertEquals(302, refused)
             assertTrue(measure("Ktor + rule, GET 302 http to https, same host and port", "/landing/up").all)
         }
     }

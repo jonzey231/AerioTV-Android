@@ -204,17 +204,43 @@ class PlaylistRepository @Inject constructor(
     private val revocationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
+        // Stream requests carry a playlist's sign-in only to its current
+        // addresses; a URL from before a move is rebuilt on the current
+        // Local URL when its last probe reached it (StreamAddresses).
+        com.aeriotv.android.core.network.StreamAddresses.lanVerdict = { lanReachability.cachedVerdict(it) }
         // Every write to the playlist table (an add, a setup from another
         // device, a restore, an edit) lifts the deleted entries it matches.
         // A row whose delete is under way is not "in use".
         revocationScope.launch {
             dao.observeAll().collect { rows ->
                 playlistSnapshot = rows
-                com.aeriotv.android.core.network.PlaylistRevocation.lift(
-                    rows.filterNot { DeletedPlaylists.isDeleted(it.id) }.map { fingerprintOf(it) },
-                )
+                val live = rows.filterNot { DeletedPlaylists.isDeleted(it.id) }
+                com.aeriotv.android.core.network.PlaylistRevocation.lift(live.map { fingerprintOf(it) })
+                // The rows come with the active profile's sign-in laid over
+                // them; the stored rows give each playlist's own key.
+                val own = runCatching {
+                    kotlinx.coroutines.withContext(com.aeriotv.android.core.profiles.ProfileScope.defaultOnly()) { dao.allOnce() }
+                }.getOrDefault(emptyList()).associate { it.id to it.apiKey }
+                com.aeriotv.android.core.network.StreamAddresses.update(live.map { streamAddressesOf(it, own[it.id]) })
             }
         }
+    }
+
+    /** A saved playlist's current addresses and the sign-ins its stream requests carry; [ownKey] is its stored key. */
+    private fun streamAddressesOf(row: PlaylistEntity, ownKey: String?): com.aeriotv.android.core.network.StreamAddresses.Entry {
+        val f = fingerprintOf(row)
+        val own = ownKey?.trim()?.takeIf { it.isNotEmpty() }
+        val xtream = row.sourceType == SourceType.XtreamCodes.name
+        return com.aeriotv.android.core.network.StreamAddresses.Entry(
+            playlistId = row.id,
+            serverUrl = row.urlString,
+            lanUrl = row.lanUrlString,
+            keys = f.keys + listOfNotNull(own),
+            xtreamUser = row.username.takeIf { xtream },
+            xtreamPass = row.password.takeIf { xtream },
+            active = row.isActive,
+            ownKey = own,
+        )
     }
 
     private fun fingerprintOf(row: PlaylistEntity): com.aeriotv.android.core.network.PlaylistFingerprint =

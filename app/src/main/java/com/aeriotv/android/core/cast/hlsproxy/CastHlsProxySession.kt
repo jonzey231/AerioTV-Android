@@ -138,6 +138,9 @@ class CastHlsProxySession @Inject constructor(
             // A Redirect-profile 302 sends the ingest to the provider: never
             // with the playlist's X-API-Key, Authorization, or Cookie, and never
             // over https-to-http (the shared rule, installed last).
+            // A URL from before the playlist moved is rebuilt on its current
+            // address, or sent without the key (StreamAddresses).
+            .let(com.aeriotv.android.core.network.StreamAddresses::install)
             .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
             .build()
     }

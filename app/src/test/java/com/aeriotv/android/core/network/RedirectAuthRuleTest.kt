@@ -4,6 +4,8 @@ import com.aeriotv.android.core.playback.ForceHls
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -60,6 +62,47 @@ class RedirectAuthRuleTest {
         assertTrue(RedirectAuthRule.keepsSignIn("http://dispatcharr.test/a".toHttpUrl(), up, "https://dispatcharr.test/b".toHttpUrl()))
         // Upgrade then back to http: a downgrade from the previous hop.
         assertFalse(RedirectAuthRule.keepsSignIn("http://dispatcharr.test/a".toHttpUrl(), up, "http://dispatcharr.test/b".toHttpUrl()))
+    }
+
+    @Test fun anHttpsChainRedirectedToHttpOnTheSameHostIsFollowedAsHttps() {
+        fun up(origin: String, next: String) =
+            RedirectAuthRule.tlsUpgradeTarget(origin.toHttpUrl(), origin.toHttpUrl(), next.toHttpUrl())?.toString()
+        // http on port 80: https on the original request's port.
+        assertEquals("https://dispatcharr.test/landing", up("https://dispatcharr.test/a", "http://dispatcharr.test/landing"))
+        assertEquals("https://dispatcharr.test:8443/x", up("https://dispatcharr.test:8443/a", "http://dispatcharr.test/x"))
+        // http on the same port as the https request, query kept.
+        assertEquals("https://dispatcharr.test:8443/x?y=1", up("https://dispatcharr.test:8443/a", "http://dispatcharr.test:8443/x?y=1"))
+        // Host names compare without case.
+        assertNotNull(up("https://dispatcharr.test/a", "http://DISPATCHARR.test/x"))
+        // Any other downgrade is not this rule: another port, another host.
+        assertNull(up("https://dispatcharr.test/a", "http://dispatcharr.test:8080/x"))
+        assertNull(up("https://dispatcharr.test:8443/a", "http://dispatcharr.test:9191/x"))
+        assertNull(up("https://dispatcharr.test/a", "http://provider.test/x"))
+        // Not a downgrade, or the chain was not https.
+        assertNull(up("https://dispatcharr.test/a", "https://dispatcharr.test/x"))
+        assertNull(up("http://dispatcharr.test/a", "http://dispatcharr.test/x"))
+        // The hop that answered was http (an http hop in the chain): not this rule.
+        assertNull(
+            RedirectAuthRule.tlsUpgradeTarget(
+                "https://dispatcharr.test/a".toHttpUrl(), "http://dispatcharr.test/b".toHttpUrl(), "http://dispatcharr.test/c".toHttpUrl(),
+            ),
+        )
+    }
+
+    @Test fun aRecordingUrlReportedAsHttpBehindAnUntrustedProxyIsUsedAsHttps() {
+        val servers = listOf("https://dispatcharr.test", null)
+        assertEquals(
+            "https://dispatcharr.test/api/channels/recordings/5/hls/index.m3u8",
+            RedirectAuthRule.serverUrlFor("http://dispatcharr.test/api/channels/recordings/5/hls/index.m3u8", servers),
+        )
+        assertEquals("https://dispatcharr.test/x", RedirectAuthRule.serverUrlFor("https://dispatcharr.test/x", servers))
+        assertNull(RedirectAuthRule.serverUrlFor("http://dispatcharr.test:9191/x", servers))
+        assertNull(RedirectAuthRule.serverUrlFor("http://other.test/x", servers))
+        // An http server URL is used as it is.
+        assertEquals(
+            "http://192.168.1.10:9191/x",
+            RedirectAuthRule.serverUrlFor("http://192.168.1.10:9191/x", listOf("http://192.168.1.10:9191")),
+        )
     }
 
     @Test fun aUrlThatDoesNotParseNeverKeepsThem() {

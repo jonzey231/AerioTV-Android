@@ -164,6 +164,9 @@ internal class TileLiveCalls {
                 // A Redirect-profile 302 never carries the playlist's
                 // X-API-Key, Authorization, or Cookie to another host or over
                 // https-to-http (the shared rule, installed last).
+                // A saved layout's URL from before the playlist moved is rebuilt
+                // on its current address, or sent without the key.
+                .let(com.aeriotv.android.core.network.StreamAddresses::install)
                 .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
                 .build()
         }

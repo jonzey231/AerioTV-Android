@@ -90,6 +90,9 @@ class LanReachability @Inject constructor(
         return refresh(key)
     }
 
+    /** The last verdict for [lanUrl] without probing; null when never probed. */
+    fun cachedVerdict(lanUrl: String): Boolean? = verdicts[lanUrl.trim().trimEnd('/')]
+
     /** Force a fresh probe of [lanUrl] (playlist edits, network changes). */
     suspend fun refresh(lanUrl: String): Boolean {
         val key = lanUrl.trimEnd('/')

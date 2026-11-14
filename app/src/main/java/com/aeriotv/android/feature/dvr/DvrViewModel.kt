@@ -1471,8 +1471,10 @@ private val rejectedFileHosts = java.util.concurrent.ConcurrentHashMap.newKeySet
  * Resolve a Dispatcharr-reported recording file_url against the active
  * server's effective base URL. Mirrors iOS resolveRecordingURL
  * (MyRecordingsView.swift line 614): an already-absolute value is used if it
- * is on one of [trustedServers] by the shared sign-in rule; a relative path is
- * anchored to the base. Returns null for a blank input or an untrusted address.
+ * is on one of [trustedServers] by the shared sign-in rule (an http URL that
+ * a server behind an untrusted TLS proxy reported for its own host is taken
+ * as https); a relative path is anchored to the base. Returns null for a
+ * blank input or an untrusted address.
  */
 private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String, trustedServers: List<String>): String? {
     val trimmed = fileUrl?.trim().orEmpty()
@@ -1484,8 +1486,11 @@ private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String, trustedServer
         // absolute file_url is used only on the playlist's own remote or LAN
         // address: same host and effective port, and never https to http
         // (RedirectAuthRule). Anything else would hand the API key to another
-        // host or port, or send it in the clear.
-        if (!com.aeriotv.android.core.network.RedirectAuthRule.isServerUrl(trimmed, trustedServers)) {
+        // host or port, or send it in the clear. A server behind a TLS proxy it
+        // does not trust reports its own URLs as http: on the server's host,
+        // port 80 or the server's port, that one is used as https.
+        val usable = com.aeriotv.android.core.network.RedirectAuthRule.serverUrlFor(trimmed, trustedServers)
+        if (usable == null) {
             val key = runCatching { java.net.URI(trimmed).let { u -> "${u.host?.lowercase()}:${u.port}" } }
                 .getOrNull() ?: "<unparseable>"
             if (rejectedFileHosts.add(key)) {
@@ -1493,7 +1498,7 @@ private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String, trustedServer
             }
             return null
         }
-        return trimmed
+        return usable
     }
     val base = baseUrl.trimEnd('/')
     if (base.isEmpty()) return null

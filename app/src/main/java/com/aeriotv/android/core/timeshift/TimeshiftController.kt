@@ -216,6 +216,7 @@ class TimeshiftController @Inject constructor(
             // The fill follows the same Redirect-profile 302 as the player:
             // never with the sign-in headers to another host or over
             // https-to-http (the shared rule, installed last).
+            .let(com.aeriotv.android.core.network.StreamAddresses::install)
             .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
             .build()
     }

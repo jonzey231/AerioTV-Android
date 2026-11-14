@@ -4472,6 +4472,9 @@ class AerioExoPlayerHolder @Inject constructor(
             // GH #159: a Redirect-profile 302 points at the provider; never
             // carry Dispatcharr's X-API-Key, Authorization, or Cookie there, or
             // over an https-to-http hop (the shared rule, installed last).
+            // A URL from before the playlist moved is rebuilt on its current
+            // address, or sent without the key (StreamAddresses).
+            .let(com.aeriotv.android.core.network.StreamAddresses::install)
             .let(RedirectAuthRule::install)
             .build()
     }

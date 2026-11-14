@@ -151,13 +151,17 @@ object ForceHls {
 
     /**
      * True when [entryUrl] redirected to a session playlist the player may
-     * adopt with the server's sign-in headers: same host, no https-to-http
-     * downgrade ([RedirectAuthRule]). A session-shaped URL on another host is
-     * a provider's (a Redirect stream profile), never the server's own.
+     * adopt with the server's sign-in headers: same host and port, no
+     * https-to-http downgrade ([RedirectAuthRule]), or on the active
+     * playlist's current address (an entry URL from before a move is rebuilt
+     * there, StreamAddresses). A session-shaped URL anywhere else is a
+     * provider's (a Redirect stream profile), never the server's own.
      */
     fun isServerSession(entryUrl: String, landedUrl: String): Boolean =
-        isSessionUrl(landedUrl) &&
-            com.aeriotv.android.core.network.RedirectAuthRule.keepsSignIn(entryUrl, landedUrl)
+        isSessionUrl(landedUrl) && (
+            com.aeriotv.android.core.network.RedirectAuthRule.keepsSignIn(entryUrl, landedUrl) ||
+                com.aeriotv.android.core.network.StreamAddresses.isActiveServerUrl(landedUrl)
+            )
 
     private const val SESSION_MARKER = "/proxy/hls/"
     const val TOKEN_HEADER = "X-Dispatcharr-Session-Token"
@@ -173,6 +177,9 @@ object ForceHls {
             .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             // The session resolve is a stream open too (StreamGate).
             .addInterceptor(StreamGate.interceptor)
+            // An entry URL from before the playlist moved is rebuilt on its
+            // current address, or sent without the key (StreamAddresses).
+            .let(com.aeriotv.android.core.network.StreamAddresses::install)
             .build()
     }
 

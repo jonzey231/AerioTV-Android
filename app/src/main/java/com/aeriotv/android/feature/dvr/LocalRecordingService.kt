@@ -99,6 +99,9 @@ class LocalRecordingService : Service() {
             // to http, so a 302 to another host cannot harvest the credential.
             // It replaces a per-request host tag that compared hosts with
             // their case intact and left Cookie and the downgrade alone.
+            // A stream URL from before the playlist moved is rebuilt on its
+            // current address, or sent without the key (StreamAddresses).
+            .let(com.aeriotv.android.core.network.StreamAddresses::install)
             .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
             .build()
     }
