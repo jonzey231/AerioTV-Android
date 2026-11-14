@@ -2480,6 +2480,25 @@ fun AerioTVNavHost(
                     playbackUrl,
                     playlistState.playlist?.customUserAgent,
                 ) { PlaybackHeaders.forPlaylist(playlistState.playlist, playbackUrl) }
+                // Phones and tablets: the rejected-key prompt (Sign In, Edit
+                // Playlist, Not Now) also shows over this player, as it does
+                // over live TV, while catch-up stops on the key notice. Only
+                // while this route is on top, so it never shows twice with
+                // the main screen's host. Android TV is unchanged.
+                val rpResumed by entry.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+                if (!com.aeriotv.android.ui.settings.rememberIsTvDevice() &&
+                    rpResumed.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                ) {
+                    com.aeriotv.android.feature.settings.ApiKeyRejectedPromptHost(
+                        onEditPlaylist = { id ->
+                            playlistVm.requestSettingsPage(com.aeriotv.android.feature.settings.EDIT_PLAYLIST_PAGE_PREFIX + id)
+                            navController.popBackStack()
+                        },
+                        onSignedIn = { id ->
+                            if (playlistVm.state.value.playlist?.id == id) playlistVm.refreshPlaylist(fromRecovery = true)
+                        },
+                    )
+                }
                 // Finalize migration target (iOS parity): the /file/ twin of
                 // an in-progress /hls/ URL, served with the same headers.
                 val completedUrl = remember(playbackUrl) {

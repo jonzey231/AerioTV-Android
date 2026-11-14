@@ -726,6 +726,11 @@ fun VODPlayerScreen(
                     }
                     if (minted == null) {
                         Log.w(TAG, "Native catch-up re-mint failed; keeping current window")
+                        // Held API key: stop at once with the key notice (Apple).
+                        if (VodStreamRefusal.catchupKeyNotice(isCatchup, isTvForm, httpHeaders)) {
+                            player.stop()
+                            playbackErrorMessage = com.aeriotv.android.core.network.KEY_REJECTED_MESSAGE
+                        }
                         break
                     }
                     onRevokeCatchup(outgoing)
@@ -2257,10 +2262,13 @@ fun VODPlayerScreen(
         // Retry / Close. STATE_READY in the listener clears it the moment a
         // retry reaches steady playback.
         playbackErrorMessage?.let { errMsg ->
+            // Catch-up with a held API key (phones and tablets): the live
+            // player's notice and Retry, no countdown (Apple stops at once).
+            val keyNotice = VodStreamRefusal.catchupKeyNotice(isCatchup, isTvForm, httpHeaders)
             LaunchedEffect(errorRetrySerial) {
                 errorReconnecting = false
                 // Stream limit, or the rate-limit budget is spent: no auto retry.
-                if (VodStreamRefusal.noAutoRetry) {
+                if (VodStreamRefusal.noAutoRetry || keyNotice) {
                     errorRetryCountdown = 0
                     return@LaunchedEffect
                 }
@@ -2269,6 +2277,10 @@ fun VODPlayerScreen(
                 // 5s, 10s, 20s, then 30s forever.
                 var remaining = rateWait?.toInt() ?: minOf(30, 5 shl minOf(errorRetrySerial, 3))
                 while (remaining > 0) {
+                    if (VodStreamRefusal.catchupKeyNotice(isCatchup, isTvForm, httpHeaders)) {
+                        errorRetryCountdown = 0
+                        return@LaunchedEffect
+                    }
                     errorRetryCountdown = remaining
                     if (rateWait != null) playbackErrorMessage = VodStreamRefusal.countdownText(remaining.toLong())
                     delay(1_000L)
@@ -2280,7 +2292,15 @@ fun VODPlayerScreen(
                 errorRetrySerial += 1
                 doErrorRetry()
             }
-            Column(
+            if (keyNotice) ConnectionLimitCard(
+                notice = com.aeriotv.android.core.playback.DispatcharrConnectionLimit.KEY_REJECTED,
+                isTv = false,
+                onRetry = {
+                    VodStreamRefusal.manualRetry()
+                    errorRetrySerial += 1
+                    doErrorRetry()
+                },
+            ) else Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.85f))

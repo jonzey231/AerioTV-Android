@@ -27,6 +27,8 @@ internal object VodStreamRefusal {
     @Volatile private var retries = 0
     @Volatile private var final = false
     @Volatile private var limited = false
+    /** The last stream open was refused because its API key is held as rejected (not a held Child's address). */
+    @Volatile private var keyHeld = false
 
     /** The card line for [error], or null when it is neither refusal (the usual card). */
     fun onError(error: Throwable?, url: String?): String? {
@@ -36,9 +38,11 @@ internal object VodStreamRefusal {
         com.aeriotv.android.core.playback.StreamAuth.find(error)?.let { held ->
             reason = null
             limited = true
+            keyHeld = held !is com.aeriotv.android.core.playback.StreamRouteHeldException
             // A held Child's address (item 15): the line the lists show.
             return if (held is com.aeriotv.android.core.playback.StreamRouteHeldException) com.aeriotv.android.feature.settings.DISPATCHARR_UNREACHABLE else null
         }
+        keyHeld = false
         StreamGate.find(error)?.let { rl ->
             limited = false
             reason = rl.reason
@@ -54,6 +58,23 @@ internal object VodStreamRefusal {
         reason = null
         limited = false
         return null
+    }
+
+    /**
+     * Catch-up on a phone or tablet stops at once with the live player's
+     * "API key no longer valid" notice when its API key is held as rejected
+     * (Apple stops a catch-up with that alert): the stream open was refused
+     * with the held key, or the key the stream signs in with ([headers]) is
+     * held, which also stops a session re-mint before it is sent. Android
+     * TV keeps its card.
+     */
+    fun catchupKeyNotice(isCatchup: Boolean, isTv: Boolean, headers: Map<String, String>): Boolean =
+        isCatchup && !isTv && (keyHeld || heldKeyIn(headers))
+
+    /** Whether the API key in [headers] is held as rejected. Pure apart from the gate's state. */
+    internal fun heldKeyIn(headers: Map<String, String>): Boolean {
+        val key = headers.entries.firstOrNull { it.key.equals("X-API-Key", ignoreCase = true) }?.value
+        return !key.isNullOrBlank() && com.aeriotv.android.core.network.DispatcharrRequestGate.isKeyRejected(key)
     }
 
     /** No automatic retry for this card (stream limit, or the rate-limit budget is spent). */
@@ -77,6 +98,7 @@ internal object VodStreamRefusal {
         retries = 0
         final = false
         limited = false
+        keyHeld = false
     }
 
     /** A manual Retry from the card earns the budget again. */
