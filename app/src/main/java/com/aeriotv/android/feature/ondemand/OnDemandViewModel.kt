@@ -3371,18 +3371,12 @@ class OnDemandViewModel @Inject constructor(
      */
     data class ResolvedVod(val url: String, val authSafe: Boolean)
 
-    /** Scheme+host+effective-port equality; unparseable input = NOT same origin. */
-    private fun sameOrigin(a: String, b: String): Boolean {
-        fun origin(raw: String): String? = runCatching {
-            val u = java.net.URI(raw.trim())
-            val scheme = u.scheme?.lowercase() ?: return@runCatching null
-            val host = u.host?.lowercase() ?: return@runCatching null
-            val port = if (u.port > 0) u.port else if (scheme == "https") 443 else 80
-            "$scheme://$host:$port"
-        }.getOrNull()
-        val oa = origin(a) ?: return false
-        return oa == origin(b)
-    }
+    /** The 301 is followed by hand here, so it gets the shared sign-in
+     *  redirect rule: same host and effective port, no https to http (an
+     *  http-to-https upgrade from 80 to 443 keeps them). Unparseable input
+     *  never keeps them. */
+    private fun sameOrigin(a: String, b: String): Boolean =
+        com.aeriotv.android.core.network.RedirectAuthRule.keepsSignIn(a.trim(), b.trim())
 
     // ───────────────────────── Xtream Codes VOD ─────────────────────────
     // XC VOD/series are mapped into the existing DispatcharrVOD* shapes so

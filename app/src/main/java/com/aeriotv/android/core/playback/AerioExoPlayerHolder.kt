@@ -35,6 +35,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import com.aeriotv.android.BuildConfig
+import com.aeriotv.android.core.network.RedirectAuthRule
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CompletableDeferred
@@ -4220,30 +4221,21 @@ class AerioExoPlayerHolder @Inject constructor(
         // no error and the picture stays black. A working Android 14 device runs
         // the identical code and renders frames in ~2s, so it's an OS-level
         // HttpURLConnection quirk. OkHttp is consistent across OS versions and is
-        // already the app's HTTP client everywhere else. VOD / Auto keep the
-        // battle-tested DefaultHttpDataSource path unchanged.
+        // already the app's HTTP client everywhere else.
         if (isLive) return liveHttpDataSourceFactory()
-        val factory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(30_000)
-            .setReadTimeoutMs(30_000)
-            // Always send a real player User-Agent. Without it Media3 falls back
-            // to the platform default ("Dalvik/2.1.0 ..."), which Xtream reseller
-            // panels' anti-restream WAFs drop on LIVE ("connection closed before
-            // status line") while leaving VOD /movie/ files ungated. iOS does the
-            // same (PlayerView headers.isEmpty -> DeviceInfo.defaultUserAgent).
-            .setUserAgent(DEFAULT_PLAYBACK_USER_AGENT)
-        // Apply Dispatcharr API-key / custom User-Agent. Headers are
-        // applied verbatim; the User-Agent header (if present) replaces
-        // the default.
-        val headers = if (stripAuth) LiveRedirect.withoutAuth(httpHeaders) else httpHeaders
-        if (headers.isNotEmpty()) {
-            factory.setDefaultRequestProperties(headers)
-            headers.entries
-                .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
-                ?.value
-                ?.let(factory::setUserAgent)
-        }
+        // On demand, catch-up, recordings, HLS and DASH: OkHttp under the shared
+        // sign-in redirect rule (PlaybackHttp, RedirectAuthRule). The
+        // DefaultHttpDataSource this replaces re-sent X-API-Key and
+        // Authorization on every redirect hop, to any host.
+        // Apply Dispatcharr API-key / custom User-Agent. The User-Agent header
+        // (if present) replaces the default. Always send a real player
+        // User-Agent: without one the request carried the platform default
+        // ("Dalvik/2.1.0 ..."), which Xtream reseller panels' anti-restream WAFs
+        // drop on LIVE ("connection closed before status line") while leaving
+        // VOD /movie/ files ungated. iOS does the same (PlayerView
+        // headers.isEmpty -> DeviceInfo.defaultUserAgent).
+        val headers = if (stripAuth) RedirectAuthRule.withoutSignIn(httpHeaders) else httpHeaders
+        val factory = PlaybackHttp.factory(headers, DEFAULT_PLAYBACK_USER_AGENT)
         // Same 429 rules as the OkHttp live path (StreamGate).
         return StreamGate.Factory(factory, headers)
     }
@@ -4387,7 +4379,8 @@ class AerioExoPlayerHolder @Inject constructor(
      * enforces strict RFC-7230 header validation and throws
      * IllegalArgumentException on ANY header name/value byte that is < 0x20
      * (except tab) or >= 0x7f. The old [DefaultHttpDataSource] path -- Android's
-     * vendored okhttp-2.x under HttpURLConnection, still used for VOD/DVR --
+     * vendored okhttp-2.x under HttpURLConnection, used for VOD/DVR until those
+     * moved to OkHttp too (PlaybackHttp, which sanitizes the same way) --
      * silently accepted those bytes. So a Dispatcharr source carrying a stray
      * non-ASCII / control char in a custom header (or a device whose Build.MODEL
      * puts a non-ASCII char in the default UA) opened fine on VOD/DVR yet nuked
@@ -4477,8 +4470,9 @@ class AerioExoPlayerHolder @Inject constructor(
             .followSslRedirects(true)
             .addNetworkInterceptor(ForceHls.redirectTokenInterceptor)
             // GH #159: a Redirect-profile 302 points at the provider; never
-            // carry Dispatcharr's X-API-Key or Authorization there.
-            .addNetworkInterceptor(LiveRedirect.stripAuthOnCrossHost)
+            // carry Dispatcharr's X-API-Key, Authorization, or Cookie there, or
+            // over an https-to-http hop (the shared rule, installed last).
+            .let(RedirectAuthRule::install)
             .build()
     }
 

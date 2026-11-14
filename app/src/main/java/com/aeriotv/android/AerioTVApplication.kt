@@ -109,6 +109,10 @@ class AerioTVApplication : Application(), Configuration.Provider, SingletonImage
             // A held profile's addresses get no logo requests (the placeholder shows).
             .addInterceptor(com.aeriotv.android.core.network.HeldRouteGate.interceptor)
             .addInterceptor(DispatcharrImageAuthInterceptor(activeCredentials))
+            // The key is added before redirects: a logo or poster URL that
+            // redirects to a CDN never carries it there, or over https-to-http
+            // (the shared rule, installed last).
+            .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
             .build()
         return ImageLoader.Builder(context)
             .memoryCache {

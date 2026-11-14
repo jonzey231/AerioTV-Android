@@ -702,8 +702,8 @@ class DvrViewModel @Inject constructor(
                         }
                         return@fold
                     }
-                    val hosts = trustedServerHosts(playlist)
-                    val server = remote.map { it.toRecording(base, dispatcharrClient, hosts) }
+                    val servers = trustedServerUrls(playlist)
+                    val server = remote.map { it.toRecording(base, dispatcharrClient, servers) }
                     // Fill in programme title/description (and any cached category)
                     // from the on-disk guide for rows the server left sparse. This
                     // is a fast LOCAL pass (Room reads only, no network), plus it
@@ -1012,7 +1012,7 @@ class DvrViewModel @Inject constructor(
             // Recording on its own, so no status guessing. The row uses the
             // same "server-$id" key the refresh-produced row will, so the
             // dedup-by-id guard in refresh() reconciles it in place.
-            val optimistic = result.toRecording(base, dispatcharrClient, trustedServerHosts(playlist))
+            val optimistic = result.toRecording(base, dispatcharrClient, trustedServerUrls(playlist))
             _state.update { st ->
                 val without = st.recordings.filterNot { it.id == optimistic.id }
                 st.copy(recordings = (without + optimistic).sortedBy { it.startMillis })
@@ -1370,7 +1370,7 @@ class DvrViewModel @Inject constructor(
 private fun DispatcharrRecording.toRecording(
     baseUrl: String,
     client: DispatcharrClient,
-    trustedHosts: Set<String>,
+    trustedServers: List<String>,
 ): DvrViewModel.Recording {
     val start = parseIsoMillis(startTime) ?: 0L
     val end = parseIsoMillis(endTime) ?: start
@@ -1396,7 +1396,7 @@ private fun DispatcharrRecording.toRecording(
     val playback: String? = when (status) {
         DvrViewModel.Recording.Status.Completed,
         DvrViewModel.Recording.Status.Stopped ->
-            resolveRecordingUrl(fileUrl, baseUrl, trustedHosts) ?: client.recordingPlaybackUrl(baseUrl, id)
+            resolveRecordingUrl(fileUrl, baseUrl, trustedServers) ?: client.recordingPlaybackUrl(baseUrl, id)
         else -> null
     }
     // In-progress catch-up / watch-live (audit #50, iOS v1.6.22 + #29).
@@ -1405,7 +1405,7 @@ private fun DispatcharrRecording.toRecording(
     // /file/ partial. Only the .m3u8 case is a true growing DVR window;
     // the raw partial plays as fixed VOD.
     val inProgress: String? = if (status == DvrViewModel.Recording.Status.Recording) {
-        resolveRecordingUrl(fileUrl, baseUrl, trustedHosts) ?: client.recordingPlaybackUrl(baseUrl, id)
+        resolveRecordingUrl(fileUrl, baseUrl, trustedServers) ?: client.recordingPlaybackUrl(baseUrl, id)
     } else null
     val dvr = inProgress?.contains(".m3u8", ignoreCase = true) == true
     val cp = customProperties
@@ -1457,14 +1457,12 @@ private fun DispatcharrRecording.toRecording(
 }
 
 /**
- * Hosts a recording FILE url may point at: the playlist's remote URL host and
- * its LAN URL host. Dispatcharr builds absolute URLs from whichever address it
- * was configured with, which need not be the base this device is using now.
+ * Addresses a recording FILE url may point at: the playlist's remote URL and
+ * its LAN URL. Dispatcharr builds absolute URLs from whichever address it was
+ * configured with, which need not be the base this device is using now.
  */
-private fun trustedServerHosts(playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity): Set<String> =
-    listOfNotNull(playlist.urlString, playlist.lanUrlString)
-        .mapNotNull { u -> runCatching { java.net.URI(u.trim()).host }.getOrNull()?.lowercase() }
-        .toSet()
+private fun trustedServerUrls(playlist: com.aeriotv.android.core.data.db.entity.PlaylistEntity): List<String> =
+    listOfNotNull(playlist.urlString, playlist.lanUrlString).filter { it.isNotBlank() }
 
 /** Hosts already reported as rejected this process, so the 30 s refresh logs each once. */
 private val rejectedFileHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -1472,24 +1470,26 @@ private val rejectedFileHosts = java.util.concurrent.ConcurrentHashMap.newKeySet
 /**
  * Resolve a Dispatcharr-reported recording file_url against the active
  * server's effective base URL. Mirrors iOS resolveRecordingURL
- * (MyRecordingsView.swift line 614): an already-absolute value is used if its
- * host is one of [trustedHosts]; a relative path is anchored to the base.
- * Returns null for a blank input or an untrusted host.
+ * (MyRecordingsView.swift line 614): an already-absolute value is used if it
+ * is on one of [trustedServers] by the shared sign-in rule; a relative path is
+ * anchored to the base. Returns null for a blank input or an untrusted address.
  */
-private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String, trustedHosts: Set<String>): String? {
+private fun resolveRecordingUrl(fileUrl: String?, baseUrl: String, trustedServers: List<String>): String? {
     val trimmed = fileUrl?.trim().orEmpty()
     if (trimmed.isEmpty()) return null
     if (trimmed.startsWith("http://", ignoreCase = true) ||
         trimmed.startsWith("https://", ignoreCase = true)
     ) {
         // The recording player sends X-API-Key with this request, so an
-        // absolute file_url on any host other than the playlist's own remote
-        // or LAN host is rejected: it would hand the API key to that host.
-        val host = runCatching { java.net.URI(trimmed).host }.getOrNull()?.lowercase()
-        if (host == null || host !in trustedHosts) {
-            val key = host ?: "<unparseable>"
+        // absolute file_url is used only on the playlist's own remote or LAN
+        // address: same host and effective port, and never https to http
+        // (RedirectAuthRule). Anything else would hand the API key to another
+        // host or port, or send it in the clear.
+        if (!com.aeriotv.android.core.network.RedirectAuthRule.isServerUrl(trimmed, trustedServers)) {
+            val key = runCatching { java.net.URI(trimmed).let { u -> "${u.host?.lowercase()}:${u.port}" } }
+                .getOrNull() ?: "<unparseable>"
             if (rejectedFileHosts.add(key)) {
-                android.util.Log.w("DvrViewModel", "resolveRecordingUrl: rejected file_url on untrusted host $key (logged once per host)")
+                android.util.Log.w("DvrViewModel", "resolveRecordingUrl: rejected file_url on untrusted address $key (logged once per address)")
             }
             return null
         }

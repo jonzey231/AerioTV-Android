@@ -70,10 +70,13 @@ class ActivePlaylistCredentials @Inject constructor() {
         val k = key ?: return null
         val prefs = prefixes
         if (prefs.isEmpty()) return null
-        // Conservative match: startsWith on the URL minus its query string.
-        // A logo URL like ${base}/api/channels/logos/42/cache/ matches
-        // ${base}; a third-party tvg-logo URL doesn't and is ignored.
-        val needle = url.substringBefore('?')
-        return if (prefs.any { needle.startsWith(it) }) k else null
+        // The server's own host and effective port, no https-to-http (the
+        // shared sign-in rule), and under the server URL's path. A logo URL
+        // like ${base}/api/channels/logos/42/cache/ matches ${base}; a
+        // third-party tvg-logo URL doesn't and is ignored. This replaced a
+        // plain startsWith, which also matched https://server.example.net
+        // for https://server.example, 192.168.1.100 for 192.168.1.10, and
+        // another port when the base had none.
+        return if (RedirectAuthRule.isServerUrl(url, prefs, withinPath = true)) k else null
     }
 }

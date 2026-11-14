@@ -107,7 +107,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -1195,20 +1194,15 @@ fun VODPlayerScreen(
                     )
                     .build()
 
-                val dataSourceFactory = DefaultHttpDataSource.Factory()
-                    .setAllowCrossProtocolRedirects(true)
-                    .setConnectTimeoutMs(30_000)
-                    .setReadTimeoutMs(30_000)
-                    // Send a real player UA (parity with live path); some
-                    // panels reject the platform "Dalvik/..." default.
-                    .setUserAgent("AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})")
-                if (httpHeaders.isNotEmpty()) {
-                    dataSourceFactory.setDefaultRequestProperties(httpHeaders)
-                    httpHeaders.entries
-                        .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
-                        ?.value
-                        ?.let(dataSourceFactory::setUserAgent)
-                }
+                // OkHttp under the shared sign-in redirect rule (PlaybackHttp):
+                // the DefaultHttpDataSource this replaces re-sent the auth
+                // headers on every redirect hop, to any host. Send a real
+                // player UA (parity with live path); some panels reject the
+                // platform "Dalvik/..." default. A User-Agent header wins.
+                val dataSourceFactory = com.aeriotv.android.core.playback.PlaybackHttp.factory(
+                    httpHeaders,
+                    "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})",
+                )
 
                 val renderersFactory =
                     com.aeriotv.android.core.playback.aerioRenderersFactory(
@@ -1226,8 +1220,8 @@ fun VODPlayerScreen(
                 // so a local DVR recording's file:// URL resolves through
                 // FileDataSource while remote URLs (VOD + Dispatcharr server
                 // recordings) still flow through the HTTP factory carrying the
-                // auth headers. A bare DefaultHttpDataSource.Factory cannot open
-                // file://, so local recordings would otherwise fail to load.
+                // auth headers. A bare HTTP factory cannot open file://, so
+                // local recordings would otherwise fail to load.
                 val upstreamFactory: androidx.media3.datasource.DataSource.Factory =
                     DefaultDataSource.Factory(ctx, com.aeriotv.android.core.playback.StreamGate.Factory(dataSourceFactory, httpHeaders)).let { base ->
                         // Catch-up (task #133): a Dispatcharr /timeshift/ archive

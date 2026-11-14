@@ -128,7 +128,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -2437,18 +2436,9 @@ private fun ExoTile(
             // Send a real player UA (parity with live path); some panels
             // reject the platform "Dalvik/..." default.
             val tileUserAgent = "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
-            val httpFactory = DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(30_000)
-                .setReadTimeoutMs(30_000)
-                .setUserAgent(tileUserAgent)
-            if (headers.isNotEmpty()) {
-                httpFactory.setDefaultRequestProperties(headers)
-                headers.entries
-                    .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
-                    ?.value
-                    ?.let(httpFactory::setUserAgent)
-            }
+            // OkHttp under the shared sign-in redirect rule (PlaybackHttp); a
+            // User-Agent header wins over tileUserAgent.
+            val httpFactory = com.aeriotv.android.core.playback.PlaybackHttp.factory(headers, tileUserAgent)
             // VOD/DVR: wrap the header-aware HTTP factory in
             // DefaultDataSource.Factory so a completed-recording file:// URL
             // resolves through FileDataSource (a bare HTTP factory cannot open
@@ -3104,11 +3094,15 @@ private fun ExoTile(
                     val swapFactory: androidx.media3.datasource.DataSource.Factory =
                         tracer.wrapDataSourceFactory(
                             if (isVod || tile.kind == TileKind.Dvr) {
-                                val swapHttp = DefaultHttpDataSource.Factory()
-                                    .setAllowCrossProtocolRedirects(true)
-                                if (headers.isNotEmpty()) {
-                                    swapHttp.setDefaultRequestProperties(headers)
-                                }
+                                // Shared sign-in redirect rule (PlaybackHttp), the
+                                // 8 s connect + read this swap always used, and the
+                                // tile's real player UA instead of the platform one.
+                                val swapHttp = com.aeriotv.android.core.playback.PlaybackHttp.factory(
+                                    headers,
+                                    "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})",
+                                    connectTimeoutMs = 8_000,
+                                    readTimeoutMs = 8_000,
+                                )
                                 DefaultDataSource.Factory(view.context, com.aeriotv.android.core.playback.StreamGate.Factory(swapHttp, headers))
                             } else {
                                 // DefaultHttpDataSource defaults: 8 s connect + read.

@@ -79,6 +79,10 @@ class DriveSyncManager @Inject constructor(
     private val okHttp: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        // The shared sign-in redirect rule: the Bearer token never follows a
+        // redirect to another host or port, and an upload body is never sent
+        // to one on a 307 or 308 (OkHttp alone re-sends it).
+        .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
         .build()
 
     private val auth = GoogleDriveAuth(context)

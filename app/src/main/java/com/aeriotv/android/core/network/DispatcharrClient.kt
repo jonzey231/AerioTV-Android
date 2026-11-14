@@ -164,6 +164,10 @@ class DispatcharrClient @Inject constructor() {
         installSanitizedLogging()
         // 429 pause and (later) the rejected-key gate: DispatcharrRequestGate.
         install(DispatcharrGatePlugin)
+        // Ktor's HttpRedirect drops only Authorization on a hop to another
+        // host: the shared rule drops X-API-Key and Cookie too, and drops all
+        // three on https-to-http.
+        install(RedirectAuthRule.Ktor)
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000
             connectTimeoutMillis = 15_000

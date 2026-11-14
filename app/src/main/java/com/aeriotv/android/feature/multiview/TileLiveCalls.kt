@@ -161,6 +161,10 @@ internal class TileLiveCalls {
                 // factories replaced in 6ed34e5e, was HTTP/1.1, one socket
                 // per tile; keep that isolation.
                 .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+                // A Redirect-profile 302 never carries the playlist's
+                // X-API-Key, Authorization, or Cookie to another host or over
+                // https-to-http (the shared rule, installed last).
+                .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
                 .build()
         }
 

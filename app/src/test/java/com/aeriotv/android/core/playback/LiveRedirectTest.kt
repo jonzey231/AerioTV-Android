@@ -34,8 +34,5 @@ class LiveRedirectTest {
         assertEquals("cross-host", LiveRedirect.hostClass("http://a.example/x", "http://b.example/y"))
     }
 
-    @Test fun withoutAuthDropsServerHeaders() {
-        val out = LiveRedirect.withoutAuth(mapOf("X-API-Key" to "k", "authorization" to "b", "User-Agent" to "ua"))
-        assertEquals(setOf("User-Agent"), out.keys)
-    }
+    // The header list and the rule moved to RedirectAuthRule (RedirectAuthRuleTest).
 }

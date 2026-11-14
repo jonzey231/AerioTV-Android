@@ -213,6 +213,10 @@ class TimeshiftController @Inject constructor(
             .followRedirects(true)
             // No fill opens while the server is paused after a 429 (StreamGate).
             .addInterceptor(com.aeriotv.android.core.playback.StreamGate.interceptor)
+            // The fill follows the same Redirect-profile 302 as the player:
+            // never with the sign-in headers to another host or over
+            // https-to-http (the shared rule, installed last).
+            .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
             .build()
     }
 

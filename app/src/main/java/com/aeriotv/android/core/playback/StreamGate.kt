@@ -256,7 +256,7 @@ object StreamGate {
     const val MAX_AUTO_RETRIES = com.aeriotv.android.core.network.RateLimitRetry.MAX_AUTO_RETRIES
 
     /**
-     * Media3 side (DefaultHttpDataSource paths: on demand, recordings, tiles).
+     * Media3 side (PlaybackHttp paths: on demand, recordings, tiles).
      * [headers] are the ones the HTTP factory was built with: the key in them
      * is rewritten per open (a replaced key goes out as the new one through
      * the open's own headers; a held key cannot be taken off a factory's

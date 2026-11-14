@@ -24,7 +24,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.Renderer
@@ -197,7 +196,7 @@ class MultiviewCompositor(
         @Volatile var videoHeight = 0
         @Volatile var pixelRatio = 1f
         var player: ExoPlayer? = null
-        var http: DefaultHttpDataSource.Factory? = null
+        var http: androidx.media3.datasource.DataSource.Factory? = null
         var retries = 0
         /** Reached READY once; a later BUFFERING is a stall. */
         var wasReady = false
@@ -677,20 +676,21 @@ class MultiviewCompositor(
         val source = t.source ?: return
         val surface = t.surface ?: return
         val ua = "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})"
-        val http = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(30_000)
-            .setReadTimeoutMs(30_000)
-            .setUserAgent(headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: ua)
-        if (headers.isNotEmpty()) http.setDefaultRequestProperties(headers)
-        http.setTransferListener(object : androidx.media3.datasource.TransferListener {
-            override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
-            override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
-            override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
-                t.ingestBytes += bytesTransferred
-            }
-            override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
-        })
+        // OkHttp under the shared sign-in redirect rule (PlaybackHttp): a
+        // Redirect-profile tile never carries the key to the provider. A
+        // User-Agent header wins over ua.
+        val http = com.aeriotv.android.core.playback.PlaybackHttp.factory(
+            headers,
+            ua,
+            transferListener = object : androidx.media3.datasource.TransferListener {
+                override fun onTransferInitializing(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+                override fun onTransferStart(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+                override fun onBytesTransferred(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+                    t.ingestBytes += bytesTransferred
+                }
+                override fun onTransferEnd(source: androidx.media3.datasource.DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+            },
+        )
         val renderers = com.aeriotv.android.core.playback.aerioRenderersFactory(
             context,
             audioPassthrough = false,
@@ -824,7 +824,7 @@ class MultiviewCompositor(
      * on the new connection, and the composite audio re-anchors to the
      * tile's restarted clock on its next PCM.
      */
-    private fun restartSource(t: Tile, player: ExoPlayer, http: DefaultHttpDataSource.Factory) {
+    private fun restartSource(t: Tile, player: ExoPlayer, http: androidx.media3.datasource.DataSource.Factory) {
         val source = t.source ?: return
         Log.i(TAG, "[MV-CAST] composite tile ${t.index} ${source.displayName}: ingest restarted on a new connection, decoder and demux reset (retry ${t.retries})")
         t.wasReady = false

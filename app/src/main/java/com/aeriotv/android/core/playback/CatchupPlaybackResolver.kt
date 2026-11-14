@@ -128,8 +128,12 @@ class CatchupPlaybackResolver @Inject constructor(
         when (sourceType) {
             SourceType.DispatcharrApiKey, SourceType.DispatcharrUserPass -> {
                 // Follow the live stream's host (LAN/WAN-aware) rather than the
-                // saved base, mirroring how playback URLs are rebuilt.
+                // saved base, mirroring how playback URLs are rebuilt. The session
+                // is minted with the API key, so only on the playlist's own remote
+                // or LAN address (same host and port, the shared sign-in rule): a
+                // stored channel row can still carry an older address.
                 val base = CatchupUrlBuilder.dispatcharrBaseFromStreamUrl(channel.url)
+                    ?.takeIf { isServerBase(playlist, it) }
                     ?: playlist.urlString.trimEnd('/')
                 val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() }
                     ?: throw Failure.Unsupported()
@@ -174,7 +178,7 @@ class CatchupPlaybackResolver @Inject constructor(
                 // the session's serving generator to the request that created
                 // it, so a throwaway probe that opens then closes SPENDS the
                 // session and the player's subsequent open 404s (verified on
-                // device). ExoPlayer's DefaultHttpDataSource follows the 301
+                // device). The player's HTTP source (PlaybackHttp) follows the 301
                 // in-band and keeps its own session alive for the playback.
                 Playback(
                     url = CatchupUrlBuilder.build(
@@ -247,7 +251,7 @@ class CatchupPlaybackResolver @Inject constructor(
         programmeEndMillis: Long = 0L,
     ): String? {
         val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: return null
-        val base = baseOf(currentPlaybackUrl) ?: return null
+        val base = baseOf(currentPlaybackUrl)?.takeIf { isServerBase(playlist, it) } ?: return null
         // GH #129: the seek re-tune asks for guide time + offset, the same
         // shift the opening request carried.
         val shiftMs = CatchupRequestShift.activeMillis
@@ -283,7 +287,7 @@ class CatchupPlaybackResolver @Inject constructor(
         paused: Boolean,
     ): Boolean {
         val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: return true
-        val base = baseOf(playbackUrl) ?: return true
+        val base = baseOf(playbackUrl)?.takeIf { isServerBase(playlist, it) } ?: return true
         val sessionId = playbackUrl.substringAfter("session_id=", "")
             .substringBefore('&')
             .takeIf { it.isNotBlank() } ?: return true
@@ -305,12 +309,21 @@ class CatchupPlaybackResolver @Inject constructor(
      *  TTL). No-op for XC-shaped URLs or when parsing fails. */
     suspend fun revokeNative(playlist: PlaylistEntity, playbackUrl: String) {
         val apiKey = playlist.apiKey?.takeIf { it.isNotBlank() } ?: return
-        val base = baseOf(playbackUrl) ?: return
+        val base = baseOf(playbackUrl)?.takeIf { isServerBase(playlist, it) } ?: return
         val sessionId = playbackUrl.substringAfter("session_id=", "")
             .substringBefore('&')
             .takeIf { it.isNotBlank() } ?: return
         dispatcharrClient.deleteCatchupSession(base, apiKey, sessionId)
     }
+
+    /** True when [base] is the playlist's own remote or LAN address by the
+     *  shared sign-in rule (same host and effective port, no https to http):
+     *  the catch-up session calls carry the API key there. */
+    private fun isServerBase(playlist: PlaylistEntity, base: String): Boolean =
+        com.aeriotv.android.core.network.RedirectAuthRule.isServerUrl(
+            base,
+            listOf(playlist.urlString, playlist.lanUrlString),
+        )
 
     /** scheme://host[:port] of an absolute URL, or null. */
     private fun baseOf(url: String): String? = runCatching {

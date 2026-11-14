@@ -6,7 +6,6 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,12 +112,9 @@ object MultiviewBackground {
         return run {
             runCatching {
                 val h = if (tile.kind == TileKind.Live) headers else headers + tile.httpHeaders
-                val http = DefaultHttpDataSource.Factory()
-                    .setAllowCrossProtocolRedirects(true)
-                    .setConnectTimeoutMs(30_000)
-                    .setReadTimeoutMs(30_000)
-                    .setUserAgent(h.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: ua)
-                if (h.isNotEmpty()) http.setDefaultRequestProperties(h)
+                // OkHttp under the shared sign-in redirect rule (PlaybackHttp);
+                // a User-Agent header wins over ua.
+                val http = com.aeriotv.android.core.playback.PlaybackHttp.factory(h, ua)
                 ExoPlayer.Builder(app)
                     // The tiles' renderers (bundled FFmpeg audio, PCM out):
                     // with video off, a plain builder had no renderer for

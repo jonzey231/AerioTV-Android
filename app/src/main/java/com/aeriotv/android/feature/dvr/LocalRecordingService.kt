@@ -94,19 +94,12 @@ class LocalRecordingService : Service() {
             // No recording opens while the server is paused after a 429 (StreamGate).
             .addInterceptor(com.aeriotv.android.core.playback.StreamGate.interceptor)
             // OkHttp strips Authorization on cross-host redirects by default,
-            // but NOT custom headers. Strip X-API-Key too so a 302 to an
-            // attacker host cannot harvest the credential.
-            .addNetworkInterceptor { chain ->
-                val req = chain.request()
-                val trustedHost = req.tag(String::class.java)
-                val modifiedReq = if (trustedHost != null && req.url.host != trustedHost) {
-                    req.newBuilder()
-                        .removeHeader("X-API-Key")
-                        .removeHeader("Authorization")
-                        .build()
-                } else req
-                chain.proceed(modifiedReq)
-            }
+            // but NOT custom headers: the shared rule drops X-API-Key,
+            // Authorization, and Cookie on a hop to another host or from https
+            // to http, so a 302 to another host cannot harvest the credential.
+            // It replaces a per-request host tag that compared hosts with
+            // their case intact and left Cookie and the downgrade alone.
+            .let(com.aeriotv.android.core.network.RedirectAuthRule::install)
             .build()
     }
 
@@ -267,9 +260,6 @@ class LocalRecordingService : Service() {
                         userAgent.takeIf { it.isNotBlank() }
                             ?.let { header("User-Agent", it) }
                     }
-                    // Tag the trusted host so the network interceptor can strip
-                    // credentials from any cross-host redirect that follows.
-                    .tag(String::class.java, runCatching { java.net.URI(streamUrl).host }.getOrNull() ?: "")
                     .build()
                 okHttp.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
@@ -433,7 +423,6 @@ class LocalRecordingService : Service() {
                         userAgent.takeIf { it.isNotBlank() }
                             ?.let { header("User-Agent", it) }
                     }
-                    .tag(String::class.java, runCatching { java.net.URI(fileUrl).host }.getOrNull() ?: "")
                     .build()
                 okHttp.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {

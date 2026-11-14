@@ -21,9 +21,8 @@ import androidx.media3.datasource.TransferListener
 object LiveRedirect {
     const val TAG = "AerioLiveSource"
 
-    /** Headers that authenticate to Dispatcharr and must never follow a
-     *  redirect to another host. */
-    private val AUTH_HEADERS = listOf("X-API-Key", "Authorization", "Cookie")
+    // The sign-in headers never follow a redirect to another host or from
+    // https to http: RedirectAuthRule, installed on the live client.
 
     enum class Content { TS, HLS, UNKNOWN }
 
@@ -53,31 +52,6 @@ object LiveRedirect {
         val b = runCatching { java.net.URI(landed).host?.lowercase() }.getOrNull()
         return if (a != null && a == b) "same-host" else "cross-host"
     }
-
-    /**
-     * OkHttp network interceptor: on every hop after a redirect to a DIFFERENT
-     * host than the original request, drop Dispatcharr's auth headers. OkHttp
-     * itself only strips Authorization; X-API-Key would ride along to the
-     * provider.
-     */
-    val stripAuthOnCrossHost = okhttp3.Interceptor { chain ->
-        val req = chain.request()
-        val originalHost = chain.call().request().url.host
-        if (!req.url.host.equals(originalHost, ignoreCase = true) &&
-            AUTH_HEADERS.any { req.header(it) != null }
-        ) {
-            val b = req.newBuilder()
-            AUTH_HEADERS.forEach { b.removeHeader(it) }
-            chain.proceed(b.build())
-        } else {
-            chain.proceed(req)
-        }
-    }
-
-    /** Copy of [headers] without the Dispatcharr auth headers (for a source
-     *  that talks to the provider directly). */
-    fun withoutAuth(headers: Map<String, String>): Map<String, String> =
-        headers.filterKeys { k -> AUTH_HEADERS.none { it.equals(k, ignoreCase = true) } }
 
     fun findUpstreamHls(t: Throwable?): UpstreamHlsRedirectException? =
         generateSequence(t) { it.cause }.take(12).firstOrNull { it is UpstreamHlsRedirectException }
@@ -110,7 +84,10 @@ class LiveRedirectSniff(private val upstream: DataSource) : DataSource {
         val len = upstream.open(dataSpec)
         val req = dataSpec.uri.toString()
         val landed = upstream.uri?.toString() ?: return len
-        if (landed == req || ForceHls.isSessionUrl(landed)) return len
+        // The server's own HLS session is ServerHlsGuard's. One on another host
+        // (or reached over a downgrade) is the provider's: sniffed here, and an
+        // HLS answer plays without the sign-in headers.
+        if (landed == req || ForceHls.isServerSession(req, landed)) return len
         val buf = ByteArray(PEEK_BYTES)
         var n = 0
         // A live body can arrive in small chunks; read until there is enough
