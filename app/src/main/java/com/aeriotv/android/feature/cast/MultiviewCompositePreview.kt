@@ -46,7 +46,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.DropdownMenu
+import com.aeriotv.android.ui.scale.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import com.aeriotv.android.ui.settings.rememberIsTvDevice
