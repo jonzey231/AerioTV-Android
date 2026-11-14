@@ -3482,7 +3482,11 @@ private fun SettingsTabContent(
         // lands on the Settings pill, preserving the pill -> DOWN -> list flow.
         val entering = subScreenKey != null
         val exitingToRoot = subScreenKey == null && prevSubScreenKey != null
-        if (entering || exitingToRoot) runCatching { settingsContentFocus.requestFocus() }
+        // TV only: phones and tablets have no selection-follows-focus nav to
+        // escape, and in touch mode the first node that takes focus is a text
+        // field, so the pull opened Edit Playlist with Name focused and the
+        // keyboard up (tablet emulator, 2026-11-14).
+        if (isTvDevice && (entering || exitingToRoot)) runCatching { settingsContentFocus.requestFocus() }
         prevSubScreenKey = subScreenKey
     }
     // Settings tab re-tap (TabReselect): pop whatever is pushed back to the
