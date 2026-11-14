@@ -1,6 +1,7 @@
 package com.aeriotv.android.core.sync
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -40,6 +41,19 @@ class SyncScopeLanesTest {
         assertEquals(mapOf("selectedTheme" to "Midnight"), pickFromLanes(lanes, emptyList(), { scopes.getValue(it) }, isTv = true))
         // Phone: the TV scope reads as All devices, so `v`; the mobile lane is never consulted for an All item.
         assertEquals(mapOf("textScale" to 1.0, "selectedTheme" to "Aerio"), pickFromLanes(lanes, emptyList(), { scopes.getValue(it) }, isTv = false))
+    }
+
+    @Test fun trueBlackRidesWithLightAndDarkMode() {
+        // One row, one scope: the two values always sync together.
+        assertEquals("appearanceMode", SyncItemCatalog.itemForName("trueBlack")?.id)
+        assertEquals("appearanceMode", SyncItemCatalog.itemForName("appearanceMode")?.id)
+        assertEquals(null, SyncItemCatalog.item("trueBlack"))
+        val labels = SyncItemCatalog.groups.first { it.id == "appearance" }.items.map { it.label }
+        assertTrue("Light and Dark Mode" in labels && "True Black Background" !in labels)
+        // A scope stored for the old trueBlack item is ignored; the Light and Dark Mode scope rules.
+        assertEquals(false, SetupSourceChoice.nameOff(mapOf("trueBlack" to SyncScope.Off), "trueBlack"))
+        assertEquals(true, SetupSourceChoice.nameOff(mapOf("appearanceMode" to SyncScope.Off), "trueBlack"))
+        assertEquals(true, SetupSourceChoice.nameOff(mapOf("appearanceMode" to SyncScope.Off), "appearanceMode"))
     }
 
     @Test fun catalogIdsAreUniqueAndNamesBelongToOneItem() {

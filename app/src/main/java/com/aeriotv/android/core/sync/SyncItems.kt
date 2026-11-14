@@ -89,8 +89,12 @@ object SyncItemCatalog {
     val groups: List<SyncItemGroup> = listOf(
         SyncItemGroup("appearance", "Appearance", listOf(
             SyncItem("selectedTheme", "Color Theme", listOf("selectedTheme", "customThemeHex")),
-            SyncItem("appearanceMode", "Light and Dark Mode", listOf("appearanceMode")),
-            SyncItem("trueBlack", "True Black Background", listOf("trueBlack")),
+            // True Black is a Light and Dark Mode choice (Dark at pure black),
+            // so its value rides this item's scope: two scopes could land
+            // another device on plain Dark. Wire names are unchanged
+            // (trueBlack, Drive appearanceTrueBlack); a scope stored for the
+            // old "trueBlack" item is no longer read.
+            SyncItem("appearanceMode", "Light and Dark Mode", listOf("appearanceMode", "trueBlack")),
             SyncItem("customAccent", "Custom Accent Color", listOf("useCustomAccent", "customAccentHex")),
             SyncItem("textScale", "Text Size", listOf("textScale")),
             SyncItem("subtextScale", "Subtext Size", listOf("subtextScale")),

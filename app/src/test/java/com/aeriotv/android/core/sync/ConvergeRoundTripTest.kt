@@ -161,7 +161,8 @@ class ConvergeRoundTripTest {
     }
 
     @Test fun categoryOffOnThisDeviceIsNeitherComparedNorConverged() {
-        val scopes = mapOf("favorites" to SyncScope.Off, "trueBlack" to SyncScope.Off)
+        // trueBlack rides the Light and Dark Mode item's scope.
+        val scopes = mapOf("favorites" to SyncScope.Off, "appearanceMode" to SyncScope.Off)
         val d = driveSummary(false, scopes, driveLanes = mapOf("v" to mapOf("trueBlack" to JsonPrimitive(false))))
         val x = dsyncSummary(dsyncData(true, wireLanes).filterKeys { it == DsyncKey.Favorites || it == DsyncKey.Settings }.let {
             it + (DsyncKey.Settings to DsyncPayloads.encodeSettingsLanes(null, mapOf("v" to mapOf("trueBlack" to JsonPrimitive(true)))))
