@@ -553,6 +553,9 @@ class DvrViewModel @Inject constructor(
                             fileMissing = com.aeriotv.android.core.data.LocalRecordingRules.isMissing(r.status, r.filePath) { p ->
                                 com.aeriotv.android.core.data.LocalRecordingFiles.probe(appContext, p).bytes != null
                             },
+                            // Program Info's Format comes from the file's
+                            // name; a Downloads file's path has none.
+                            fileName = com.aeriotv.android.core.data.LocalRecordingFiles.displayName(appContext, r.filePath),
                         )
                     }
                 }
@@ -1528,7 +1531,7 @@ private fun resolveArtUrl(url: String, baseUrl: String): String {
     return base + (if (trimmed.startsWith("/")) trimmed else "/$trimmed")
 }
 
-private fun LocalRecordingEntity.toRecording(fileMissing: Boolean = false): DvrViewModel.Recording {
+private fun LocalRecordingEntity.toRecording(fileMissing: Boolean = false, fileName: String? = null): DvrViewModel.Recording {
     val status = when (this.status.lowercase()) {
         // A capture cut short keeps what it captured and plays, like a
         // server recording Dispatcharr marks interrupted.
@@ -1568,6 +1571,7 @@ private fun LocalRecordingEntity.toRecording(fileMissing: Boolean = false): DvrV
         failureReason = failureReason.takeIf { status == DvrViewModel.Recording.Status.Failed },
         channelName = com.aeriotv.android.core.data.LocalRecordingRules.shownChannelName(channelName, title),
         fileMissing = fileMissing,
+        fileName = fileName,
     )
 }
 

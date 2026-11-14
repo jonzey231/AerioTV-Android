@@ -42,6 +42,27 @@ object LocalRecordingFiles {
     }.getOrElse { Probe(null, null) }
 
     /**
+     * The recording file's name, whose extension is its format (Program
+     * Info's Format row). A Downloads (MediaStore) or picked-folder file is a
+     * content:// URI with no extension, so its name is read from the content
+     * resolver. Null when there is no file to name.
+     */
+    fun displayName(context: Context, path: String): String? = runCatching {
+        if (path.isBlank()) return@runCatching null
+        when (kind(path)) {
+            Kind.ContentUri -> context.contentResolver.query(
+                android.net.Uri.parse(path),
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            Kind.FileUri -> android.net.Uri.parse(path).lastPathSegment
+            Kind.Path -> java.io.File(path).name
+        }
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    /**
      * Make a MediaStore recording visible in Downloads (clear IS_PENDING), as
      * a normal finish does; a capture cut short by a process death was left
      * pending, and pending items are hidden and eventually reaped. A no-op
