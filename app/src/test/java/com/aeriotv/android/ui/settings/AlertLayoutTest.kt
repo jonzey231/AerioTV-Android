@@ -90,4 +90,49 @@ class AlertLayoutTest {
         assertEquals(AlertLayout.Style.Tonal, AlertLayout.tvStyle(AlertRole.Primary, focused = false))
         assertEquals(AlertLayout.Style.TonalError, AlertLayout.tvStyle(AlertRole.Destructive, focused = false))
     }
+
+    @Test fun receivePromptKeepsItsRowOnlyWhileEveryLabelFits() {
+        // Apple dc7cae2: "This playlist already exists" is a row while it fits.
+        val k = AlertLayout.Kind.RowWhileFits
+        assertEquals(AlertLayout.Arrangement.SideBySide, AlertLayout.arrangement(3, isTv = false, kind = k, labelsFit = true))
+        assertEquals(AlertLayout.Arrangement.Stacked, AlertLayout.arrangement(3, isTv = false, kind = k, labelsFit = false))
+        // Apple TV keeps the row.
+        assertEquals(AlertLayout.Arrangement.SideBySide, AlertLayout.arrangement(3, isTv = true, kind = k, labelsFit = false))
+        // Stacked: the primary first and Cancel last; the row keeps Cancel, Add Anyway, Replace.
+        val dup = listOf(A("Add Anyway", AlertRole.Default), A("Replace", AlertRole.Primary), A("Cancel", AlertRole.Cancel))
+        assertEquals(listOf("Replace", "Add Anyway", "Cancel"), order(dup, AlertLayout.Arrangement.Stacked))
+        assertEquals(listOf("Cancel", "Add Anyway", "Replace"), order(dup, AlertLayout.Arrangement.SideBySide))
+    }
+
+    @Test fun anEqualWidthRowFitsWhileEveryButtonFitsItsShare() {
+        // 300 wide, two 8 gaps: each of three buttons gets 94.67.
+        assertEquals(true, AlertLayout.equalRowFits(listOf(80f, 94f, 60f), available = 300f, gap = 8f))
+        assertEquals(false, AlertLayout.equalRowFits(listOf(80f, 95f, 60f), available = 300f, gap = 8f))
+        assertEquals(true, AlertLayout.equalRowFits(emptyList(), available = 0f, gap = 8f))
+    }
+
+    @Test fun theRowGivesEveryLabelOneLineOrTheButtonsStack() {
+        // Equal shares while every label fits one (the row's usual look).
+        assertEquals(listOf(1f, 1f, 1f), AlertLayout.rowWeights(listOf(80f, 94f, 60f), available = 300f, gap = 8f))
+        // "Add Anyway" outgrows its share, but the labels still fit side by side: widths in proportion.
+        val wide = listOf(80f, 120f, 60f)
+        val w = AlertLayout.rowWeights(wide, available = 300f, gap = 8f)!!
+        assertEquals(wide, w)
+        wide.forEachIndexed { i, label -> assertEquals(true, (300f - 16f) * w[i] / w.sum() >= label) }
+        // A tablet-wide prompt at 150% (dp): Cancel, Add Anyway, Replace keep the row, as an iPad does.
+        assertEquals(true, AlertLayout.rowWeights(listOf(117.5f, 171.5f, 129f), available = 512f, gap = 8f) != null)
+        // No row can: stacked.
+        assertEquals(null, AlertLayout.rowWeights(listOf(120f, 140f, 110f), available = 300f, gap = 8f))
+    }
+
+    @Test fun aNaturalWidthRowFitsWhileItsButtonsAndGapsFit() {
+        // Exactly full, then one over.
+        assertEquals(true, AlertLayout.naturalRowFits(listOf(184f, 220f), available = 420f, gap = 16f))
+        assertEquals(false, AlertLayout.naturalRowFits(listOf(185f, 220f), available = 420f, gap = 16f))
+        // A phone's 371 dp, Cancel at its label's width, 16 apart: "Import this user only"
+        // keeps the row at 140% and stacks at 150%; "New Code" keeps it at 150%.
+        assertEquals(true, AlertLayout.naturalRowFits(listOf(237f, 112f), available = 371f, gap = 16f))
+        assertEquals(false, AlertLayout.naturalRowFits(listOf(250f, 117f), available = 371f, gap = 16f))
+        assertEquals(true, AlertLayout.naturalRowFits(listOf(138f, 117f), available = 371f, gap = 16f))
+    }
 }

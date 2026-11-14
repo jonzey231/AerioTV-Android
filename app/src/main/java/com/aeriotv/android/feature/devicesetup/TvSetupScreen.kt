@@ -565,14 +565,65 @@ private fun OfferingText(offer: SetupReceiver.Offer, focus: FocusRequester, onCa
 private fun Message(title: String, body: String, primary: Pair<String, () -> Unit>, onCancel: () -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(title) { runCatching { focus.requestFocus() } }
+    val isTv = com.aeriotv.android.ui.settings.rememberIsTvDevice()
     Column(Modifier.widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
         Spacer(Modifier.height(12.dp))
         Text(body, style = MaterialTheme.typography.bodyLarge.subtext(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = primary.second, modifier = Modifier.focusRequester(focus).dpadFocusRing(RoundedCornerShape(50))) { Text(primary.first) }
-            OutlinedButton(onClick = onCancel, modifier = Modifier.secondaryButtonFrame()) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
+        val primaryButton: @Composable (Modifier) -> Unit = { m ->
+            Button(onClick = primary.second, modifier = m.focusRequester(focus).dpadFocusRing(RoundedCornerShape(50))) {
+                Text(primary.first, textAlign = TextAlign.Center)
+            }
+        }
+        val cancelButton: @Composable (Modifier) -> Unit = { m ->
+            OutlinedButton(onClick = onCancel, modifier = m.secondaryButtonFrame()) { Text("Cancel", style = MaterialTheme.typography.titleMedium) }
+        }
+        if (isTv) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                primaryButton(Modifier)
+                cancelButton(Modifier)
+            }
+            return@Column
+        }
+        // Apple dc7cae2 (PromptButtons): the row while both labels fit on one
+        // line at the buttons' own widths ("Import this user only" did not on
+        // a phone); otherwise stacked full width, the primary first and
+        // Cancel last. TV keeps the row. Cancel counts at its label's width:
+        // in a tight row its 220 dp minimum gives way to the space left, as
+        // it always did, and only the label has to fit.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val pad = androidx.compose.material3.ButtonDefaults.ContentPadding
+            val sides = with(density) {
+                (pad.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr) +
+                    pad.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)).toPx()
+            }
+            val primaryWidth = maxOf(
+                measurer.measure(primary.first, MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false).size.width + sides,
+                with(density) { androidx.compose.material3.ButtonDefaults.MinWidth.toPx() },
+            )
+            val cancelWidth = maxOf(
+                measurer.measure("Cancel", MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false).size.width + sides,
+                with(density) { androidx.compose.material3.ButtonDefaults.MinWidth.toPx() },
+            )
+            val fits = com.aeriotv.android.ui.settings.AlertLayout.naturalRowFits(
+                listOf(primaryWidth, cancelWidth),
+                constraints.maxWidth.toFloat(),
+                with(density) { 16.dp.toPx() },
+            )
+            if (fits) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)) {
+                    primaryButton(Modifier)
+                    cancelButton(Modifier)
+                }
+            } else {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    primaryButton(Modifier.fillMaxWidth().heightIn(min = 54.dp))
+                    cancelButton(Modifier.fillMaxWidth())
+                }
+            }
         }
     }
 }
@@ -585,7 +636,9 @@ private fun Message(title: String, body: String, primary: Pair<String, () -> Uni
 @Composable
 private fun DuplicatePlaylistDialog(existingName: String, onChoice: (TvSetupViewModel.DuplicateChoice) -> Unit) {
     // Apple's own prompt (ReceiveSetupView): centered text, one row of
-    // Cancel, Add Anyway, and Replace (filled), Replace focused.
+    // Cancel, Add Anyway, and Replace (filled), Replace focused. When the row
+    // cannot give every label one line, the buttons stack full width:
+    // Replace, Add Anyway, Cancel (Apple dc7cae2). TV keeps the row.
     com.aeriotv.android.ui.settings.AlertPrompt(
         onDismissRequest = { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) },
         title = "This playlist already exists",
@@ -596,7 +649,7 @@ private fun DuplicatePlaylistDialog(existingName: String, onChoice: (TvSetupView
             com.aeriotv.android.ui.settings.AlertAction("Cancel", com.aeriotv.android.ui.settings.AlertRole.Cancel) { onChoice(TvSetupViewModel.DuplicateChoice.Cancel) },
         ),
         centered = true,
-        kind = com.aeriotv.android.ui.settings.AlertLayout.Kind.Row,
+        kind = com.aeriotv.android.ui.settings.AlertLayout.Kind.RowWhileFits,
         focusButton = true,
     )
 }

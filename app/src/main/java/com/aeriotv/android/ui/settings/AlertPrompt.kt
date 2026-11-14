@@ -86,17 +86,55 @@ object AlertLayout {
         /** Apple's own prompt with one equal-width row of buttons, on every device. */
         Row,
 
+        /**
+         * Apple's own prompt row while every label fits on one line in it
+         * ([rowWeights]); otherwise stacked full width, the primary first
+         * and Cancel last (Apple PromptButtons, dc7cae2). TV keeps the row.
+         */
+        RowWhileFits,
+
         /** An action sheet: always stacked, Cancel last. */
         Sheet,
     }
 
-    fun arrangement(count: Int, isTv: Boolean, kind: Kind = Kind.Alert): Arrangement = when {
+    /** [labelsFit]: for [Kind.RowWhileFits], whether a row can give every label one line ([rowWeights] is not null). */
+    fun arrangement(count: Int, isTv: Boolean, kind: Kind = Kind.Alert, labelsFit: Boolean = true): Arrangement = when {
         count <= 1 -> Arrangement.Single
         kind == Kind.Row -> Arrangement.SideBySide
+        kind == Kind.RowWhileFits -> if (isTv || labelsFit) Arrangement.SideBySide else Arrangement.Stacked
         kind == Kind.Sheet -> Arrangement.Stacked
         isTv -> Arrangement.Stacked
         count == 2 -> Arrangement.SideBySide
         else -> Arrangement.Stacked
+    }
+
+    /**
+     * Apple's ViewThatFits(in: .horizontal) for an equal-width row of
+     * buttons: it holds while every button's one-line width fits its share of
+     * [available] once the [gap]s between them are taken out. Any one unit.
+     */
+    fun equalRowFits(buttonWidths: List<Float>, available: Float, gap: Float): Boolean {
+        if (buttonWidths.isEmpty()) return true
+        val share = (available - gap * (buttonWidths.size - 1)) / buttonWidths.size
+        return buttonWidths.all { it <= share }
+    }
+
+    /** The same for a row of buttons at their own one-line widths, side by side. */
+    fun naturalRowFits(buttonWidths: List<Float>, available: Float, gap: Float): Boolean =
+        buttonWidths.sum() + gap * (buttonWidths.size - 1).coerceAtLeast(0) <= available
+
+    /**
+     * Row weights that give every button's label one line, in [buttonWidths]
+     * order, or null when no row can and the buttons stack. Equal while
+     * every label fits an equal share (the row's usual look); otherwise in
+     * proportion to the labels while they and the [gap]s fit [available], as
+     * Apple's row of pills at their own widths still fits there (an iPad
+     * keeps its row at every Text Size). Any one unit.
+     */
+    fun rowWeights(buttonWidths: List<Float>, available: Float, gap: Float): List<Float>? = when {
+        equalRowFits(buttonWidths, available, gap) -> buttonWidths.map { 1f }
+        naturalRowFits(buttonWidths, available, gap) -> buttonWidths
+        else -> null
     }
 
     /**
@@ -175,10 +213,7 @@ fun AlertPrompt(
 ) {
     val isTv = rememberIsTvDevice()
     // An Apple TV system alert (not Apple's own one-row prompt): its narrow card and title.
-    val tvAlert = isTv && kind != AlertLayout.Kind.Row
-    val arrangement = AlertLayout.arrangement(actions.size, isTv, kind)
-    val shown = AlertLayout.ordered(actions, { it.role }, arrangement)
-    val focusIndex = AlertLayout.defaultFocus(shown, { it.role })
+    val tvAlert = isTv && kind != AlertLayout.Kind.Row && kind != AlertLayout.Kind.RowWhileFits
     val focus = remember { FocusRequester() }
     val align = if (centered) TextAlign.Center else TextAlign.Start
     androidx.compose.material3.BasicAlertDialog(onDismissRequest = onDismissRequest, properties = properties) {
@@ -214,20 +249,41 @@ fun AlertPrompt(
                         }
                     }
                     Spacer(Modifier.height(24.dp))
-                    val button: @Composable (Int, AlertAction, Modifier) -> Unit = { i, a, m ->
-                        AlertButton(a, isTv, if (i == focusIndex) m.focusRequester(focus) else m)
-                    }
-                    val gap = if (tvAlert) AlertLayout.TV_BUTTON_GAP_DP.dp else 8.dp
-                    // TV: no touch-target padding around the capsules (a remote has no touch), so they sit as close as Apple's.
-                    CompositionLocalProvider(
-                        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides if (isTv) 0.dp else androidx.compose.material3.LocalMinimumInteractiveComponentSize.current,
-                    ) {
-                        when (arrangement) {
-                            AlertLayout.Arrangement.SideBySide -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                shown.forEachIndexed { i, a -> button(i, a, Modifier.weight(1f)) }
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        // RowWhileFits: each label at its one-line width, in the
+                        // button's own style and side padding, against the row
+                        // (Apple's ViewThatFits). TV keeps the equal row.
+                        val weights: List<Float>? = if (kind == AlertLayout.Kind.RowWhileFits && !isTv) {
+                            val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+                            val density = androidx.compose.ui.platform.LocalDensity.current
+                            val style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+                            val pad = ButtonDefaults.ContentPadding
+                            val sides = with(density) {
+                                (pad.calculateLeftPadding(androidx.compose.ui.unit.LayoutDirection.Ltr) +
+                                    pad.calculateRightPadding(androidx.compose.ui.unit.LayoutDirection.Ltr)).toPx()
                             }
-                            else -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
-                                shown.forEachIndexed { i, a -> button(i, a, Modifier.fillMaxWidth()) }
+                            val widths = actions.map { measurer.measure(it.label, style, maxLines = 1, softWrap = false).size.width + sides }
+                            AlertLayout.rowWeights(widths, constraints.maxWidth.toFloat(), with(density) { 8.dp.toPx() })
+                        } else actions.map { 1f }
+                        val weightOf = { a: AlertAction -> weights?.getOrNull(actions.indexOfFirst { it === a }) ?: 1f }
+                        val arrangement = AlertLayout.arrangement(actions.size, isTv, kind, labelsFit = weights != null)
+                        val shown = AlertLayout.ordered(actions, { it.role }, arrangement)
+                        val focusIndex = AlertLayout.defaultFocus(shown, { it.role })
+                        val button: @Composable (Int, AlertAction, Modifier) -> Unit = { i, a, m ->
+                            AlertButton(a, isTv, if (i == focusIndex) m.focusRequester(focus) else m)
+                        }
+                        val gap = if (tvAlert) AlertLayout.TV_BUTTON_GAP_DP.dp else 8.dp
+                        // TV: no touch-target padding around the capsules (a remote has no touch), so they sit as close as Apple's.
+                        CompositionLocalProvider(
+                            androidx.compose.material3.LocalMinimumInteractiveComponentSize provides if (isTv) 0.dp else androidx.compose.material3.LocalMinimumInteractiveComponentSize.current,
+                        ) {
+                            when (arrangement) {
+                                AlertLayout.Arrangement.SideBySide -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    shown.forEachIndexed { i, a -> button(i, a, Modifier.weight(weightOf(a))) }
+                                }
+                                else -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
+                                    shown.forEachIndexed { i, a -> button(i, a, Modifier.fillMaxWidth()) }
+                                }
                             }
                         }
                     }
