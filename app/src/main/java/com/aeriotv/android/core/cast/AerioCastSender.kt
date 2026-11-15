@@ -440,10 +440,14 @@ class AerioCastSender @Inject constructor(
             Log.i(TAG, "[Cast] target=android-tv-app, native playback (receiver answered)")
         } else if (answered) {
             Log.i(TAG, "[Cast] target=web-receiver (receiver answered)")
-            // Only an explicit web answer demotes a device: a timeout can be a
-            // slow Cast Connect cold start on a TV that still has the app.
+            // Only an explicit web answer to a launch that ASKED for the TV app
+            // demotes a device: that is Cast Connect falling back because the
+            // app is gone. A plain cast (Google Cast entry) is supposed to come
+            // up on the web receiver even on a TV that has the app (owner rule
+            // 2026-11-14), so its answer says nothing about the app. A timeout
+            // can be a slow Cast Connect cold start, so it never demotes either.
             val id = currentDeviceId
-            if (nativeDevices.forget(id)) {
+            if (_launchIntent.value == CastLaunchIntent.TvApp && nativeDevices.forget(id)) {
                 Log.i(TAG, "[Cast] device $id no longer AerioTV on TV")
             }
         } else {
