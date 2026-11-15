@@ -89,6 +89,14 @@ object MiniPlayerChrome {
 
     /** Width of the video left on screen while the mini is stashed. */
     val stashSliver = 32.dp
+
+    /** The TV corner mini's frame in root px while it is shown (leading edge
+     *  and bottom edge), 0 when it is not (hidden, full screen, stashed, or a
+     *  phone or tablet, whose floating mini is never published). Published by
+     *  PersistentExoWindow from the frame it draws; read by
+     *  [tvMiniPlayerClearance] so content stops short of the mini. */
+    val frameLeftPx = MutableStateFlow(0f)
+    val frameBottomPx = MutableStateFlow(0f)
 }
 
 @Singleton

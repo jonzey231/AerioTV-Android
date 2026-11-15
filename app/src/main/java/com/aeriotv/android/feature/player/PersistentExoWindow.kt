@@ -232,6 +232,18 @@ fun BoxScope.PersistentExoWindow(
         animationSpec = if (reduceMotion) snap() else miniSpec,
         label = "miniStashOffset",
     )
+    // Publish the frame the TV mini settles at (its target, not the spring's
+    // value, so content does not chase the minimize animation) for
+    // tvMiniPlayerClearance. A stashed or hidden mini covers nothing.
+    val publishFrame = !isPhone && miniTarget && !settingsStashed
+    androidx.compose.runtime.SideEffect {
+        with(localDensity) {
+            MiniPlayerChrome.frameLeftPx.value =
+                if (publishFrame) (screenW - MINI_END_INSET - miniFitWidth).toPx() else 0f
+            MiniPlayerChrome.frameBottomPx.value =
+                if (publishFrame) (miniFitTop + miniFitHeight).toPx() else 0f
+        }
+    }
     var stashFadeCover by remember { mutableFloatStateOf(0f) }
     var lastStashTarget by remember { mutableStateOf(stashTarget) }
     LaunchedEffect(stashTarget) {

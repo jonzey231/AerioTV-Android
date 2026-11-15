@@ -72,6 +72,7 @@ import coil3.compose.AsyncImage
 import com.aeriotv.android.core.data.guideMatchKey
 import com.aeriotv.android.core.data.toInfoTarget
 import com.aeriotv.android.feature.livetv.LiveChannelHitRow
+import com.aeriotv.android.feature.player.tvMiniPlayerClearance
 import com.aeriotv.android.feature.livetv.LiveSearchCopy
 import com.aeriotv.android.feature.livetv.liveProgramSearchSection
 import com.aeriotv.android.feature.livetv.liveSearchSectionHeader
@@ -160,8 +161,12 @@ fun SearchScreen(
             .padding(horizontal = 20.dp),
     ) {
         Spacer(Modifier.height(12.dp))
-        // Back + search field.
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Back + search field. TV: the row stops short of the corner mini
+        // player instead of running under it (Apple TV parity).
+        Row(
+            modifier = Modifier.tvMiniPlayerClearance(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (showBackButton) {
                 IconButton(onClick = onBack) {
                     Icon(
