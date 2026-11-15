@@ -262,15 +262,18 @@ fun CastRouteChooserDialog(
                     Text(label, color = colors.error)
                 }
             }
+            // The entry decides the receiver (owner rule 2026-11-14): "AerioTV
+            // on TV" launches the TV app; "Google Cast" is always a plain cast
+            // to the web receiver, even on a TV that has the app.
             @Composable
-            fun routeRow(route: MediaRouter.RouteInfo) {
+            fun routeRow(route: MediaRouter.RouteInfo, intent: com.aeriotv.android.core.cast.CastLaunchIntent) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
                             // Mutual exclusion: one remote target at a time.
                             companionRemote?.disconnect()
-                            sender.selectPickerRoute(router, route)
+                            sender.selectPickerRoute(router, route, intent)
                             onDismiss()
                         }
                         .padding(vertical = 12.dp),
@@ -357,7 +360,7 @@ fun CastRouteChooserDialog(
                 }
                 if (nativeRoutes.isNotEmpty()) {
                     sectionHeader("AerioTV on TV")
-                    nativeRoutes.forEach { routeRow(it) }
+                    nativeRoutes.forEach { routeRow(it, com.aeriotv.android.core.cast.CastLaunchIntent.TvApp) }
                     Text(
                         "Plays in the AerioTV app on the TV: no phone processing, full quality.",
                         style = typo.bodySmall.subtext(),
@@ -368,7 +371,7 @@ fun CastRouteChooserDialog(
                 if (routes.isEmpty()) {
                     Text("Searching for devices…", color = colors.onSurfaceVariant)
                 }
-                otherRoutes.forEach { routeRow(it) }
+                otherRoutes.forEach { routeRow(it, com.aeriotv.android.core.cast.CastLaunchIntent.WebReceiver) }
             }
         },
         confirmButton = {
