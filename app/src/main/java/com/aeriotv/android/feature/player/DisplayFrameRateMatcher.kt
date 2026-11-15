@@ -130,7 +130,28 @@ object DisplayFrameRateMatcher {
         )
         val resetWindow = java.util.concurrent.atomic.AtomicBoolean(false)
         var paused = false
-        val listener = VideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
+        var lastDeclared = 0f
+        fun request(target: Float, fps: Float) {
+            if (!(matchRate && target > 0f && abs(target - lastAppliedFps) > 1.0f)) return
+            lastAppliedFps = target
+            lastRequestedRate = target
+            onRateRequested?.invoke(target)
+            val surface = surfaceView.holder.surface
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                surface != null && surface.isValid
+            ) {
+                runCatching {
+                    surface.setFrameRate(
+                        target,
+                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                        Surface.CHANGE_FRAME_RATE_ALWAYS,
+                    )
+                }.onSuccess {
+                    Log.i(TAG, "setFrameRate(${"%.2f".format(target)}) for content ${"%.2f".format(fps)}fps strategy=ALWAYS")
+                }
+            }
+        }
+        val listener = VideoFrameMetadataListener { presentationTimeUs, _, format, _ ->
             val sp = speed.get()
             if (sp != 1.0f) {
                 if (!paused) {
@@ -145,6 +166,26 @@ object DisplayFrameRateMatcher {
                 paused = false
                 deltasUs.clear()
                 lastPtsUs = -1L
+            }
+            // VOD: a rate the container declares wins over measuring (owner
+            // direction 2026-11-14). Rendered timestamps are often whole
+            // milliseconds, which measured a 24/1 Matroska title at 23.976
+            // and switched the panel to 23.98 Hz; Apple TV plays it at 24.
+            // Format.frameRate comes from the MP4 sample table, an HLS
+            // FRAME-RATE, or a Matroska DefaultDuration
+            // (DeclaredRateExtractorsFactory). Live keeps measuring.
+            val declared = if (filmRate) FrameRateClass.declared(format.frameRate) else null
+            if (declared != null) {
+                if (abs(declared - contentFps.value) > 0.01f) contentFps.value = declared
+                val target = FrameRateClass.target(declared, filmRate) { has23976Mode(surfaceView) }
+                if (abs(declared - lastDeclared) > 0.001f) {
+                    lastDeclared = declared
+                    lastLoggedClass = if (target > 0f) target else Math.round(declared).toFloat()
+                    Log.i(TAG, "[AerioFpsMatch] declared ${"%.3f".format(declared)} (source=container) -> request ${"%.3f".format(target)}")
+                }
+                request(target, declared)
+                lastPtsUs = presentationTimeUs
+                return@VideoFrameMetadataListener
             }
             if (lastPtsUs >= 0L) {
                 val d = presentationTimeUs - lastPtsUs
@@ -204,25 +245,7 @@ object DisplayFrameRateMatcher {
                     // runtime check.
                     Log.i(TAG, "[AerioFpsMatch] measured ${"%.3f".format(fps)} (n=${deltasUs.size}, source=pts)")
                 }
-                if (matchRate && target > 0f && abs(target - lastAppliedFps) > 1.0f) {
-                    lastAppliedFps = target
-                    lastRequestedRate = target
-                    onRateRequested?.invoke(target)
-                    val surface = surfaceView.holder.surface
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                        surface != null && surface.isValid
-                    ) {
-                        runCatching {
-                            surface.setFrameRate(
-                                target,
-                                Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                                Surface.CHANGE_FRAME_RATE_ALWAYS,
-                            )
-                        }.onSuccess {
-                            Log.i(TAG, "setFrameRate(${"%.2f".format(target)}) for content ${"%.2f".format(fps)}fps strategy=ALWAYS")
-                        }
-                    }
-                }
+                request(target, fps)
             }
         }
         val speedListener = object : Player.Listener {
@@ -244,8 +267,12 @@ object DisplayFrameRateMatcher {
     private fun filmTarget(sorted: List<Long>, surfaceView: SurfaceView): Float {
         val median = 1_000_000.0 / sorted[sorted.size / 2]
         if (median >= 24.0) return 24f
-        val modes = runCatching { surfaceView.display?.supportedModes }.getOrNull() ?: return 24f
-        return if (modes.any { abs(it.refreshRate - 23.976f) < 0.01f }) 23.976f else 24f
+        return if (has23976Mode(surfaceView)) 23.976f else 24f
+    }
+
+    private fun has23976Mode(surfaceView: SurfaceView): Boolean {
+        val modes = runCatching { surfaceView.display?.supportedModes }.getOrNull() ?: return false
+        return modes.any { abs(it.refreshRate - 23.976f) < 0.01f }
     }
 
     /** Hand ownership back to an earlier attachment (the live window) after
@@ -276,5 +303,25 @@ object DisplayFrameRateMatcher {
                 }
             }
         }
+    }
+}
+
+/**
+ * Maps a container-declared frame rate to the display rate requested, with
+ * the same classes the measured path uses: 50 / 59.94 / 60 as is, 25 / 29.97
+ * / 30 doubled, and (VOD only) the film class at 23.976 or 24 as declared.
+ * Pure, unit tested.
+ */
+internal object FrameRateClass {
+    /** A usable declared rate, or null when the format carries none. */
+    fun declared(frameRate: Float): Float? = frameRate.takeIf { it > 1f && !it.isNaN() }
+
+    fun target(fps: Float, filmRate: Boolean, has23976Mode: () -> Boolean): Float = when {
+        fps in 45f..65f -> fps
+        fps in 24.5f..32.5f -> fps * 2f
+        // Midpoint of 23.976 and 24: a declared 24000/1001 asks for the
+        // 23.976 mode when the panel has one, a declared 24 for 24.
+        filmRate && fps in 23.5f..24.5f -> if (fps < 23.988f && has23976Mode()) 23.976f else 24f
+        else -> 0f
     }
 }

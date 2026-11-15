@@ -1244,7 +1244,11 @@ fun VODPlayerScreen(
                 // Byte-flow accounting for the [FEED] heartbeat. Pass-through
                 // only; it counts bytes and changes nothing about the transfer.
                 val tracedFactory = tracer.wrapDataSourceFactory(upstreamFactory)
-                val mediaSourceFactory = DefaultMediaSourceFactory(ctx)
+                // Matroska titles carry their declared frame rate into the
+                // video Format (frame-rate match, DeclaredRateExtractorsFactory).
+                // A helper call, not an inline constructor: this composable
+                // sits at the ART verifier's register limit.
+                val mediaSourceFactory = com.aeriotv.android.core.playback.vodMediaSourceFactory(ctx)
                     .setDataSourceFactory(tracedFactory)
                     // A rate-limited or stream-limited open is never re-GET by
                     // Media3 itself (StreamGate, VodStreamRefusal).
