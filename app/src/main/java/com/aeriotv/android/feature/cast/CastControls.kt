@@ -217,9 +217,9 @@ fun CastRouteChooserDialog(
         val id = runCatching { CastDevice.getFromBundle(route.extras)?.deviceId }.getOrNull()
         id != null && id in nativeIds
     }
-    val otherRoutes = routes - nativeRoutes.toSet()
 
     val companionConnected = companionConn is CompanionRemoteController.Conn.Connected
+    val activeIntent by sender.launchIntent.collectAsState()
 
     // Sectioned picker, iOS CastPickerSheet twin (same order, headers, footer
     // and copy; iOS alone adds an AirPlay section):
@@ -227,7 +227,7 @@ fun CastRouteChooserDialog(
     //   pairing code entry / "Connecting to ..."
     //   "AerioTV Remote"  companion TVs (hidden when none)
     //   "AerioTV on TV"   native Cast Connect devices + footer (hidden when none)
-    //   "Google Cast"     other cast devices, "Searching for devices…" when none
+    //   "Google Cast"     EVERY cast device, "Searching for devices…" when none
     // Devices keep discovery order within a section, as on iOS.
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -267,6 +267,9 @@ fun CastRouteChooserDialog(
             // to the web receiver, even on a TV that has the app.
             @Composable
             fun routeRow(route: MediaRouter.RouteInfo, intent: com.aeriotv.android.core.cast.CastLaunchIntent) {
+                // A TV listed in both sections: only the row it was picked
+                // from shows as connected.
+                val active = route.isSelected && activeIntent == intent
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -280,7 +283,7 @@ fun CastRouteChooserDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
-                        imageVector = if (route.isSelected) Icons.Filled.CastConnected
+                        imageVector = if (active) Icons.Filled.CastConnected
                         else Icons.Filled.Cast,
                         contentDescription = null,
                         modifier = Modifier.padding(end = 12.dp),
@@ -371,7 +374,10 @@ fun CastRouteChooserDialog(
                 if (routes.isEmpty()) {
                     Text("Searching for devices…", color = colors.onSurfaceVariant)
                 }
-                otherRoutes.forEach { routeRow(it, com.aeriotv.android.core.cast.CastLaunchIntent.WebReceiver) }
+                // Every Cast device, including one listed above: a plain cast
+                // must never need the TV app (owner rule 2026-11-14), so a TV
+                // with the app has two rows, each with its own launch intent.
+                routes.forEach { routeRow(it, com.aeriotv.android.core.cast.CastLaunchIntent.WebReceiver) }
             }
         },
         confirmButton = {

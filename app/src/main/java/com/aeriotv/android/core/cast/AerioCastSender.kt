@@ -1052,6 +1052,7 @@ class AerioCastSender @Inject constructor(
             cc.setLaunchCredentialsData(
                 com.google.android.gms.cast.CredentialsData(saved.wire, com.google.android.gms.cast.CredentialsData.CREDENTIALS_TYPE_ANDROID),
             )
+            _launchIntent.value = saved
             onCastState(cc.castState)
             Log.i(TAG, "warm ok; castState=${cc.castState} appId=${BuildConfig.CAST_RECEIVER_APP_ID}")
         }
@@ -1168,9 +1169,12 @@ class AerioCastSender @Inject constructor(
         /** [CastLaunchIntent.TvApp] only from the "AerioTV on TV" entry; a "Google Cast" pick is a plain cast. */
         intent: CastLaunchIntent = CastLaunchIntent.WebReceiver,
     ) {
+        // A TV with the app has a row in each section, so tapping the other
+        // row of the connected TV is a switch of receiver on the same device.
+        val sameTvOtherEntry = route.isSelected && _launchIntent.value != intent
         setLaunchIntent(intent)
         val current = _state.value as? State.Connected
-        if (router != null && current != null && !route.isSelected) {
+        if (router != null && current != null && (!route.isSelected || sameTvOtherEntry)) {
             Log.i(TAG, "[Cast] picker selected ${route.name} while ${current.deviceName} is connected: ending it first")
             val handoff = _content.value?.mediaId
             val keep = handoffChannelId
@@ -1193,6 +1197,11 @@ class AerioCastSender @Inject constructor(
      * (the same pick), persisted for a resume after this process restarts, and
      * back to a plain cast once a session ends. No secret rides here.
      */
+    private val _launchIntent = MutableStateFlow(CastLaunchIntent.WebReceiver)
+    /** The entry the current (or next) session was picked from; the picker
+     *  marks only that row of a TV listed in both sections as connected. */
+    val launchIntent: StateFlow<CastLaunchIntent> = _launchIntent.asStateFlow()
+
     private fun setLaunchIntent(intent: CastLaunchIntent) {
         val ctx = appContext ?: return
         runCatching {
@@ -1201,6 +1210,7 @@ class AerioCastSender @Inject constructor(
             )
         }.onFailure { Log.w(TAG, "[Cast] launch intent not set: ${it.javaClass.simpleName}") }
         ctx.getSharedPreferences(LAUNCH_PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAUNCH_INTENT, intent.wire).apply()
+        _launchIntent.value = intent
         Log.i(TAG, "[Cast] next launch: ${if (intent == CastLaunchIntent.TvApp) "AerioTV app on the TV (Cast Connect)" else "web receiver (plain cast)"}")
     }
 
