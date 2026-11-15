@@ -209,13 +209,19 @@ fun CastRouteChooserDialog(
 
     // TVs that already ran a native Cast Connect session (hello reply
     // platform=android-tv-app) are listed FIRST: casting to them plays inside
-    // the AerioTV app on the TV, with no phone-side proxy or transcode. A device
-    // can only be classified once it has been cast to, so it moves up after its
-    // first native session.
+    // the AerioTV app on the TV, with no phone-side proxy or transcode.
+    // A TV that never had one is listed too when its AerioTV app is running:
+    // the app advertises the AerioTV Remote host under the TV's device name,
+    // which is also its Cast name (NSD may add " (n)" on a rename retry).
+    // Without that, only a native session could add a TV, and since a Google
+    // Cast pick is a plain cast (owner rule 2026-11-14) nothing would ever
+    // start the first one. A wrong match only costs a Cast Connect fallback
+    // to the web receiver.
     val nativeIds by sender.nativeDeviceIds.collectAsState()
+    val appTvNames = tvs.map { it.name.replace(Regex("""\s\(\d+\)$"""), "").trim().lowercase() }.toSet()
     val nativeRoutes = routes.filter { route ->
         val id = runCatching { CastDevice.getFromBundle(route.extras)?.deviceId }.getOrNull()
-        id != null && id in nativeIds
+        (id != null && id in nativeIds) || route.name.trim().lowercase() in appTvNames
     }
 
     val companionConnected = companionConn is CompanionRemoteController.Conn.Connected
