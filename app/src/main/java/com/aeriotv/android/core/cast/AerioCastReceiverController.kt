@@ -1,7 +1,10 @@
 package com.aeriotv.android.core.cast
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.content.pm.PackageManager
 import android.support.v4.media.session.MediaSessionCompat
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -164,6 +167,7 @@ class AerioCastReceiverController @Inject constructor(
             return
         }
         val app = context.applicationContext
+        appContext = app
         val ok = runCatching {
             CastReceiverContext.initInstance(app)
             val mgr = CastReceiverContext.getInstance().mediaManager
@@ -193,7 +197,10 @@ class AerioCastReceiverController @Inject constructor(
 
     private fun start() {
         if (!initialized || started) return
-        if (runCatching { CastReceiverContext.getInstance().start() }.isSuccess) started = true
+        if (runCatching { CastReceiverContext.getInstance().start() }.isSuccess) {
+            started = true
+            startCastServiceKeepAlive()
+        }
     }
 
     /**
@@ -211,9 +218,77 @@ class AerioCastReceiverController @Inject constructor(
 
     private fun stop() {
         if (!initialized || !started) return
+        stopCastServiceKeepAlive()
         stopPositionTicker()
         runCatching { CastReceiverContext.getInstance().stop() }
         started = false
+    }
+
+    // Cast service keep-alive (device pass 2026-11-15, Google TV Streamer,
+    // mediashell 3.72.446070). Once this app is on top, the system Cast
+    // receiver (mediashell) has no UI and nothing bound to it, so it drops to
+    // the cached state and Android's cached-app freezer freezes it about 10 s
+    // later. A frozen mediashell stops answering the sender's Cast heartbeat
+    // (the phone dropped the session about 15 s after that, GCKError 92) and
+    // stops answering mDNS (the Streamer left every Cast picker until a
+    // reboot). mediashell binds our CastTvHostService, but nothing bound it
+    // back. While this app is in the foreground on the TV, it now binds
+    // mediashell's receiver service, which keeps mediashell at this app's
+    // importance so it is never cached or frozen; the binding goes away when
+    // this app leaves the foreground. Not only while a sender is connected:
+    // with the binding tied to senders, mediashell froze 10 s after the
+    // iPhone stopped casting while AerioTV was still on screen, and the next
+    // cast from the Nothing Phone needed a second tap (2026-11-16 11:36:45 to
+    // 11:37:11). A device whose receiver refuses the bind keeps today's
+    // behavior, and the attempt is not repeated.
+    private var appContext: Context? = null
+    private var keepAliveBound = false
+    private var keepAliveRefused = false
+    private val keepAliveConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            android.util.Log.i("CastReceiver", "[CAST-RX] keep-alive: connected to the system Cast receiver")
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            android.util.Log.w("CastReceiver", "[CAST-RX] keep-alive: the system Cast receiver went away (binding kept)")
+        }
+        override fun onNullBinding(name: ComponentName?) {
+            android.util.Log.i("CastReceiver", "[CAST-RX] keep-alive: bound (no interface returned; the binding still holds the receiver up)")
+        }
+    }
+
+    private fun startCastServiceKeepAlive() {
+        if (!keepAliveBound && !keepAliveRefused) bindCastService()
+    }
+
+    private fun stopCastServiceKeepAlive() {
+        if (keepAliveBound) unbindCastService("AerioTV left the foreground")
+    }
+
+    private fun bindCastService() {
+        val ctx = appContext ?: return
+        val intent = Intent(MEDIASHELL_BIND_ACTION)
+            .setComponent(ComponentName(MEDIASHELL_PACKAGE, MEDIASHELL_RECEIVER_SERVICE))
+        val ok = try {
+            ctx.bindService(intent, keepAliveConnection, Context.BIND_AUTO_CREATE)
+        } catch (t: Throwable) {
+            android.util.Log.w("CastReceiver", "[CAST-RX] keep-alive: bind refused: $t")
+            false
+        }
+        if (ok) {
+            keepAliveBound = true
+            android.util.Log.i("CastReceiver", "[CAST-RX] keep-alive: bound the system Cast receiver while AerioTV is in the foreground")
+        } else {
+            keepAliveRefused = true
+            runCatching { ctx.unbindService(keepAliveConnection) }
+            android.util.Log.w("CastReceiver", "[CAST-RX] keep-alive: the system Cast receiver is not bindable here; not retrying")
+        }
+    }
+
+    private fun unbindCastService(why: String) {
+        val ctx = appContext
+        keepAliveBound = false
+        if (ctx != null) runCatching { ctx.unbindService(keepAliveConnection) }
+        android.util.Log.i("CastReceiver", "[CAST-RX] keep-alive: released ($why)")
     }
 
     // GH #33 cast scrubber: broadcast a ~1Hz live-position tick to connected
@@ -338,6 +413,18 @@ class AerioCastReceiverController @Inject constructor(
                         )
                         if (playable) {
                             _loadRequests.trySend(CastLoadRequest(mediaId, kind))
+                            // Report the load as done, the Cast Connect way:
+                            // without setDataFromLoad + broadcastMediaStatus the
+                            // sender's load request stayed open for the whole
+                            // session (iPhone 2026-11-16 11:16 to 11:22) and
+                            // failed only at disconnect, which the phone read as
+                            // "could not start this channel".
+                            runCatching {
+                                mediaManager?.setDataFromLoad(loadRequestData)
+                                mediaManager?.broadcastMediaStatus()
+                            }.onFailure {
+                                android.util.Log.w("CastReceiver", "[Cast] android receiver: media status broadcast failed: $it")
+                            }
                             source.setResult(loadRequestData)
                         } else {
                             source.setException(
@@ -777,5 +864,11 @@ class AerioCastReceiverController @Inject constructor(
         const val KEY_KIND = "aerioKind"
         const val VALUE_KIND_LIVE = "live"
         const val VALUE_KIND_VOD = "vod"
+
+        /** The system Cast receiver on Google TV and Android TV devices
+         *  (Chromecast built-in) and the service the keep-alive binds. */
+        private const val MEDIASHELL_PACKAGE = "com.google.android.apps.mediashell"
+        private const val MEDIASHELL_RECEIVER_SERVICE = "com.google.android.apps.mediashell.CastReceiverService"
+        private const val MEDIASHELL_BIND_ACTION = "com.google.cast.action.BIND"
     }
 }
