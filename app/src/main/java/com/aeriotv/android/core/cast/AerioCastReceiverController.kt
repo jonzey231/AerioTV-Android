@@ -232,13 +232,16 @@ class AerioCastReceiverController @Inject constructor(
     // (the phone dropped the session about 15 s after that, GCKError 92) and
     // stops answering mDNS (the Streamer left every Cast picker until a
     // reboot). mediashell binds our CastTvHostService, but nothing bound it
-    // back. While a sender is connected, this app now binds mediashell's
-    // receiver service, which keeps mediashell at this app's importance so it
-    // is never cached or frozen; the binding goes away with the last sender or
-    // when this app leaves the foreground. A device whose receiver refuses the
-    // bind keeps today's behavior, and the attempt is not repeated.
+    // back. While this app is in the foreground on the TV, it now binds
+    // mediashell's receiver service, which keeps mediashell at this app's
+    // importance so it is never cached or frozen; the binding goes away when
+    // this app leaves the foreground. Not only while a sender is connected:
+    // with the binding tied to senders, mediashell froze 10 s after the
+    // iPhone stopped casting while AerioTV was still on screen, and the next
+    // cast from the Nothing Phone needed a second tap (2026-11-16 11:36:45 to
+    // 11:37:11). A device whose receiver refuses the bind keeps today's
+    // behavior, and the attempt is not repeated.
     private var appContext: Context? = null
-    private var keepAliveJob: Job? = null
     private var keepAliveBound = false
     private var keepAliveRefused = false
     private val keepAliveConnection = object : ServiceConnection {
@@ -254,21 +257,11 @@ class AerioCastReceiverController @Inject constructor(
     }
 
     private fun startCastServiceKeepAlive() {
-        if (keepAliveJob?.isActive == true) return
-        keepAliveJob = scope.launch {
-            while (isActive) {
-                val connected = isReceivingCast()
-                if (connected && !keepAliveBound && !keepAliveRefused) bindCastService()
-                else if (!connected && keepAliveBound) unbindCastService("no sender connected")
-                delay(1_000L)
-            }
-        }
+        if (!keepAliveBound && !keepAliveRefused) bindCastService()
     }
 
     private fun stopCastServiceKeepAlive() {
-        keepAliveJob?.cancel()
-        keepAliveJob = null
-        if (keepAliveBound) unbindCastService("receiver stopped")
+        if (keepAliveBound) unbindCastService("AerioTV left the foreground")
     }
 
     private fun bindCastService() {
@@ -283,7 +276,7 @@ class AerioCastReceiverController @Inject constructor(
         }
         if (ok) {
             keepAliveBound = true
-            android.util.Log.i("CastReceiver", "[CAST-RX] keep-alive: bound the system Cast receiver while a sender is connected")
+            android.util.Log.i("CastReceiver", "[CAST-RX] keep-alive: bound the system Cast receiver while AerioTV is in the foreground")
         } else {
             keepAliveRefused = true
             runCatching { ctx.unbindService(keepAliveConnection) }
