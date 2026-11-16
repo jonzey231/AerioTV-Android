@@ -420,6 +420,18 @@ class AerioCastReceiverController @Inject constructor(
                         )
                         if (playable) {
                             _loadRequests.trySend(CastLoadRequest(mediaId, kind))
+                            // Report the load as done, the Cast Connect way:
+                            // without setDataFromLoad + broadcastMediaStatus the
+                            // sender's load request stayed open for the whole
+                            // session (iPhone 2026-11-16 11:16 to 11:22) and
+                            // failed only at disconnect, which the phone read as
+                            // "could not start this channel".
+                            runCatching {
+                                mediaManager?.setDataFromLoad(loadRequestData)
+                                mediaManager?.broadcastMediaStatus()
+                            }.onFailure {
+                                android.util.Log.w("CastReceiver", "[Cast] android receiver: media status broadcast failed: $it")
+                            }
                             source.setResult(loadRequestData)
                         } else {
                             source.setException(
