@@ -2074,7 +2074,16 @@ fun PlayerScreen(
     // Same seek the chrome's Rewind / Forward circles run; false when the
     // transport is disabled (no rolling buffer and no catch-up).
     val skipHook by androidx.compose.runtime.rememberUpdatedState { forward: Boolean ->
-        val seekEnabled = (tsState.buffering && !isCatchupMode) || isCatchupMode
+        // Skip Without Controls takes Left/Right only where there is
+        // somewhere to skip: catch-up, or a live channel watched behind live
+        // (rewound or resumed from a pause). At the live edge the Remote
+        // Control map keeps Left/Right (channel list, previous channel), as
+        // on Apple TV (PlayerView: `!isLive || isLiveRewindMode`). Before,
+        // a warm Live Rewind buffer was enough, so with the setting on (it
+        // syncs between devices since 0.5.14) Right at the live edge skipped
+        // forward into nothing and Previous Channel never fired (FastGriz,
+        // reproduced on the Streamer 2026-11-16).
+        val seekEnabled = isCatchupMode || (tsState.buffering && tsState.timeshifting)
         if (!seekEnabled) {
             false
         } else {
@@ -2280,9 +2289,15 @@ fun PlayerScreen(
                     if (channelListSidebarOpen) { channelListSidebarOpen = false; return@act true }
                     if (channelListVisible) { channelListVisible = false; return@act true }
                     if (recentsOverlayVisible) { recentsOverlayVisible = false; return@act true }
-                    val zapId = exoWindowState.lastChannelId ?: return@act true
+                    val zapId = exoWindowState.lastChannelId
                     val list = flipChannels
-                    val idx = list.indexOfFirst { it.id == zapId }
+                    val idx = if (zapId == null) -1 else list.indexOfFirst { it.id == zapId }
+                    android.util.Log.i(
+                        "AerioRemote",
+                        "[REMOTE] previous channel: last=${zapId ?: "none"} current=${exoWindowState.currentChannelId ?: "none"} " +
+                            "idx=$idx of ${list.size} flipIndex=$flipIndex locked=$flipLocked",
+                    )
+                    if (zapId == null) return@act true
                     if (idx >= 0 && idx != flipIndex && !flipLocked) {
                         currentIndex = idx
                     }
