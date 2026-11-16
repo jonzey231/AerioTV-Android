@@ -1001,9 +1001,12 @@ class AerioCastSender @Inject constructor(
                 Log.w(TAG, "cast session ended involuntarily: error=$error " +
                     castStatusMeaning(error))
                 _involuntaryEnd.tryEmit(InvoluntaryEnd(device, what))
+                // Same words as AerioTV for Apple. A drop is not a failed
+                // start: with AerioTV on TV the TV app keeps playing after the
+                // Cast link dies (Google TV Streamer, device pass 2026-11-15).
                 surfaceCastFailure(
-                    if (device.isNullOrBlank()) "Casting disconnected"
-                    else "Casting to $device disconnected",
+                    "Lost the connection to ${if (device.isNullOrBlank()) "the TV" else device}. " +
+                        "It may still be playing on the TV.",
                 )
             }
             endCleanup()

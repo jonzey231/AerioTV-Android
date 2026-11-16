@@ -54,6 +54,10 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" android:host="www.youtube.com" />
         </intent>
+        <!-- Cast Connect receiver keep-alive (device pass 2026-11-15): the TV
+             app binds the system Cast receiver while a sender is connected,
+             which needs the package to be visible on Android 11 and later. -->
+        <package android:name="com.google.android.apps.mediashell" />
     </queries>
 
     <application
