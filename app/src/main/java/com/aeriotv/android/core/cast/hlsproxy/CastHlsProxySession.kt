@@ -529,8 +529,9 @@ class CastHlsProxySession @Inject constructor(
         // The proxy's base URL; /demuxed.m3u8 (the two-rendition shape the
         // sender loads) hangs off it. It is a MASTER playlist, never a
         // media one: CLOSED-CAPTIONS=NONE keeps Shaka's Mp4CeaParser away
-        // from the video segments (fatal Error 3000 otherwise).
-        proxyBaseUrl = "http://$lanIp:$port"
+        // from the video segments (fatal Error 3000 otherwise). The base
+        // carries the listener's path token: without it the LAN gets 404.
+        proxyBaseUrl = "http://$lanIp:$port/${server.pathToken}"
         return proxyBaseUrl
     }
 
@@ -539,7 +540,7 @@ class CastHlsProxySession @Inject constructor(
     fun fetchCounters(): Pair<Int, Int> =
         server.playlistFetches.get() to server.segmentFetches.get()
 
-    /** Base URL of the running proxy ("http://ip:port"), set by
+    /** Base URL of the running proxy ("http://ip:port/<path token>"), set by
      *  [startChannelBlocking] once the socket is bound and the ready gate
      *  has passed. */
     @Volatile private var proxyBaseUrl: String = ""

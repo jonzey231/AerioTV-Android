@@ -192,7 +192,7 @@ class CastHlsProxyServerTest {
             val uris = mapUris(text)
             assertTrue("playlist names an init: $text", uris.isNotEmpty())
             for (uri in uris) {
-                val gen = uri.removeSuffix(".mp4").filter { it.isDigit() }.toInt()
+                val gen = uri.substringAfterLast('/').removeSuffix(".mp4").filter { it.isDigit() }.toInt()
                 assertNotNull("$uri is served", lookup(gen))
             }
         }
@@ -219,5 +219,96 @@ class CastHlsProxyServerTest {
         } finally {
             server.stop()
         }
+    }
+
+    // ---- the LAN listener's path token ----
+
+    private fun get(port: Int, path: String): Pair<Int, String> {
+        val c = java.net.URL("http://127.0.0.1:$port$path").openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 3_000
+        c.readTimeout = 5_000
+        return try {
+            val code = c.responseCode
+            val body = runCatching { (if (code < 400) c.inputStream else c.errorStream)?.readBytes()?.toString(Charsets.UTF_8) }.getOrNull().orEmpty()
+            code to body
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    @Test
+    fun `a path token is 128 random bits and new each time`() {
+        val a = CastHlsProxyServer.newPathToken()
+        val b = CastHlsProxyServer.newPathToken()
+        assertEquals(32, a.length)
+        assertTrue(a.all { it in '0'..'9' || it in 'a'..'f' })
+        assertFalse(a == b)
+    }
+
+    @Test
+    fun `only a request under the session token reaches a route`() {
+        val t = "0123456789abcdef0123456789abcdef"
+        assertEquals("/demuxed.m3u8", CastHlsProxyServer.routeFor("/$t/demuxed.m3u8", t))
+        assertEquals("/vseg12.m4s", CastHlsProxyServer.routeFor("/$t/vseg12.m4s", t))
+        assertNull(CastHlsProxyServer.routeFor("/demuxed.m3u8", t))
+        assertNull(CastHlsProxyServer.routeFor("/ffffffffffffffffffffffffffffffff/demuxed.m3u8", t))
+        assertNull(CastHlsProxyServer.routeFor("/${t}x/demuxed.m3u8", t))
+        assertNull(CastHlsProxyServer.routeFor("/${t.dropLast(1)}/demuxed.m3u8", t))
+        assertNull(CastHlsProxyServer.routeFor("/$t", t))
+        assertNull(CastHlsProxyServer.routeFor("//demuxed.m3u8", t))
+        // No token issued (the server is stopped): nothing is served.
+        assertNull(CastHlsProxyServer.routeFor("//demuxed.m3u8", ""))
+        assertNull(CastHlsProxyServer.routeFor("/demuxed.m3u8", ""))
+    }
+
+    @Test
+    fun `the LAN listener serves the tokened URLs and refuses everything else`() {
+        val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val lan = CastHlsProxyServer(log = { lines += it })
+        val port = lan.start()
+        try {
+            val token = lan.pathToken
+            assertEquals(32, token.length)
+            val gen = lan.beginGeneration()
+            lan.setInitSegments(gen, byteArrayOf(1), byteArrayOf(2))
+            repeat(4) { i -> lan.addSegment(gen, videoData = byteArrayOf(9, i.toByte()), audioData = byteArrayOf(8, i.toByte()), durationTicks = ticks) }
+
+            // The tokened master, the audio playlist, and every URI they name.
+            val uris = mutableListOf<String>()
+            val queue = ArrayDeque(listOf("/$token/demuxed.m3u8", "/$token/audio.m3u8"))
+            while (queue.isNotEmpty()) {
+                val pl = queue.removeFirst()
+                val (code, text) = get(port, pl)
+                assertEquals("$pl is served", 200, code)
+                val named = Regex("URI=\"([^\"]+)\"").findAll(text).map { it.groupValues[1] }.toList() +
+                    text.lines().filter { it.isNotBlank() && !it.startsWith("#") }
+                for (u in named) {
+                    uris += u
+                    if (u.endsWith(".m3u8") && u != pl) queue.addLast(u)
+                }
+            }
+            assertTrue("playlists, inits, and segments listed: $uris", uris.size >= 1 + 2 + 8)
+            for (u in uris) {
+                assertTrue("$u carries the token", u.startsWith("/$token/"))
+                assertEquals("$u is served", 200, get(port, u).first)
+            }
+            // Without the token, or with another one: 404 for every route.
+            val routes = uris.map { it.removePrefix("/$token") } + "/demuxed.m3u8"
+            val other = CastHlsProxyServer.newPathToken()
+            for (r in routes.distinct()) {
+                assertEquals("$r without the token", 404, get(port, r).first)
+                assertEquals("$r with another token", 404, get(port, "/$other$r").first)
+            }
+            // The log names no token.
+            assertTrue(lines.isNotEmpty())
+            assertTrue("token in the log", lines.none { it.contains(token) })
+        } finally {
+            lan.stop()
+        }
+        // Stopped: the token is gone, and a restart issues a new one.
+        assertEquals("", lan.pathToken)
+        val before = lan.start().let { lan.pathToken }
+        lan.stop()
+        assertEquals(32, before.length)
     }
 }
