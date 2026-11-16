@@ -222,18 +222,28 @@ object RedirectAuthRule {
             hops.signedIn
         }
         val present = HEADERS.filter { request.header(it) != null }
-        val sent = when {
+        val vod = VodSignIn.isVodPath(request.url.encodedPath)
+        val signed = when {
             !keep && present.isNotEmpty() -> {
                 why?.let { log("[REDIRECT] $it hop: dropped ${present.joinToString(", ")}") }
                 request.newBuilder().apply { HEADERS.forEach { removeHeader(it) } }.build()
             }
             // Rule 2: a same-host http-to-https upgrade keeps all four, but
             // OkHttp removed Authorization when the scheme changed. Only this
-            // attempt's own value goes back, on a hop the rule keeps.
-            keep && hops.authorization != null && request.header("Authorization") == null ->
+            // attempt's own value goes back, on a hop the rule keeps, and
+            // never on a VOD hop.
+            keep && !vod && hops.authorization != null && request.header("Authorization") == null ->
                 request.newBuilder().header("Authorization", hops.authorization).build()
             else -> request
         }
+        // VOD streams sign in with X-API-Key only (VodSignIn): Dispatcharr's
+        // VOD proxy forwards the Authorization header to the provider.
+        val sent = signed.header("Authorization")?.takeIf { vod }?.let { auth ->
+            signed.newBuilder().apply {
+                removeHeader("Authorization")
+                if (signed.header("X-API-Key") == null) VodSignIn.apiKeyOf(auth)?.let { header("X-API-Key", it) }
+            }.build()
+        } ?: signed
         val response = chain.proceed(sent)
         // Rule 6: OkHttp follows the Location as given, so an http one on the
         // same host that the rule takes as https is handed back as https.

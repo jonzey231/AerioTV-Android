@@ -101,6 +101,10 @@ object StreamAuth {
     /** The auth headers for [key], the shape PlaybackHeaders sends. */
     fun authHeaders(key: String): Map<String, String> = mapOf("X-API-Key" to key, "Authorization" to "ApiKey $key")
 
+    /** The auth headers for [key] on a request to [url]: X-API-Key only for a VOD stream (VodSignIn). */
+    fun authHeaders(key: String, url: String): Map<String, String> =
+        com.aeriotv.android.core.network.VodSignIn.headersFor(url, authHeaders(key))
+
     fun isHeld(key: String): Boolean {
         if (DispatcharrRequestGate.isKeyRejected(key)) return true
         val h = DispatcharrRequestGate.keyHash(key)

@@ -162,7 +162,10 @@ object StreamGate {
         StreamAuth.Rewrite.Keep -> request
         StreamAuth.Rewrite.Held -> throw StreamKeyRejectedException()
         is StreamAuth.Rewrite.Replace -> request.newBuilder().apply {
-            StreamAuth.authHeaders(rewrite.key).forEach { (k, v) -> header(k, v) }
+            val auth = StreamAuth.authHeaders(rewrite.key, request.url.toString())
+            // A VOD stream carries X-API-Key only (VodSignIn).
+            if ("Authorization" !in auth) removeHeader("Authorization")
+            auth.forEach { (k, v) -> header(k, v) }
         }.build()
     }
 
@@ -275,7 +278,7 @@ object StreamGate {
             val spec = when (val rewrite = StreamAuth.rewriteFor(builtKey)) {
                 StreamAuth.Rewrite.Keep -> dataSpec
                 StreamAuth.Rewrite.Held -> throw StreamKeyRejectedException()
-                is StreamAuth.Rewrite.Replace -> dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(rewrite.key))
+                is StreamAuth.Rewrite.Replace -> dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(rewrite.key, url))
             }
             beforeOpen(url)
             return try {
@@ -297,7 +300,7 @@ object StreamGate {
                     when (val out = StreamAuth.onUnauthorized(sentKey)) {
                         is StreamAuth.Outcome.Retry -> {
                             runCatching { upstream.close() }
-                            return upstream.open(dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(out.key)))
+                            return upstream.open(dataSpec.withAdditionalHeaders(StreamAuth.authHeaders(out.key, url)))
                         }
                         StreamAuth.Outcome.Held -> throw StreamKeyRejectedException(e)
                         StreamAuth.Outcome.NotKey -> Unit
