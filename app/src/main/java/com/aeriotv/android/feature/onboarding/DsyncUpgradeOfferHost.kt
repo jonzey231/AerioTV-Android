@@ -73,9 +73,9 @@ class DsyncUpgradeOfferViewModel @Inject constructor(
         return Offer(active.id, decision, prefs.syncMasterEnabled.first())
     }
 
-    /** A received setup asked for Dispatcharr Sync: the opt-in dialog, unless declined before or already on. */
+    /** A received setup asked for Dispatcharr Sync: the opt-in dialog, unless declined before or already on.
+     *  Leaves [DsyncUpgradeOffer.setupOptIn] set: the host clears it once the answer is in hand. */
     suspend fun setupOptIn(playlistId: String): Offer? {
-        DsyncUpgradeOffer.setupOptIn.value = null
         if (prefs.dispatcharrSyncEnabledOnce() || prefs.dsyncUpgradeDeclinedOnce()) {
             Log.i(TAG, "[DSYNC] setup opt-in: not shown (already on or declined before)")
             return null
@@ -120,10 +120,33 @@ fun DsyncUpgradeOfferHost(
     val dsyncUi by vm.dsync.ui.collectAsStateWithLifecycle()
     val setupPending by DsyncUpgradeOffer.setupOptIn.collectAsStateWithLifecycle()
 
+    // Diagnostics 2026-11-16 (Streamer): the received-setup opt-in logged
+    // "shown" twice and never drew. Trace the host's life, the gates, and
+    // whether the prompt composes.
+    val hostId = remember { ++DsyncOfferTrace.seq }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        Log.i(DsyncOfferTrace.TAG, "[DSYNC] offer host #$hostId: enter")
+        onDispose { Log.i(DsyncOfferTrace.TAG, "[DSYNC] offer host #$hostId: leave (offer pending=${offer != null})") }
+    }
+
     LaunchedEffect(idle, setupPending) {
         val id = setupPending ?: return@LaunchedEffect
+        Log.i(
+            DsyncOfferTrace.TAG,
+            "[DSYNC] offer host #$hostId: setup opt-in pending idle=$idle gate=${gate != null} " +
+                "picker=${picker != null} switching=$switching busy=$busy mode=$mode offer=${offer != null}",
+        )
         if (!idle || offer != null) return@LaunchedEffect
-        vm.setupOptIn(id)?.let { offer = it }
+        // The pending id is this effect's key: clearing it restarts the
+        // effect, so it is cleared only after the offer is set (Streamer
+        // 2026-11-16: clearing it first cancelled this check mid-read and
+        // the prompt never drew).
+        val decided = vm.setupOptIn(id)
+        if (decided != null) {
+            offer = decided
+            Log.i(DsyncOfferTrace.TAG, "[DSYNC] offer host #$hostId: offer set (${decided.decision})")
+        }
+        if (DsyncUpgradeOffer.setupOptIn.value == id) DsyncUpgradeOffer.setupOptIn.value = null
     }
 
     LaunchedEffect(idle) {
@@ -150,6 +173,11 @@ fun DsyncUpgradeOfferHost(
 
     // Record missing after the first read (DsyncMissingRecord): no writes until answered.
     if (dsyncUi.recordMissing && idle) {
+        if (offer != null) {
+            LaunchedEffect(Unit) {
+                Log.i(DsyncOfferTrace.TAG, "[DSYNC] offer host #$hostId: offer held behind the missing-record prompt")
+            }
+        }
         val upFocus = remember { FocusRequester() }
         val turnOff = {
             vm.dsync.answerMissingRecord(upload = false)
@@ -172,7 +200,11 @@ fun DsyncUpgradeOfferHost(
 
     val o = offer ?: return
     // Hold the dialog while a TV player is up; it shows at the next idle moment.
-    if (busy) return
+    if (busy) {
+        LaunchedEffect(mode) { Log.i(DsyncOfferTrace.TAG, "[DSYNC] offer host #$hostId: offer held, player mode=$mode") }
+        return
+    }
+    LaunchedEffect(o) { Log.i(DsyncOfferTrace.TAG, "[DSYNC] offer host #$hostId: prompt composed (${o.decision})") }
     val optIn = o.decision == DsyncUpgradeOffer.Decision.ShowOptIn
     val focus = remember(o) { FocusRequester() }
     val notNow = {
@@ -275,6 +307,12 @@ private fun PromptSurface(
             color = androidx.compose.material3.MaterialTheme.colorScheme.background,
         ) { content() }
     }
+}
+
+/** Diagnostics 2026-11-16: host instance numbers for the offer trace. */
+private object DsyncOfferTrace {
+    const val TAG = "AerioSync"
+    var seq = 0
 }
 
 private data class SetupSourceChoiceAsk(val probe: com.aeriotv.android.core.sync.SetupSourceCoordinator.Probe)
