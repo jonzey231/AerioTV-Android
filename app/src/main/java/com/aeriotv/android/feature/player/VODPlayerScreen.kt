@@ -1204,9 +1204,12 @@ fun VODPlayerScreen(
                 // headers on every redirect hop, to any host. Send a real
                 // player UA (parity with live path); some panels reject the
                 // platform "Dalvik/..." default. A User-Agent header wins.
+                // [VOD-HTTP] per-connection trace (observer only; VodHttpTrace).
+                val httpTrace = com.aeriotv.android.core.playback.VodHttpTrace()
                 val dataSourceFactory = com.aeriotv.android.core.playback.PlaybackHttp.factory(
                     httpHeaders,
                     "AerioTV/${com.aeriotv.android.BuildConfig.VERSION_NAME} (Android; ${android.os.Build.MODEL})",
+                    eventListenerFactory = httpTrace.eventListenerFactory,
                 )
 
                 val renderersFactory =
@@ -1243,7 +1246,7 @@ fun VODPlayerScreen(
                     }
                 // Byte-flow accounting for the [FEED] heartbeat. Pass-through
                 // only; it counts bytes and changes nothing about the transfer.
-                val tracedFactory = tracer.wrapDataSourceFactory(upstreamFactory)
+                val tracedFactory = tracer.wrapDataSourceFactory(httpTrace.wrap(upstreamFactory))
                 // Matroska titles carry their declared frame rate into the
                 // video Format (frame-rate match, DeclaredRateExtractorsFactory).
                 // A helper call, not an inline constructor: this composable
@@ -1267,6 +1270,7 @@ fun VODPlayerScreen(
                     .apply {
                         // Always-on tune/stall/feed tracer (tag AerioTrace).
                         addAnalyticsListener(tracer.analyticsListener)
+                        com.aeriotv.android.core.playback.VodHttpTrace.attach(this, httpTrace)
                         tracer.tracedPlayer = this
                         addListener(object : Player.Listener {
                             // The tracer's AnalyticsListener does not observe
@@ -1278,6 +1282,8 @@ fun VODPlayerScreen(
 
                             override fun onPlayerError(error: PlaybackException) {
                                 Log.e(TAG, "VOD ExoPlayer error: ${error.errorCodeName}", error)
+                                com.aeriotv.android.core.playback.VodHttpTrace.forPlayer(this@apply)
+                                    ?.logSummary(error.errorCodeName)
                                 // Stream 429 (shared spec 2026-11-10): Dispatcharr
                                 // rate-limited this network, or the stream limit.
                                 // Before the catch-up 4xx rules: timeshift says
@@ -1472,7 +1478,7 @@ fun VODPlayerScreen(
                         prepare()
                     }
 
-                Log.i(TAG, "Loading VOD on ExoPlayer: $streamUrl")
+                Log.i(TAG, "Loading VOD on ExoPlayer: ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(streamUrl)}")
                 exoPlayer = player
 
                 PlayerView(ctx).apply {

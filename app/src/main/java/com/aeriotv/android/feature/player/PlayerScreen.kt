@@ -585,7 +585,7 @@ fun PlayerScreen(
         val previousFailed = exoHolder.streamUnavailable.value ||
             exoHolder.failedChannelId != null
         if (exoHolder.currentChannelId != channelId || exoHolder.isIdle()) {
-            Log.i(TAG, "Channel switch on Exo persistent player -> $url")
+            Log.i(TAG, "Channel switch on Exo persistent player -> ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(url)}")
             // Trace: this is a real tune entry (channel-list / recents / deep
             // link / mini-player hand-off), so start press->firstFrame here.
             // session2.txt had no [TUNE] press line for either tune because
@@ -1203,7 +1203,7 @@ fun PlayerScreen(
                     }
                     android.util.Log.w(
                         "DispatcharrSwitch",
-                        "[FOLLOW] external switch ch=${ch.id} following onto $statusUrl",
+                        "[FOLLOW] external switch ch=${ch.id} following onto ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(statusUrl)}",
                     )
                     // Never a second connection: Dispatcharr already swapped the
                     // upstream on our socket; a parallel GET trips stream_limit.
@@ -1249,7 +1249,7 @@ fun PlayerScreen(
                 if (newUrl == exoHolder.currentPlayUrl) return@collect
                 if (currentChannel?.id != ch.id || switchStream != null ||
                     exoHolder.isReprimeInFlight || exoHolder.isTimeshifting) return@collect
-                Log.w(TAG, "[RETUNE] LAN/WAN flip -> re-priming ch=${ch.id} onto $newUrl")
+                Log.w(TAG, "[RETUNE] LAN/WAN flip -> re-priming ch=${ch.id} onto ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(newUrl)}")
                 exoHolder.reprime(
                     reason = "LAN/WAN flip",
                     url = newUrl,

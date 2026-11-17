@@ -71,11 +71,21 @@ object PlaybackHttp {
         connectTimeoutMs: Int = DEFAULT_TIMEOUT_MS,
         readTimeoutMs: Int = DEFAULT_TIMEOUT_MS,
         transferListener: TransferListener? = null,
+        // Diagnostic observer only (VodHttpTrace); OkHttp event listeners
+        // cannot alter a request. Same pool, dispatcher, interceptors, and
+        // timeouts as the shared client.
+        eventListenerFactory: okhttp3.EventListener.Factory? = null,
     ): DataSource.Factory {
         val headerUa = headers.entries
             .firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }
             ?.value
-        val factory = OkHttpDataSource.Factory(client(connectTimeoutMs, readTimeoutMs))
+        val shared = client(connectTimeoutMs, readTimeoutMs)
+        val httpClient = if (eventListenerFactory == null) {
+            shared
+        } else {
+            shared.newBuilder().eventListenerFactory(eventListenerFactory).build()
+        }
+        val factory = OkHttpDataSource.Factory(httpClient)
             .setUserAgent(safeUserAgent(headerUa ?: fallbackUserAgent, fallbackUserAgent))
         val rest = safeHeaders(headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) })
         if (rest.isNotEmpty()) factory.setDefaultRequestProperties(rest)

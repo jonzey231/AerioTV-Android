@@ -3071,7 +3071,7 @@ private fun ExoTile(
             // channel (via MultiviewStore.swap or replaceTile). Don't
             // teardown -- hand the new URL to the same player.
             if (url.isNotBlank() && currentUrlRef.value != url) {
-                Log.i(TAG, "Tile ExoPlayer swap: ${currentUrlRef.value} -> $url")
+                Log.i(TAG, "Tile ExoPlayer swap: ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(currentUrlRef.value)} -> ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(url)}")
                 tileLimit.value = null
                 tileCleanEnd[0] = 0L
                 tileCleanEnd[1] = 0L

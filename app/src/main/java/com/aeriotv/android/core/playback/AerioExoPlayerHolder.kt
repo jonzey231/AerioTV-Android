@@ -2727,7 +2727,7 @@ class AerioExoPlayerHolder @Inject constructor(
                     watchdogScope.launch {
                         val fresh = rebuildUrlForCurrentChannel()
                         if (!fresh.isNullOrBlank() && fresh != lastPlayUrl) {
-                            Log.w(TAG, "[RETUNE] terminal error; re-priming onto reprobed url $fresh")
+                            Log.w(TAG, "[RETUNE] terminal error; re-priming onto reprobed url ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(fresh)}")
                             tracer.recover("terminal error; re-priming onto reprobed url")
                             withContext(Dispatchers.Main) {
                                 playUrl(fresh, lastPlayTitle, lastPlaySubtitle, lastPlayArtworkUri)
@@ -5848,7 +5848,7 @@ class AerioExoPlayerHolder @Inject constructor(
             if (wasCanceled && !is503 && limit == null && !rateLimited && !keyRejected) return
             Log.w(
                 TAG,
-                "load error uri=${loadEventInfo.uri} " +
+                "load error uri=${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(loadEventInfo.uri.toString())} " +
                     "${error.javaClass.simpleName}: ${error.message}${causeChain(error)}",
             )
             // The stream's key was refused and held (StreamAuth): stop.

@@ -1476,7 +1476,7 @@ class AerioCastSender @Inject constructor(
         if (com.aeriotv.android.core.playback.ForceHls.enabled) {
             android.util.Log.i(
                 "AerioTV",
-                "[FORCE-HLS] cast sender stays on TS (phone proxy ingests raw MPEG-TS): $rawTsUrl",
+                "[FORCE-HLS] cast sender stays on TS (phone proxy ingests raw MPEG-TS): ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(rawTsUrl)}",
             )
         }
         // A channel change on the web receiver is a FRESH CAST, not a splice

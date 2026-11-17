@@ -2656,7 +2656,7 @@ class DispatcharrClient @Inject constructor() {
         val obj = runCatching { response.body<JsonElement>() }.getOrNull() as? JsonObject ?: return null
         val u = (obj["url"] as? JsonPrimitive)?.contentOrNull
         val sid = (obj["stream_id"] as? JsonPrimitive)?.contentOrNull
-        android.util.Log.i("DispatcharrSwitch", "status $channelUuid -> url=$u stream_id=$sid")
+        android.util.Log.i("DispatcharrSwitch", "status $channelUuid -> url=${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(u)} stream_id=$sid")
         return u
     }
 
