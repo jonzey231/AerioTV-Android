@@ -29,7 +29,7 @@ fun HttpClientConfig<*>.installSanitizedLogging() {
         logger = object : Logger {
             override fun log(message: String) {
                 if (BuildConfig.DEBUG || DebugLogger.isLoggingEnabled()) {
-                    Log.d("AerioNet", LogSanitizer.redact(message))
+                    Log.d("AerioNet", LogSanitizer.maskUrlsIn(LogSanitizer.redact(message)))
                 }
             }
         }

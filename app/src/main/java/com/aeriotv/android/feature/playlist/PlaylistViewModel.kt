@@ -3064,7 +3064,7 @@ class PlaylistViewModel @Inject constructor(
         keyRecheck.userRefresh()
         viewModelScope.launch {
             val active = repository.activePlaylist() ?: return@launch
-            Log.i(TAG, "testConnection: probing ${active.urlString}")
+            Log.i(TAG, "testConnection: probing ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(active.urlString)}")
             _state.update { it.copy(testStatus = ActionStatus.Running) }
             RateLimitRetry.run(
                 onCountdown = { left, reason -> _state.update { it.copy(testStatus = ActionStatus.Waiting(serverBusyCountdown(left, reason))) } },

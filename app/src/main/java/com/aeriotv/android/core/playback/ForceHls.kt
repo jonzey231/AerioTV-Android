@@ -265,14 +265,14 @@ object ForceHls {
         }
         if (!enabled && !isServerHlsHost(url)) return url
         if (url.contains("output_format=", ignoreCase = true)) {
-            Log.i(TAG, "[FORCE-HLS] $where url already carries output_format, unchanged: $url")
+            Log.i(TAG, "[FORCE-HLS] $where url already carries output_format, unchanged: ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(url)}")
             return url
         }
         val fragment = url.substringAfter('#', "")
         val base = url.substringBefore('#')
         val sep = if (base.contains('?')) "&" else "?"
         val out = base + sep + PARAM + if (fragment.isNotEmpty()) "#$fragment" else ""
-        Log.i(TAG, "[FORCE-HLS] $where final url: $out")
+        Log.i(TAG, "[FORCE-HLS] $where final url: ${com.aeriotv.android.core.debug.LogSanitizer.maskStreamUrl(out)}")
         return out
     }
 }

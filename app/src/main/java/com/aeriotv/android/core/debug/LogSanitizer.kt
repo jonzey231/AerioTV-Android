@@ -107,4 +107,96 @@ internal object LogSanitizer {
         val path = u.rawPath.orEmpty()
         "$scheme://$host$port$path"
     }.getOrElse { redact(raw) }
+
+    // ---- stream URL masking for log lines ----
+
+    /** Xtream route kinds whose next two path segments are the account's
+     *  username and password. */
+    private val XTREAM_KINDS = setOf("live", "movie", "series", "timeshift")
+
+    /** Path segments kept verbatim: route words only, never values. Anything
+     *  else (ids, uuids, user names, tokens) becomes a placeholder. */
+    private val ROUTE_WORDS = setOf(
+        "live", "movie", "movies", "series", "timeshift", "proxy", "ts", "hls",
+        "stream", "streams", "api", "vod", "episode", "episodes", "file", "files",
+        "recording", "recordings", "dvr", "channel", "channels", "output", "play",
+        "epg", "m3u", "xmltv", "grid", "programs", "accounts", "profiles", "groups",
+        "logos", "core", "settings", "version", "status", "token", "refresh",
+        "change_stream", "stop", "plugins", "users", "me", "auth", "playlist",
+        "player_api.php", "get.php", "xmltv.php", "panel_api.php", "index.m3u8",
+    )
+
+    /** Query parameter names whose values are not secret and help a reader
+     *  (the Xtream API action, an output format). Every other value is masked. */
+    private val PLAIN_QUERY_PARAMS = setOf(
+        "action", "output", "output_format", "type", "format", "page", "page_size", "limit",
+    )
+
+    private val QUERY_NAME = Regex("[A-Za-z0-9_.\\-]{1,32}")
+    private val PLAIN_VALUE = Regex("[A-Za-z0-9_\\-]{1,24}")
+    private val EXTENSION = Regex("[A-Za-z0-9]{1,5}")
+    private val URL_IN_TEXT = Regex("(?i)\\b(?:https?|rtmp|rtsp|rtp|udp)://[^\\s\"'<>]+")
+
+    /**
+     * Mask a stream or API URL for a log line: scheme + `<host>` + a path that
+     * keeps only route words and the file extension, and query parameter names
+     * with their values masked. The host, port, userinfo, Xtream user and
+     * password, ids, tokens, and query values never appear. Example:
+     * `https://h:8080/movie/u/p/6001342.mkv` -> `https://<host>/movie/<user>/<pass>/<id>.mkv`.
+     * Pure string work: the URL actually requested is never touched.
+     */
+    fun maskStreamUrl(raw: String?): String {
+        if (raw.isNullOrBlank()) return "<none>"
+        return runCatching {
+            val u = java.net.URI(raw.trim())
+            val scheme = u.scheme?.lowercase() ?: return@runCatching "<url>"
+            val segs = u.rawPath.orEmpty().split('/').filter { it.isNotEmpty() }
+            if (scheme == "file" || scheme == "content") {
+                return@runCatching "$scheme://<local>/<id>" + extensionOf(segs.lastOrNull())
+            }
+            val out = ArrayList<String>(segs.size)
+            var i = 0
+            if (segs.size >= 4 && segs[0].lowercase() in XTREAM_KINDS) {
+                out += segs[0].lowercase()
+                out += "<user>"
+                out += "<pass>"
+                i = 3
+            }
+            while (i < segs.size) {
+                val s = segs[i]
+                val word = s.lowercase()
+                out += when {
+                    word in ROUTE_WORDS -> word
+                    i == segs.size - 1 -> "<id>" + extensionOf(s)
+                    else -> "<seg>"
+                }
+                i++
+            }
+            val trailing = if (out.isNotEmpty() && u.rawPath.orEmpty().endsWith("/")) "/" else ""
+            val path = if (out.isEmpty()) u.rawPath.orEmpty().take(1) else "/" + out.joinToString("/") + trailing
+            val query = u.rawQuery?.takeIf { it.isNotEmpty() }?.split('&')?.joinToString("&") { p ->
+                val name = p.substringBefore('=')
+                when {
+                    !QUERY_NAME.matches(name) -> "<p>"
+                    name.lowercase() in PLAIN_QUERY_PARAMS && '=' in p &&
+                        PLAIN_VALUE.matches(p.substringAfter('=')) -> p
+                    '=' in p -> "$name=<v>"
+                    else -> name
+                }
+            }
+            "$scheme://<host>$path" + (query?.let { "?$it" } ?: "")
+        }.getOrElse { "<url>" }
+    }
+
+    /** [maskStreamUrl] applied to every URL found inside free text (a Ktor
+     *  request line, an exception message). */
+    fun maskUrlsIn(text: String): String {
+        if (text.isEmpty() || !text.contains("://")) return text
+        return URL_IN_TEXT.replace(text) { mr -> maskStreamUrl(mr.value) }
+    }
+
+    private fun extensionOf(segment: String?): String {
+        val ext = segment?.substringAfterLast('.', "").orEmpty()
+        return if (ext.isNotEmpty() && EXTENSION.matches(ext)) ".${ext.lowercase()}" else ""
+    }
 }
